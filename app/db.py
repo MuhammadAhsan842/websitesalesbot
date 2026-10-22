@@ -1,0 +1,538 @@
+import json
+import sqlite3
+import threading
+import time
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+
+DB_PATH = Path(__file__).resolve().parent.parent / "data" / "ayyan.db"
+_lock = threading.Lock()
+
+
+def now():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def connect():
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode = WAL")
+    return conn
+
+
+def init():
+    with _lock:
+        conn = connect()
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS sessions (
+              id TEXT PRIMARY KEY,
+              opportunity_id TEXT NOT NULL,
+              case_id TEXT,
+              channel TEXT NOT NULL DEFAULT 'chat',
+              conversation_state TEXT NOT NULL,
+              state_version INTEGER NOT NULL DEFAULT 1,
+              takeover INTEGER NOT NULL DEFAULT 0,
+              handed_over INTEGER NOT NULL DEFAULT 0,
+              identity_confirmed INTEGER NOT NULL DEFAULT 0,
+              facts_json TEXT NOT NULL DEFAULT '{}',
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS messages (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              session_id TEXT NOT NULL,
+              role TEXT NOT NULL,
+              text TEXT NOT NULL,
+              created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS cases (
+              id TEXT PRIMARY KEY,
+              session_id TEXT,
+              opportunity_id TEXT,
+              task TEXT,
+              status TEXT NOT NULL,
+              owner TEXT NOT NULL DEFAULT 'Unassigned desk',
+              summary TEXT,
+              next_action TEXT,
+              facts_json TEXT NOT NULL DEFAULT '{}',
+              documents_json TEXT NOT NULL DEFAULT '[]',
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS outbox (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              action_id TEXT UNIQUE NOT NULL,
+              kind TEXT NOT NULL,
+              payload_json TEXT NOT NULL,
+              status TEXT NOT NULL,
+              attempts INTEGER NOT NULL DEFAULT 0,
+              last_error TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS events (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              message TEXT NOT NULL,
+              extra_json TEXT NOT NULL DEFAULT '{}',
+              created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS fee_schedule (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              arrangement TEXT NOT NULL,
+              percent REAL NOT NULL,
+              conditions TEXT,
+              status TEXT NOT NULL,
+              approved_by TEXT,
+              created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS case_files (
+              id TEXT PRIMARY KEY,
+              case_id TEXT NOT NULL,
+              doc_type TEXT NOT NULL,
+              filename TEXT NOT NULL,
+              path TEXT,
+              extracted_json TEXT NOT NULL DEFAULT '{}',
+              flags_json TEXT NOT NULL DEFAULT '[]',
+              diff_json TEXT NOT NULL DEFAULT '[]',
+              version INTEGER NOT NULL DEFAULT 1,
+              status TEXT NOT NULL,
+              created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS hard_turns (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              session_id TEXT,
+              user_text TEXT,
+              reply TEXT,
+              reason TEXT,
+              source TEXT,
+              reviewed INTEGER NOT NULL DEFAULT 0,
+              created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS requirements (
+              id TEXT PRIMARY KEY,
+              case_id TEXT NOT NULL,
+              doc_type TEXT NOT NULL,
+              label TEXT NOT NULL,
+              status TEXT NOT NULL,
+              due_at TEXT,
+              current_file_id TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS zoho_mirror (
+              id TEXT PRIMARY KEY,
+              module TEXT NOT NULL,
+              opportunity_id TEXT,
+              case_id TEXT,
+              session_id TEXT,
+              human_version INTEGER NOT NULL DEFAULT 0,
+              stage TEXT,
+              data_json TEXT NOT NULL DEFAULT '{}',
+              updated_at TEXT NOT NULL
+            );
+            """
+        )
+        for stmt in (
+            "ALTER TABLE case_files ADD COLUMN diff_json TEXT NOT NULL DEFAULT '[]'",
+            "ALTER TABLE case_files ADD COLUMN version INTEGER NOT NULL DEFAULT 1",
+            "ALTER TABLE case_files ADD COLUMN method TEXT",
+            "ALTER TABLE case_files ADD COLUMN ocr_confidence REAL",
+            "ALTER TABLE case_files ADD COLUMN original_path TEXT",
+            "ALTER TABLE case_files ADD COLUMN requirement_id TEXT",
+            "ALTER TABLE hard_turns ADD COLUMN reviewed INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE outbox ADD COLUMN zoho_id TEXT",
+        ):
+            try:
+                conn.execute(stmt)
+            except sqlite3.OperationalError:
+                pass
+        conn.commit()
+        conn.close()
+
+
+def execute(sql, params=(), fetch="none"):
+    with _lock:
+        conn = connect()
+        cur = conn.execute(sql, params)
+        if fetch == "one":
+            row = cur.fetchone()
+            conn.commit()
+            conn.close()
+            return dict(row) if row else None
+        if fetch == "all":
+            rows = [dict(r) for r in cur.fetchall()]
+            conn.commit()
+            conn.close()
+            return rows
+        conn.commit()
+        conn.close()
+        return cur.lastrowid
+
+
+def loads(value, default):
+    try:
+        return json.loads(value) if value else default
+    except json.JSONDecodeError:
+        return default
+
+
+def dumps(value) -> str:
+    return json.dumps(value, ensure_ascii=False)
+
+
+def uid(prefix: str) -> str:
+    return f"{prefix}_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
+
+
+def add_event(message: str, extra: dict | None = None):
+    execute(
+        "INSERT INTO events (message, extra_json, created_at) VALUES (?, ?, ?)",
+        (message, dumps(extra or {}), now()),
+    )
+
+
+def add_message(session_id: str, role: str, text: str):
+    execute(
+        "INSERT INTO messages (session_id, role, text, created_at) VALUES (?, ?, ?, ?)",
+        (session_id, role, text, now()),
+    )
+
+
+def create_session(seed_facts: dict | None = None) -> dict:
+    session_id = uid("session")
+    opportunity_id = uid("opp")
+    ts = now()
+    execute(
+        """INSERT INTO sessions (id, opportunity_id, channel, conversation_state, facts_json, created_at, updated_at)
+           VALUES (?, ?, 'chat', 'understand_request', ?, ?, ?)""",
+        (session_id, opportunity_id, dumps(seed_facts or {}), ts, ts),
+    )
+    return get_session(session_id)
+
+
+def _session_from_row(row: dict) -> dict:
+    row["facts"] = loads(row.pop("facts_json"), {})
+    row["takeover"] = bool(row["takeover"])
+    row["handed_over"] = bool(row["handed_over"])
+    row["identity_confirmed"] = bool(row["identity_confirmed"])
+    return row
+
+
+def get_session(session_id: str) -> dict | None:
+    row = execute("SELECT * FROM sessions WHERE id = ?", (session_id,), fetch="one")
+    return _session_from_row(row) if row else None
+
+
+def save_session(session: dict):
+    execute(
+        """UPDATE sessions SET case_id=?, channel=?, conversation_state=?, state_version=?,
+           takeover=?, handed_over=?, identity_confirmed=?, facts_json=?, updated_at=?
+           WHERE id=?""",
+        (
+            session.get("case_id"),
+            session["channel"],
+            session["conversation_state"],
+            session["state_version"],
+            int(session["takeover"]),
+            int(session["handed_over"]),
+            int(session["identity_confirmed"]),
+            dumps(session["facts"]),
+            now(),
+            session["id"],
+        ),
+    )
+
+
+def _case_from_row(row: dict) -> dict:
+    row["facts"] = loads(row.pop("facts_json"), {})
+    row["documents"] = loads(row.pop("documents_json"), [])
+    return row
+
+
+def list_cases() -> list[dict]:
+    rows = execute("SELECT * FROM cases ORDER BY updated_at DESC", fetch="all") or []
+    return [_case_from_row(r) for r in rows]
+
+
+def get_case(case_id: str) -> dict | None:
+    row = execute("SELECT * FROM cases WHERE id = ?", (case_id,), fetch="one")
+    return _case_from_row(row) if row else None
+
+
+def upsert_case(partial: dict) -> dict:
+    case_id = partial.get("id") or uid("case")
+    existing = get_case(case_id)
+    ts = now()
+    if existing:
+        merged = {**existing, **partial, "id": case_id}
+        execute(
+            """UPDATE cases SET session_id=?, opportunity_id=?, task=?, status=?, owner=?,
+               summary=?, next_action=?, facts_json=?, documents_json=?, updated_at=?
+               WHERE id=?""",
+            (
+                merged.get("session_id"),
+                merged.get("opportunity_id"),
+                merged.get("task"),
+                merged["status"],
+                merged.get("owner") or "Unassigned desk",
+                merged.get("summary"),
+                merged.get("next_action"),
+                dumps(merged.get("facts") or {}),
+                dumps(merged.get("documents") or []),
+                ts,
+                case_id,
+            ),
+        )
+        return get_case(case_id)
+    execute(
+        """INSERT INTO cases (id, session_id, opportunity_id, task, status, owner, summary, next_action,
+           facts_json, documents_json, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            case_id,
+            partial.get("session_id"),
+            partial.get("opportunity_id"),
+            partial.get("task"),
+            partial.get("status") or "created",
+            partial.get("owner") or "Unassigned desk",
+            partial.get("summary"),
+            partial.get("next_action"),
+            dumps(partial.get("facts") or {}),
+            dumps(partial.get("documents") or []),
+            ts,
+            ts,
+        ),
+    )
+    return get_case(case_id)
+
+
+def enqueue_outbox(action_id: str, kind: str, payload: dict) -> dict:
+    existing = execute("SELECT * FROM outbox WHERE action_id = ?", (action_id,), fetch="one")
+    if existing:
+        return existing
+    execute(
+        """INSERT INTO outbox (action_id, kind, payload_json, status, created_at, updated_at)
+           VALUES (?, ?, ?, 'queued', ?, ?)""",
+        (action_id, kind, dumps(payload), now(), now()),
+    )
+    return execute("SELECT * FROM outbox WHERE action_id = ?", (action_id,), fetch="one")
+
+
+def cancel_unsent(session_id: str, reason: str):
+    rows = execute("SELECT * FROM outbox WHERE status = 'queued'", fetch="all") or []
+    for row in rows:
+        payload = loads(row["payload_json"], {})
+        if payload.get("session_id") == session_id:
+            execute(
+                "UPDATE outbox SET status='cancelled', last_error=?, updated_at=? WHERE id=?",
+                (reason, now(), row["id"]),
+            )
+
+
+def mark_outbox(action_id: str, status: str, error: str | None = None):
+    execute(
+        "UPDATE outbox SET status=?, last_error=?, attempts=attempts+1, updated_at=? WHERE action_id=?",
+        (status, error, now(), action_id),
+    )
+
+
+def queued_outbox() -> list[dict]:
+    return execute("SELECT * FROM outbox WHERE status = 'queued' ORDER BY id", fetch="all") or []
+
+
+def set_outbox_zoho(action_id: str, zoho_id: str | None):
+    execute("UPDATE outbox SET zoho_id=?, updated_at=? WHERE action_id=?", (zoho_id, now(), action_id))
+
+
+def list_outbox(session_id: str | None = None, case_id: str | None = None, opportunity_id: str | None = None) -> list[dict]:
+    rows = execute("SELECT * FROM outbox ORDER BY id DESC LIMIT 80", fetch="all") or []
+    if not session_id and not case_id and not opportunity_id:
+        return rows
+    matched = []
+    for row in rows:
+        payload = loads(row.get("payload_json"), {})
+        if session_id and payload.get("session_id") == session_id:
+            matched.append(row)
+            continue
+        if case_id and payload.get("case_id") == case_id:
+            matched.append(row)
+            continue
+        if opportunity_id and payload.get("opportunity_id") == opportunity_id:
+            matched.append(row)
+    return matched
+
+
+def get_mirror(opportunity_id: str | None) -> dict | None:
+    if not opportunity_id:
+        return None
+    row = execute("SELECT * FROM zoho_mirror WHERE opportunity_id = ?", (opportunity_id,), fetch="one")
+    if not row:
+        return None
+    row["data"] = loads(row.pop("data_json"), {})
+    return row
+
+
+def upsert_mirror(partial: dict) -> dict:
+    existing = get_mirror(partial.get("opportunity_id"))
+    ts = now()
+    data = dumps(partial.get("data") or {})
+    if existing:
+        execute(
+            """UPDATE zoho_mirror SET module=?, case_id=?, session_id=?, human_version=?, stage=?, data_json=?, updated_at=?
+               WHERE opportunity_id=?""",
+            (
+                partial.get("module") or existing.get("module"),
+                partial.get("case_id") or existing.get("case_id"),
+                partial.get("session_id") or existing.get("session_id"),
+                int(partial.get("human_version") or existing.get("human_version") or 0),
+                partial.get("stage") or existing.get("stage"),
+                data,
+                ts,
+                partial.get("opportunity_id"),
+            ),
+        )
+        return get_mirror(partial.get("opportunity_id"))
+    execute(
+        """INSERT INTO zoho_mirror (id, module, opportunity_id, case_id, session_id, human_version, stage, data_json, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            partial.get("id") or uid("zcrm"),
+            partial.get("module") or "Deals",
+            partial.get("opportunity_id"),
+            partial.get("case_id"),
+            partial.get("session_id"),
+            int(partial.get("human_version") or 0),
+            partial.get("stage"),
+            data,
+            ts,
+        ),
+    )
+    return get_mirror(partial.get("opportunity_id"))
+
+
+def add_case_file(case_id: str, review: dict, path: str) -> dict:
+    file_id = uid("file")
+    execute(
+        """INSERT INTO case_files (id, case_id, doc_type, filename, path, extracted_json, flags_json, diff_json,
+           version, status, method, ocr_confidence, original_path, requirement_id, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            file_id,
+            case_id,
+            review.get("doc_type") or "unknown",
+            review.get("filename") or Path(path).name,
+            path,
+            dumps(review.get("extracted") or {}),
+            dumps(review.get("flags") or []),
+            dumps(review.get("diff") or []),
+            int(review.get("version") or 1),
+            review.get("status") or "received",
+            review.get("method"),
+            review.get("ocr_confidence"),
+            review.get("original_path") or path,
+            review.get("requirement_id"),
+            now(),
+        ),
+    )
+    return get_case_file(file_id)
+
+
+def get_case_file(file_id: str) -> dict | None:
+    row = execute("SELECT * FROM case_files WHERE id = ?", (file_id,), fetch="one")
+    return _file_from_row(row) if row else None
+
+
+def _file_from_row(row: dict) -> dict:
+    row["extracted"] = loads(row.pop("extracted_json"), {})
+    row["flags"] = loads(row.pop("flags_json"), [])
+    row["diff"] = loads(row.pop("diff_json", None), [])
+    return row
+
+
+def list_case_files(case_id: str) -> list[dict]:
+    rows = execute("SELECT * FROM case_files WHERE case_id = ? ORDER BY created_at", (case_id,), fetch="all") or []
+    return [_file_from_row(r) for r in rows]
+
+
+def acknowledge_case_files(case_id: str) -> list[dict]:
+    execute(
+        "UPDATE case_files SET status = 'acknowledged' WHERE case_id = ? AND status = 'flagged'",
+        (case_id,),
+    )
+    execute(
+        "UPDATE requirements SET status = 'acknowledged', updated_at = ? WHERE case_id = ? AND status IN ('flagged', 'reopened', 'received')",
+        (now(), case_id),
+    )
+    add_event("Staff acknowledged document flags", {"caseId": case_id})
+    return list_case_files(case_id)
+
+
+def blocking_files(case_id: str) -> list[dict]:
+    return [f for f in list_case_files(case_id) if f["status"] == "flagged"]
+
+
+def latest_file(case_id: str, doc_type: str) -> dict | None:
+    row = execute(
+        "SELECT * FROM case_files WHERE case_id = ? AND doc_type = ? ORDER BY created_at DESC LIMIT 1",
+        (case_id, doc_type),
+        fetch="one",
+    )
+    return _file_from_row(row) if row else None
+
+
+def add_requirement(partial: dict) -> dict:
+    req_id = partial.get("id") or uid("req")
+    ts = now()
+    execute(
+        """INSERT INTO requirements (id, case_id, doc_type, label, status, due_at, current_file_id, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            req_id,
+            partial["case_id"],
+            partial["doc_type"],
+            partial.get("label") or partial["doc_type"],
+            partial.get("status") or "issued",
+            partial.get("due_at"),
+            partial.get("current_file_id"),
+            ts,
+            ts,
+        ),
+    )
+    return get_requirement_by_id(req_id)
+
+
+def get_requirement_by_id(req_id: str) -> dict | None:
+    return execute("SELECT * FROM requirements WHERE id = ?", (req_id,), fetch="one")
+
+
+def get_requirement(case_id: str, doc_type: str) -> dict | None:
+    return execute(
+        "SELECT * FROM requirements WHERE case_id = ? AND doc_type = ?",
+        (case_id, doc_type),
+        fetch="one",
+    )
+
+
+def list_requirements(case_id: str) -> list[dict]:
+    return execute(
+        "SELECT * FROM requirements WHERE case_id = ? ORDER BY created_at",
+        (case_id,),
+        fetch="all",
+    ) or []
+
+
+def update_requirement(req_id: str, partial: dict) -> dict | None:
+    current = get_requirement_by_id(req_id)
+    if not current:
+        return None
+    merged = {**current, **partial}
+    execute(
+        """UPDATE requirements SET status=?, due_at=?, current_file_id=?, updated_at=? WHERE id=?""",
+        (merged.get("status"), merged.get("due_at"), merged.get("current_file_id"), now(), req_id),
+    )
+    return get_requirement_by_id(req_id)
+

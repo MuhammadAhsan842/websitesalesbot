@@ -1,0 +1,1 @@
+# Ayyan sales assistant — conversation graph, tasks, SQLite, local Qwen.

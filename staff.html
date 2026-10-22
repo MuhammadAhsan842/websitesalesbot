@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Staff desk — Ayyan Dispatch Demo</title>
+  <link rel="icon" href="favicon.svg" />
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;800&family=Oswald:wght@600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <a class="logo" href="index.html"><span class="logo-mark">A</span> Ayyan Dispatch Demo</a>
+      <nav class="nav">
+        <a href="index.html">Home</a>
+        <a href="services.html">Services</a>
+        <a class="active" href="staff.html">Staff desk</a>
+      </nav>
+      <a class="btn btn-ghost" href="index.html">Back to chat site</a>
+    </div>
+  </header>
+  <main class="wrap" style="padding:32px 0 60px">
+    <span class="eyebrow">Human-owned onboarding</span>
+    <h1>Staff desk</h1>
+    <p class="muted">Cases created by the bot land here. Walk a packet from sent → received → corrections → approve → production.</p>
+    <div class="card" id="zoho-connect-box" style="margin-top:18px">
+      <h3>Zoho CRM</h3>
+      <p class="muted">Loading…</p>
+    </div>
+    <div class="card" id="fee-box" style="margin-top:18px">
+      <h3>Approved fee schedule</h3>
+      <p class="muted">Loading…</p>
+    </div>
+    <div class="card" id="peft-box" style="margin-top:18px">
+      <h3>PEFT / LoRA / distillation</h3>
+      <p class="muted">Loading…</p>
+    </div>
+    <div class="card" style="padding:0;overflow:auto;margin-top:18px">
+      <table class="staff-table">
+        <thead><tr><th>Case</th><th>Route</th><th>Status</th><th>Owner</th><th>Updated</th></tr></thead>
+        <tbody id="case-rows"></tbody>
+      </table>
+    </div>
+    <div id="case-detail" class="case-detail hidden"></div>
+  </main>
+  <script src="staff.js"></script>
+</body>
+</html>

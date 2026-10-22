@@ -1,0 +1,9 @@
+.env
+data/zoho_token.json
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/packets/
+__pycache__/
+*.pyc
+.venv/

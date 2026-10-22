@@ -1,0 +1,40 @@
+.agoc-launcher, .agoc-panel, .agoc-panel * { box-sizing: border-box; }
+.agoc-launcher {
+  position: fixed; right: 18px; bottom: 18px; z-index: 80;
+  width: 58px; height: 58px; border: 0; border-radius: 50%;
+  background: #16324f; color: #fff; cursor: pointer;
+  box-shadow: 0 12px 28px rgba(22, 50, 79, 0.35);
+  font-weight: 800;
+}
+.agoc-panel {
+  position: fixed; right: 18px; bottom: 86px; z-index: 80;
+  width: min(380px, calc(100vw - 24px)); height: min(620px, calc(100vh - 120px));
+  background: #fff; border: 1px solid #d7e0ea; border-radius: 18px;
+  box-shadow: 0 18px 50px rgba(18, 32, 51, 0.16);
+  display: none; flex-direction: column; overflow: hidden;
+  font-family: "Manrope", system-ui, sans-serif;
+}
+.agoc-panel.open { display: flex; }
+.agoc-head {
+  background: #16324f; color: #fff; padding: 12px 14px;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.agoc-head strong { display: block; font-size: 14px; }
+.agoc-head span { font-size: 12px; opacity: 0.8; }
+.agoc-head button { background: transparent; border: 0; color: #fff; cursor: pointer; font-size: 18px; }
+.agoc-log { flex: 1; overflow: auto; padding: 12px; display: grid; gap: 10px; background: #f6f8fb; }
+.agoc-msg { max-width: 92%; padding: 10px 12px; border-radius: 14px; font-size: 14px; line-height: 1.45; }
+.agoc-msg.bot { background: #fff; border: 1px solid #d7e0ea; }
+.agoc-msg.pending { opacity: 0.7; font-style: italic; }
+.agoc-msg.fit { border-color: #c9a227; }
+.agoc-msg.user { background: #16324f; color: #fff; margin-left: auto; }
+.agoc-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 12px 8px; background: #f6f8fb; }
+.agoc-chips button {
+  border: 1px solid #d7e0ea; background: #fff; border-radius: 999px;
+  padding: 6px 10px; font-size: 12px; font-weight: 700; cursor: pointer;
+}
+.agoc-form { display: flex; gap: 8px; padding: 10px; border-top: 1px solid #d7e0ea; }
+.agoc-form input {
+  flex: 1; border: 1px solid #d7e0ea; border-radius: 12px; padding: 10px;
+}
+.agoc-form button { border: 0; background: #c9a227; border-radius: 12px; padding: 10px 12px; font-weight: 800; cursor: pointer; }

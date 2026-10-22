@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Services — Ayyan Dispatch Demo</title>
+  <link rel="icon" href="favicon.svg" />
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;800&family=Oswald:wght@600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="widget.css" />
+</head>
+<body data-page="services">
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <a class="logo" href="index.html"><span class="logo-mark">A</span> Ayyan Dispatch Demo</a>
+      <nav class="nav">
+        <a href="index.html">Home</a>
+        <a class="active" href="services.html">Services</a>
+        <a href="staff.html">Staff desk</a>
+      </nav>
+    </div>
+  </header>
+  <main class="wrap" style="padding:40px 0">
+    <span class="eyebrow">Approved demo copy</span>
+    <h1>What the bot is allowed to say</h1>
+    <div class="grid" style="padding-top:20px">
+      <article class="card"><h3>Dry van</h3><p>In scope. You approve every load.</p><button class="btn btn-navy" type="button" data-equip="dry_van">Check van fit</button></article>
+      <article class="card"><h3>Reefer</h3><p>In scope. Temperature stays on you per load.</p><button class="btn btn-navy" type="button" data-equip="reefer">Check reefer fit</button></article>
+      <article class="card"><h3>Flatbed / hotshot</h3><p>In scope when the truck matches the photos.</p><button class="btn btn-navy" type="button" data-equip="flatbed">Check deck fit</button></article>
+      <article class="card"><h3>Own MC</h3><p>Keep your authority. A human sends the setup packet.</p></article>
+      <article class="card"><h3>Lease-on</h3><p>Creates a human eligibility task. It is not a yes.</p></article>
+      <article class="card"><h3>Fees</h3><p>Staff quote live fees. The bot will not invent a percentage.</p></article>
+    </div>
+    <script>
+      document.querySelectorAll("[data-equip]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          document.body.dataset.equipment = btn.dataset.equip;
+          window.dispatchEvent(new Event("agoc-reset"));
+          document.querySelector(".agoc-launcher").click();
+        });
+      });
+    </script>
+  </main>
+  <script src="widget.js"></script>
+</body>
+</html>

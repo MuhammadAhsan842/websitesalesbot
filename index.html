@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ayyan Dispatch Demo — Bot test desk</title>
+  <link rel="icon" href="favicon.svg" />
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;800&family=Oswald:wght@600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="widget.css" />
+</head>
+<body data-page="home">
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <a class="logo" href="index.html"><span class="logo-mark">A</span> Ayyan Dispatch Demo</a>
+      <nav class="nav">
+        <a class="active" href="index.html">Home</a>
+        <a href="services.html">Services</a>
+        <a href="staff.html">Staff desk</a>
+      </nav>
+      <button class="btn btn-gold" type="button" onclick="document.querySelector('.agoc-launcher').click()">Test the bot</button>
+    </div>
+  </header>
+  <main class="wrap">
+    <p class="banner">Ayyan Dispatch. Chat and voice share one inquiry. The assistant stays in chat until you choose Talk here (same session, website microphone) or Call me (a callback job). Qualification never auto-switches to voice.</p>
+    <section class="hero">
+      <div>
+        <span class="eyebrow">Demo · Dispatch Fit Check</span>
+        <h1>See if we support your trucks. A person handles the papers.</h1>
+        <p class="lead">The chatbot is the typed salesperson: equipment, lanes, and arrangement first. Fees stay with staff. Documents stay with staff. Talking is not a contract.</p>
+        <div class="hero-actions" style="display:flex;gap:10px;flex-wrap:wrap;margin-top:18px">
+          <button class="btn btn-navy" type="button" onclick="document.querySelector('.agoc-launcher').click()">Open chat</button>
+          <a class="btn btn-ghost" href="staff.html">Open staff desk</a>
+        </div>
+      </div>
+      <aside class="panel">
+        <h2>Try these tests</h2>
+        <p>1. Check dispatch fit — useful answers before a phone number</p>
+        <p>2. Several facts in one line; only the missing field is asked</p>
+        <p>3. Ask about fees or $10k/week — no invented number</p>
+        <p>4. Own MC, lease-on, or unclear — human task, never bot approval</p>
+        <p>5. Staff desk walks sent → received → corrections → approve → production</p>
+      </aside>
+    </section>
+    <section class="grid">
+      <article class="card"><h3>Conversation graph</h3><p>Needs, fit, objections, then a next action. Questions are allowed at any step.</p></article>
+      <article class="card"><h3>Three routes</h3><p>Own MC → setup packet. No MC + lease-on → lease task. Unclear → human clarification.</p></article>
+      <article class="card"><h3>Human case</h3><p>Staff send, receive, correct, approve, then production-accept. Received is not approved.</p></article>
+    </section>
+  </main>
+  <footer class="site-footer"><div class="wrap">Ayyan Group demo desk · local FastAPI · cases in SQLite, not Zoho until outbox sync</div></footer>
+  <script src="widget.js"></script>
+</body>
+</html>
