@@ -136,7 +136,7 @@ async def node_propose(state: TurnState) -> dict:
     merged = _from_qwen(model, ruled)
     return {
         "proposal": merged,
-        **_trace("propose", source="qwen", intent=merged["intent"], model=qwen.MODEL, action=merged["action"]),
+        **_trace("propose", source="qwen", intent=merged["intent"], model=qwen.MODEL, action=merged["action"], timing=model.get("_timing", {})),
     }
 
 

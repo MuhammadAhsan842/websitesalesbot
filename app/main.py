@@ -4,7 +4,7 @@ from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from pydantic import BaseModel
@@ -48,15 +48,25 @@ async def lifespan(app: FastAPI):
         app.state.graph = build_graph(saver)
 
         async def boot():
-            await asyncio.to_thread(retrieve.build_index)
             await qwen.warmup()
+            await asyncio.to_thread(retrieve.build_index)
 
-        asyncio.create_task(boot())
-        yield
+        boot_task = asyncio.create_task(boot())
+        try:
+            yield
+        finally:
+            boot_task.cancel()
+            await asyncio.gather(boot_task, return_exceptions=True)
+            await qwen.close()
 
 
 app = FastAPI(title="Ayyan sales assistant", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+
+@app.exception_handler(qwen.InferenceBusy)
+async def inference_busy(request: Request, exc: qwen.InferenceBusy):
+    return JSONResponse(status_code=503, headers={"Retry-After": "2"}, content={"detail": str(exc)})
 
 
 @app.get("/v1/health")
@@ -68,6 +78,7 @@ def health():
         "model": qwen.MODEL,
         "qwen_ready": qwen.ready,
         "qwen_error": qwen.last_error,
+        "qwen_runtime": qwen.status(),
         "retrieve": retrieve.status(),
         "hard_turns": n,
         "hard_turns_reviewed": reviewed,

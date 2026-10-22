@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+from time import perf_counter
 import urllib.request
 
 API = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8787"
@@ -51,8 +52,11 @@ def post(path: str, body: dict, timeout: int = 180) -> dict:
         headers={"Content-Type": "application/json"},
         method="POST",
     )
+    started = perf_counter()
     with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.load(resp)
+        result = json.load(resp)
+    result["_wall_ms"] = round((perf_counter() - started) * 1000, 2)
+    return result
 
 
 def session() -> dict:
@@ -77,6 +81,8 @@ def summarize(text: str, out: dict) -> dict:
         "state": out.get("conversation_state"),
         "propose": pr.get("source"),
         "model": pr.get("model"),
+        "wall_ms": out.get("_wall_ms"),
+        "qwen_timing": pr.get("timing") or {},
         "intent": pr.get("intent"),
         "knowledge_keys": kn.get("keys"),
         "hybrid": kn.get("hybrid_rerank"),
@@ -114,6 +120,10 @@ def dump(title: str, rows: list[dict]) -> None:
                 row["execute"],
                 row["second_pass"],
             ),
+            flush=True,
+        )
+        print(
+            "LATENCY: api_ms=%s qwen=%s" % (row["wall_ms"], row["qwen_timing"]),
             flush=True,
         )
         print(
