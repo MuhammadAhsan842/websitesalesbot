@@ -14,9 +14,9 @@ def merge_traces(left: list, right: list) -> list:
         return [item for item in right if not item.get("_reset")]
     return (left or []) + right
 
-from app import db, examples, fees, memory, playbook, qwen, requirements as reqmod, retrieve, rules, second_pass, variants, zoho
+from app import db, examples, fees, memory, plan, playbook, qwen, requirements as reqmod, retrieve, rules, second_pass, variants, zoho
 from app.knowledge import BLOCKED_CLAIMS, REGISTER, lookup
-from app.schema import CATALOGUE, CHIPS, FACT_KEYS, INTENTS, MOVES, VARIANTS
+from app.schema import ANSWER_TOPICS, CATALOGUE, CHIPS, FACT_KEYS, INTENTS, MOVES, VARIANTS
 from app.tasks import fact_value, persist_human_task
 
 
@@ -61,13 +61,22 @@ ALLOWED_ACTIONS = {"none", "create_case", "callback", "talk_here", "takeover"}
 ALLOWED_ARRANGEMENTS = {"dispatch_service", "lease_on", "needs_clarification"}
 
 
-def _clean_facts(items: list | None) -> list[dict]:
+def _evidence_ok(evidence: str | None, user_text: str) -> bool:
+    span = (evidence or "").strip().lower()
+    if not span:
+        return True
+    return span in (user_text or "").lower()
+
+
+def _clean_facts(items: list | None, user_text: str = "") -> list[dict]:
     cleaned = []
     for item in items or []:
         if not isinstance(item, dict):
             continue
         key = item.get("key")
         if key != "_unknown" and key not in FACT_KEYS:
+            continue
+        if not _evidence_ok(item.get("evidence"), user_text):
             continue
         value = item.get("value")
         if value in ("null", ""):
@@ -76,11 +85,11 @@ def _clean_facts(items: list | None) -> list[dict]:
     return cleaned
 
 
-def _merge_facts(model_facts: list | None, ruled_facts: list | None) -> list[dict]:
+def _merge_facts(model_facts: list | None, ruled_facts: list | None, user_text: str = "") -> list[dict]:
     by_key: dict[str, dict] = {}
-    for item in _clean_facts(ruled_facts):
+    for item in _clean_facts(ruled_facts, user_text):
         by_key[item["key"]] = item
-    for item in _clean_facts(model_facts):
+    for item in _clean_facts(model_facts, user_text):
         if item.get("value") not in (None, False) or item["key"] not in by_key:
             by_key[item["key"]] = item
     return list(by_key.values())
@@ -110,9 +119,10 @@ def _from_qwen(model: dict, ruled: dict, user_text: str = "") -> dict:
     if action != "create_case":
         task = ruled.get("task") if ruled_action != "create_case" else task
     task = task or ruled.get("task")
-    next_field = model.get("next_field")
+    next_field = model.get("next_question_id") or model.get("next_field")
     if next_field in ("null", None, "") or (next_field and next_field not in FACT_KEYS):
         next_field = ruled.get("next_field")
+    topics = [topic for topic in (model.get("answer_topics") or []) + (ruled.get("answer_topics") or []) if topic in ANSWER_TOPICS]
     keys = [k for k in (model.get("knowledge_keys") or []) + ruled["knowledge_keys"] if isinstance(k, str)]
     blocked = [b for b in (model.get("blocked") or []) + ruled["blocked"] if isinstance(b, str)]
     if fee_turn and not guarantee_said:
@@ -132,10 +142,10 @@ def _from_qwen(model: dict, ruled: dict, user_text: str = "") -> dict:
         arrangement = "needs_clarification"
     elif repair == "repetition_unverified":
         action = "none"
-    facts = _merge_facts(model.get("facts"), ruled.get("facts"))
+    facts = _merge_facts(model.get("facts"), ruled.get("facts"), user_text)
     if repair == "authority_uncertain":
         by_key = {item["key"]: item for item in facts}
-        for item in _clean_facts(ruled.get("facts")):
+        for item in _clean_facts(ruled.get("facts"), user_text):
             if item["key"] in {"mcOwnership", "requestedArrangement"}:
                 by_key[item["key"]] = item
         facts = list(by_key.values())
@@ -150,6 +160,8 @@ def _from_qwen(model: dict, ruled: dict, user_text: str = "") -> dict:
         "knowledge_keys": list(dict.fromkeys(keys)),
         "blocked": list(dict.fromkeys(blocked)),
         "next_field": next_field,
+        "next_question_id": next_field,
+        "answer_topics": list(dict.fromkeys(topics)),
         "arrangement": arrangement,
         "action": action,
         "task": task,
@@ -172,6 +184,14 @@ async def node_propose(state: TurnState) -> dict:
         if tag
     ]
     hits = examples.search(text, tags=tags)
+    recent = []
+    try:
+        recent = [
+            {"role": row["role"], "text": (row.get("text") or "")[:80]}
+            for row in (db.list_messages(session["id"]) or [])[-4:]
+        ]
+    except Exception:
+        recent = []
     model = await qwen.propose(
         text,
         session["facts"],
@@ -180,12 +200,12 @@ async def node_propose(state: TurnState) -> dict:
         examples=hits,
         intent=ruled.get("intent"),
         repair=ruled.get("repair"),
+        recent=recent,
     )
     if not model:
         ruled = dict(ruled)
         ruled["retrieved"] = hits
-        if hits and not ruled.get("wording"):
-            ruled["wording"] = hits[0].get("reply")
+        ruled["answer_topics"] = plan.detect_topics(text, ruled.get("intent"), None, ruled.get("repair"))
         return {
             "proposal": ruled,
             **_trace(
@@ -200,10 +220,8 @@ async def node_propose(state: TurnState) -> dict:
         }
     merged = _from_qwen(model, ruled, text)
     merged["retrieved"] = hits
-    if hits and not merged.get("wording"):
-        merged["wording"] = hits[0].get("reply")
-        if merged["wording"] and _leaks(merged["wording"]):
-            merged["wording"] = None
+    if not merged.get("answer_topics"):
+        merged["answer_topics"] = plan.detect_topics(text, merged.get("intent"), None, ruled.get("repair"))
     return {
         "proposal": merged,
         **_trace(
@@ -339,54 +357,41 @@ def node_plan(state: TurnState) -> dict:
     if proposal.get("task") not in CATALOGUE and proposal.get("task") is not None:
         proposal["task"] = None
         proposal["action"] = "none"
-    keys, bits = memory.scoped_knowledge(
-        proposal.get("knowledge_keys") or [],
-        state.get("knowledge_bits") or [],
-        memory.detect_concern(state.get("user_text") or "", proposal.get("intent") or "general"),
-        state.get("user_text") or "",
-    )
-    proposal["knowledge_keys"] = keys
-    ask = playbook.next_ask(session["facts"], session.get("memory"), proposal.get("intent"), repair)
-    proposal["next_field"] = ask
+    concern = memory.detect_concern(state.get("user_text") or "", proposal.get("intent") or "general")
     if repair == "leave_sales" or proposal["intent"] == "existing_customer":
         proposal["intent"] = "existing_customer"
         proposal["action"] = "create_case"
         proposal["task"] = "operations_support"
-    elif repair == "authority_uncertain":
-        proposal["action"] = "none"
-    elif repair == "repetition_unverified":
-        proposal["action"] = "none"
-    elif repair == "email_delivery":
-        proposal["action"] = "none"
     elif proposal["intent"] == "talk_here":
         proposal["action"] = "talk_here"
     elif proposal["intent"] == "call_me":
         proposal["action"] = "callback"
     elif proposal["intent"] == "human":
         proposal["action"] = "takeover"
-    elif proposal["action"] == "create_case" and proposal["task"] not in CATALOGUE:
-        proposal["action"] = "none"
-    if proposal["action"] == "create_case" and proposal["task"] in {"setup_packet", "lease_agreement"} and (
-        not fact_value(session["facts"], "equipment") or not mc or not fact_value(session["facts"], "operatingArea")
-    ):
-        proposal["action"] = "none"
-    if proposal["action"] not in {"none", "create_case", "callback", "talk_here", "takeover"}:
-        proposal["action"] = "none"
-    concern = memory.detect_concern(state.get("user_text") or "", proposal.get("intent") or "general")
-    move = proposal.get("conversation_move") if proposal.get("conversation_move") in MOVES else None
-    if repair == "authority_uncertain":
-        move = "clarify"
-    elif repair == "leave_sales":
-        move = "offer_handoff"
-    elif repair == "repetition_unverified":
-        move = "acknowledge"
-    elif repair == "email_delivery":
-        move = "acknowledge"
-    elif concern == "pause":
-        move = "pause"
-    elif not move:
-        move = variants.default_move(proposal.get("intent"), repair, concern, ask)
-    proposal["conversation_move"] = move
+    validated = plan.validate_plan(state.get("user_text") or "", session, proposal)
+    proposal["answer_topics"] = validated["answer_topics"]
+    proposal["next_field"] = validated["next_question_id"]
+    proposal["next_question_id"] = validated["next_question_id"]
+    proposal["action"] = validated["proposed_action"]
+    proposal["conversation_move"] = validated["conversation_move"]
+    if validated.get("task"):
+        proposal["task"] = validated["task"]
+    if validated["wording"] is None:
+        proposal["wording"] = None
+    else:
+        proposal["wording"] = validated["wording"]
+    if proposal.get("wording") and _leaks(str(proposal["wording"])):
+        proposal["wording"] = None
+    proposal["plan"] = validated
+    keys, bits = memory.scoped_knowledge(
+        proposal.get("knowledge_keys") or [],
+        state.get("knowledge_bits") or [],
+        concern,
+        state.get("user_text") or "",
+        topics=validated["answer_topics"],
+    )
+    proposal["knowledge_keys"] = keys
+    move = validated["conversation_move"]
     variant = proposal.get("reply_variant_id") if proposal.get("reply_variant_id") in VARIANTS else None
     if not variant or repair in {"leave_sales", "authority_uncertain", "repetition_unverified", "email_delivery"} or concern in {
         "pause",
@@ -396,12 +401,6 @@ def node_plan(state: TurnState) -> dict:
     }:
         variant = variants.default_variant(move, concern, proposal.get("intent"), repair)
     proposal["reply_variant_id"] = variant
-    wording = proposal.get("wording")
-    if (not wording) and (proposal.get("retrieved") or []):
-        wording = proposal["retrieved"][0].get("reply")
-    if wording and _leaks(str(wording)):
-        wording = None
-    proposal["wording"] = wording
     memory.update(session, proposal, state.get("user_text") or "")
     if (session.get("memory") or {}).get("follow_up") == "driver_initiates" and proposal["action"] == "create_case":
         proposal["action"] = "none"
@@ -424,6 +423,9 @@ def node_plan(state: TurnState) -> dict:
             conversation_move=proposal.get("conversation_move"),
             reply_variant_id=proposal.get("reply_variant_id"),
             repair=proposal.get("repair"),
+            answer_topics=proposal.get("answer_topics") or [],
+            next_question_id=proposal.get("next_question_id"),
+            plan_fallbacks=(proposal.get("plan") or {}).get("fallbacks") or [],
         ),
     }
 
@@ -567,6 +569,8 @@ def node_reply(state: TurnState) -> dict:
         variant_text=variant_text,
         episodic=memory.episodic_line(session.get("memory"), state.get("user_text") or ""),
         repair=proposal.get("repair"),
+        plan=proposal.get("plan"),
+        user_text=state.get("user_text") or "",
     )
     if not text:
         text = lookup("unknown")

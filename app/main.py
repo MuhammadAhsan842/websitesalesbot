@@ -293,8 +293,8 @@ async def ingest_example_file(file: UploadFile = File(...)):
 
 @app.post("/v1/examples/{example_id}/review")
 def review_example(example_id: str, body: ExampleReview):
-    if body.status not in {"published", "rejected", "candidate"}:
-        raise HTTPException(400, "status must be published, rejected, or candidate")
+    if body.status not in {"published", "rejected", "candidate", "reviewed", "withdrawn"}:
+        raise HTTPException(400, "status must be candidate, reviewed, published, or withdrawn")
     current = db.get_example(example_id)
     if not current:
         raise HTTPException(404, "unknown example")

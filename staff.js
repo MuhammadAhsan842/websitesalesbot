@@ -145,7 +145,7 @@ async function renderExamples() {
         <p class="muted">${(row.user_text || "").slice(0, 160)}</p>
         <p>${(row.reply || "").slice(0, 220)}</p>
         ${row.status !== "published" ? `<button class="btn btn-ghost" type="button" data-publish="${row.id}">Publish</button>` : ""}
-        ${row.status !== "rejected" ? `<button class="btn btn-ghost" type="button" data-reject="${row.id}">Reject</button>` : ""}
+        ${row.status !== "withdrawn" && row.status !== "rejected" ? `<button class="btn btn-ghost" type="button" data-reject="${row.id}">Withdraw</button>` : ""}
       </div>
     `).join("")}
   `;
@@ -176,7 +176,7 @@ async function renderExamples() {
       await fetch(`${API}/v1/examples/${btn.dataset.reject}/review`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "rejected", reviewed_by: "Staff desk" }),
+        body: JSON.stringify({ status: "withdrawn", reviewed_by: "Staff desk" }),
       });
       await renderExamples();
     });

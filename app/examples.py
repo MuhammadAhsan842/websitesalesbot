@@ -38,12 +38,28 @@ BANK = (
     {
         "id": "union_nj_monday",
         "source": "union_moving",
-        "tags": ("deadline", "liftgate", "payload_limit", "acknowledge"),
+        "tags": ("deadline", "liftgate", "payload_limit", "acknowledge", "box_truck", "monday"),
+        "situation": "Destination deadline with equipment constraints",
+        "strategy": "Acknowledge this driver's destination and timing. Never copy another truck, day, or city.",
+        "pattern": "Deadline is recorded. I cannot confirm a live load. Own MC or lease-on?",
         "context": "Needs New Jersey by Monday; 26-ft box, liftgate, 8k, e-track",
         "user": "Do you have anything I need to go to NJ I need to be there by Monday. 26 box truck I can care 8k I do have lift gate no palls jackets. Ei have e track",
         "move": "acknowledge",
         "variant": "ack_constraints",
         "reply": "Got it — NJ by Monday, 26-ft box, liftgate, 8k, no pallet jack. I cannot confirm a live load here. Own MC or lease-on?",
+    },
+    {
+        "id": "reefer_friday",
+        "source": "staff_rewrite",
+        "tags": ("deadline", "reefer", "friday", "acknowledge"),
+        "situation": "Reefer with a Friday start",
+        "strategy": "Acknowledge this driver's equipment and day. Do not copy another truck or day.",
+        "pattern": "Equipment and timing are recorded. I cannot confirm a live load. Own MC or lease-on?",
+        "context": "Reefer produce; needs to roll Friday",
+        "user": "I run reefer. Need to roll Friday with produce.",
+        "move": "acknowledge",
+        "variant": "ack_constraints",
+        "reply": "Reefer Friday is recorded. I cannot confirm a live load. Own MC or lease-on?",
     },
     {
         "id": "union_has_everything_dot",
@@ -118,7 +134,10 @@ BANK = (
     {
         "id": "jason_waiting_insurance",
         "source": "jason_chats",
-        "tags": ("blocker", "acknowledge"),
+        "tags": ("blocker", "insurance", "acknowledge"),
+        "situation": "Still shopping insurance quotes",
+        "strategy": "Acknowledge the insurance delay. Do not treat a quote as coverage. Do not restart qualification.",
+        "pattern": "Still waiting on insurance — understood. A quote is not coverage.",
         "context": "Last time they were waiting on insurance quotes",
         "user": "Hey buddy, not yet. I'm hoping today or tomorrow for sure. Just getting several quotes",
         "move": "acknowledge",
@@ -258,12 +277,123 @@ BANK = (
     {
         "id": "three_not_two",
         "source": "staff_rewrite",
-        "tags": ("fleet", "acknowledge"),
+        "tags": ("fleet", "acknowledge", "correction"),
+        "situation": "Corrected truck count",
+        "strategy": "Acknowledge the correction. Do not re-ask the corrected field.",
+        "pattern": "Updated. I will not re-ask fleet size.",
         "context": "Corrected truck count",
         "user": "Actually three trucks, not two",
         "move": "acknowledge",
         "variant": "ack_constraints",
         "reply": "Updated to three trucks. I will not re-ask fleet size.",
+    },
+    {
+        "id": "jason_insurance_quotes",
+        "source": "jason_chats",
+        "tags": ("blocker", "insurance", "acknowledge"),
+        "situation": "Interested but waiting on insurance quotes",
+        "strategy": "Acknowledge the blocker; do not restart qualification. A quote is not coverage.",
+        "pattern": "Understood. We can continue when you've arranged coverage.",
+        "context": "Driver is interested but waiting for insurance.",
+        "user": "Not yet. I'm still comparing quotes.",
+        "move": "acknowledge",
+        "variant": "ack_constraints",
+        "reply": "Understood. We can continue when you've arranged coverage. A quote is not active coverage.",
+    },
+    {
+        "id": "jason_insurance_agent",
+        "source": "jason_chats",
+        "tags": ("blocker", "insurance", "acknowledge"),
+        "situation": "Agent has not finished the policy",
+        "strategy": "Same insurance-delay behaviour; adapt the wording. Do not treat a pending policy as a COI.",
+        "pattern": "Understood. We can continue when coverage is in place.",
+        "context": "Insurance shopping; agent still working",
+        "user": "My agent hasn't finished the policy.",
+        "move": "acknowledge",
+        "variant": "ack_constraints",
+        "reply": "Understood. We can continue when coverage is in place. I will not treat a pending policy as a certificate.",
+    },
+    {
+        "id": "docs_which_papers",
+        "source": "staff_rewrite",
+        "tags": ("documents", "answer"),
+        "situation": "Confused about which papers to send",
+        "strategy": "Name the usual list. Do not claim a packet was emailed.",
+        "pattern": "Usual own-MC items are authority sheet, W-9, COI, notice of assignment, and a voided check. Staff confirm the live list.",
+        "context": "Asked which documents are needed",
+        "user": "Which papers do I send?",
+        "move": "answer",
+        "variant": "answer_services",
+        "reply": "Usual own-MC items: MC authority sheet, W-9, certificate of insurance, notice of assignment, voided check. Staff confirm the live list. I do not send them from chat.",
+    },
+    {
+        "id": "return_after_days",
+        "source": "staff_rewrite",
+        "tags": ("resume", "acknowledge"),
+        "situation": "Returning after several days",
+        "strategy": "Resume from the last blocker. Do not restart qualification.",
+        "pattern": "Welcome back. We can pick up from where you left off.",
+        "context": "Driver returning after a pause",
+        "user": "Hey, I'm back from last week.",
+        "move": "acknowledge",
+        "variant": "ack_constraints",
+        "reply": "Welcome back. We can pick up from where you left off — I will not restart qualification.",
+    },
+    {
+        "id": "fee_and_sign_now",
+        "source": "staff_rewrite",
+        "tags": ("total_fees", "commitment_concern", "answer"),
+        "situation": "Asked the fee and whether they must sign now",
+        "strategy": "Answer both topics. Do not add a new qualify question.",
+        "pattern": "Staff quote the live fee after arrangement is on file. Talking here is not a signature.",
+        "context": "Two questions in one message",
+        "user": "What do you charge, and do I have to sign now?",
+        "move": "answer",
+        "variant": "answer_fee",
+        "reply": "Staff quote the live fee after own-MC vs lease-on is on file. Talking here is not a contract and not a signature.",
+    },
+    {
+        "id": "otr_keep_home_time",
+        "source": "staff_rewrite",
+        "tags": ("operating_mode", "home_time", "acknowledge"),
+        "situation": "Switched to OTR while keeping daily home time",
+        "strategy": "Update operating mode. Keep a separately stated home-time requirement unless withdrawn.",
+        "pattern": "OTR is recorded. Daily home time is still on file unless you withdraw it.",
+        "context": "Operating preference changed; home-time constraint remains",
+        "user": "I'm switching to OTR. I still need to be home every night.",
+        "move": "acknowledge",
+        "variant": "ack_constraints",
+        "reply": "OTR is recorded. Daily home time is still on file. I will not drop that unless you withdraw it.",
+    },
+)
+
+VERSION = "ayyan_examples_v2"
+LIVE_STATUSES = {"published"}
+HIDDEN_STATUSES = {"withdrawn", "rejected", "candidate", "reviewed"}
+DEFAULT_STRATEGY = {
+    "acknowledge": "Acknowledge the stated fact or blocker; do not restart qualification.",
+    "answer": "Answer the asked topic from records; do not invent fees or confirm actions.",
+    "clarify": "Clarify the missing arrangement before any packet.",
+    "qualify": "Ask one unanswered fit question.",
+    "explain_objection": "Address the concern; do not restart fit.",
+    "offer_handoff": "Offer a staff-owned next step; do not claim it is done.",
+    "pause": "Respect the driver's timing; do not chase.",
+}
+
+CONTRASTS = (
+    {
+        "id": "weak_insurance_restart",
+        "user": "Not yet. I'm still comparing quotes.",
+        "weak": "What are you running — dry van, reefer, flatbed, box truck, or hotshot?",
+        "preferred": "Understood. We can continue when you've arranged coverage.",
+        "fail": "restarts qualification",
+    },
+    {
+        "id": "weak_copy_monday_box",
+        "user": "I run reefer. Need to roll Friday.",
+        "weak": "Got it — NJ by Monday, 26-ft box, liftgate, 8k, no pallet jack.",
+        "preferred": "Reefer Friday is recorded. I cannot confirm a live load.",
+        "fail": "copies another driver's truck and deadline",
     },
 )
 
@@ -289,26 +419,59 @@ def _index_rows(rows: list[dict]) -> list[dict]:
 INDEX = _index_rows(list(BANK))
 
 
+def _normalize(row: dict) -> dict:
+    move = row.get("move")
+    return {
+        "id": row["id"],
+        "source": row.get("source") or "staff",
+        "tags": tuple(row.get("tags") or ()),
+        "context": row.get("context") or "",
+        "situation": row.get("situation") or row.get("context") or "",
+        "strategy": row.get("strategy") or DEFAULT_STRATEGY.get(move or "", ""),
+        "pattern": row.get("pattern") or row.get("reply") or "",
+        "user": row.get("user_text") or row.get("user") or "",
+        "move": move,
+        "variant": row.get("variant"),
+        "reply": row.get("reply") or "",
+        "applicability": list(row.get("applicability") or row.get("tags") or ()),
+        "version": row.get("version") or 1,
+        "status": row.get("status") or "published",
+    }
+
+
 def published() -> list[dict]:
     try:
         from app import db
 
-        extra = db.list_examples("published")
+        extra = db.list_examples()
     except Exception:
         extra = []
-    by_id = {row["id"]: row for row in BANK}
+    by_id = {row["id"]: _normalize(row) for row in BANK}
     for row in extra:
-        by_id[row["id"]] = {
-            "id": row["id"],
-            "source": row.get("source") or "staff",
-            "tags": tuple(row.get("tags") or ()),
-            "context": row.get("context") or "",
-            "user": row.get("user_text") or row.get("user") or "",
-            "move": row.get("move"),
-            "variant": row.get("variant"),
-            "reply": row.get("reply") or "",
-        }
-    return list(by_id.values())
+        status = row.get("status") or "candidate"
+        if status in HIDDEN_STATUSES:
+            by_id.pop(row["id"], None)
+            continue
+        if status not in LIVE_STATUSES:
+            continue
+        by_id[row["id"]] = _normalize(row)
+    return [row for row in by_id.values() if allowed(row)]
+
+
+def prompt_examples(rows: list[dict]) -> list[dict]:
+    """Strategy only. Never send another driver's truck, day, or city as facts."""
+    out = []
+    for row in rows[:2]:
+        strategy = row.get("strategy") or DEFAULT_STRATEGY.get(row.get("move") or "", "")
+        out.append(
+            {
+                "id": row.get("id"),
+                "strategy": strategy,
+                "move": row.get("move"),
+                "pattern": row.get("pattern") or strategy,
+            }
+        )
+    return out
 
 
 def _passage(row: dict) -> str:
@@ -341,10 +504,35 @@ def _bm25(query: set[str], doc: set[str], df: dict[str, int], n: int) -> float:
     return score
 
 
+EQUIP_HINTS = {"reefer": "reefer", "flatbed": "flatbed", "hotshot": "hotshot", "van": "dry_van", "box": "box_truck"}
+DAY_HINTS = {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"}
+
+
+def _mismatch(query: set[str], doc: set[str]) -> bool:
+    q_eq = {EQUIP_HINTS[token] for token in EQUIP_HINTS if token in query}
+    d_eq = {EQUIP_HINTS[token] for token in EQUIP_HINTS if token in doc}
+    if q_eq and d_eq and q_eq.isdisjoint(d_eq):
+        return True
+    q_day = DAY_HINTS & query
+    d_day = DAY_HINTS & doc
+    return bool(q_day and d_day and q_day.isdisjoint(d_day))
+
+
+STOP = {
+    "i", "im", "the", "a", "to", "and", "you", "my", "for", "it", "is", "on", "in", "of",
+    "me", "we", "do", "not", "have", "so", "thanks", "thank", "please", "hey", "hi", "ok",
+    "yes", "yeah", "morning", "buddy",
+}
+RARE = {"otr", "reefer", "hotshot", "flatbed", "coi", "w9", "mc"}
+MIN_SCORE = 0.9
+
+
 def search(text: str, limit: int = 2, tags: list[str] | None = None) -> list[dict]:
     query = _tokens(text)
-    extra = {tag.lower() for tag in tags or []}
-    query |= extra
+    content = {token for token in query if token not in STOP and len(token) > 1}
+    tag_tokens = set()
+    for tag in tags or []:
+        tag_tokens |= _tokens(tag.replace("_", " "))
     rows = INDEX or _index_rows(published())
     if not rows:
         return []
@@ -353,8 +541,21 @@ def search(text: str, limit: int = 2, tags: list[str] | None = None) -> list[dic
     for row in rows:
         for token in row["tokens"]:
             df[token] = df.get(token, 0) + 1
-    lex_scores = {row["id"]: _bm25(query, row["tokens"], df, n) for row in rows}
-    lex_ranked = [row for row in sorted(rows, key=lambda row: lex_scores[row["id"]], reverse=True) if lex_scores[row["id"]] > 0]
+    lex_scores = {}
+    for row in rows:
+        score = _bm25(query, row["tokens"], df, n)
+        overlap = len(content & row["tokens"])
+        bonus = 0.4 * len(tag_tokens & row["tokens"])
+        if overlap < 1:
+            score = 0.0
+        elif overlap < 2 and not (content & RARE & row["tokens"]):
+            score = 0.0
+        else:
+            score += bonus
+        lex_scores[row["id"]] = score
+    lex_ranked = [row for row in sorted(rows, key=lambda row: lex_scores[row["id"]], reverse=True) if lex_scores[row["id"]] >= MIN_SCORE]
+    if not lex_ranked:
+        return []
     from app import embed
 
     q_vec = None
@@ -377,6 +578,8 @@ def search(text: str, limit: int = 2, tags: list[str] | None = None) -> list[dic
         row = by_id[row["id"]]
         if lex_scores[row["id"]] <= 0 and vec_scores[row["id"]] <= 0:
             continue
+        if _mismatch(query, row["tokens"]):
+            continue
         overlap = len(row["tokens"] & picked_tokens) / max(len(row["tokens"]), 1)
         if picked and overlap > 0.55:
             continue
@@ -388,7 +591,11 @@ def search(text: str, limit: int = 2, tags: list[str] | None = None) -> list[dic
                 "variant": row["variant"],
                 "tags": list(row.get("tags") or ()),
                 "context": row.get("context") or "",
+                "situation": row.get("situation") or row.get("context") or "",
+                "strategy": row.get("strategy") or DEFAULT_STRATEGY.get(row.get("move") or "", ""),
+                "pattern": row.get("pattern") or "",
                 "reply": row.get("reply") or "",
+                "score": round(lex_scores[row["id"]], 3),
             }
         )
         picked_tokens |= row["tokens"]

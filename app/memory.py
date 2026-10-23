@@ -54,10 +54,14 @@ def empty() -> dict:
         "last_offer": None,
         "last_channel": "chat",
         "last_move": None,
+        "last_question_id": None,
         "follow_up": "assistant",
         "preferred_channel": "chat",
         "next_step_readiness": "needs_explanation",
         "repair": None,
+        "records": [],
+        "next_agreed": None,
+        "follow_up_permission": "assistant",
     }
 
 
@@ -66,15 +70,31 @@ def scoped_knowledge(
     bits: list[str],
     concern: str | None,
     user_text: str = "",
+    topics: list[str] | None = None,
 ) -> tuple[list[str], list[str]]:
-    """Keep only the bits that answer this turn's concern."""
-    keep = CONCERN_KEYS.get(concern) if concern else None
-    if keep is None:
+    """Keep only the bits that answer this turn's topics or concern."""
+    from app.plan import TOPIC_KEYS
+
+    allowed: set[str] | None = None
+    if topics:
+        allowed = set()
+        for topic in topics:
+            allowed |= set(TOPIC_KEYS.get(topic) or ())
+        if not allowed:
+            allowed = None
+    elif concern:
+        allowed = set(CONCERN_KEYS.get(concern) or ())
+        if concern == "total_fees" and not re.search(r"leo|atl|silver arrow|like \d+\s*%", user_text or "", re.I):
+            allowed.discard("competitor")
+    if not allowed:
         return keys, bits
-    allowed = set(keep)
-    if concern == "total_fees" and not re.search(r"leo|atl|silver arrow|like \d+\s*%", user_text or "", re.I):
-        allowed.discard("competitor")
     paired = [(key, bit) for key, bit in zip(keys, bits) if key in allowed]
+    if topics:
+        if "dispatch_fee" in topics:
+            fee_first = [(key, bit) for key, bit in paired if key in {"fee", "fee_need_arrangement", "fee_lease_blank"}]
+            rest = [(key, bit) for key, bit in paired if key not in {"fee", "fee_need_arrangement", "fee_lease_blank"}]
+            paired = fee_first[:1] + rest
+        return [key for key, _ in paired], [bit for _, bit in paired]
     if concern == "total_fees":
         paired = paired[:1]
     return [key for key, _ in paired], [bit for _, bit in paired]
@@ -92,10 +112,14 @@ def compact(memory: dict | None) -> dict:
         "last_offer": state.get("last_offer"),
         "last_channel": state.get("last_channel") or "chat",
         "last_move": state.get("last_move"),
+        "last_question_id": state.get("last_question_id"),
         "follow_up": state.get("follow_up") or "assistant",
         "preferred_channel": state.get("preferred_channel") or "chat",
         "next_step_readiness": state.get("next_step_readiness") or "needs_explanation",
         "repair": state.get("repair"),
+        "records": list(state.get("records") or []),
+        "next_agreed": state.get("next_agreed"),
+        "follow_up_permission": state.get("follow_up_permission") or state.get("follow_up") or "assistant",
     }
 
 
@@ -126,7 +150,10 @@ def detect_concern(text: str, intent: str) -> str | None:
         t,
     ):
         return "repetition"
-    if re.search(r"sign for nothing|don'?t want to sign|am i binding|just (asking|looking|chatting)", t):
+    if re.search(
+        r"sign for nothing|don'?t want to sign|am i binding|have to sign|sign now|do i (have to|need to) sign|just (asking|looking|chatting)",
+        t,
+    ):
         return "commitment"
     if re.search(r"after (fuel|fees|costs)|what'?s left|net (pay|after)|take[- ]home", t):
         return "net_after_costs"
@@ -143,6 +170,8 @@ def detect_goal(facts: dict, arrangement: str | None, text: str) -> str | None:
     t = (text or "").lower()
     if re.search(r"\blocal\b|home every night|no otr|not otr", t):
         return "local_work"
+    if re.search(r"\botr\b|over the road", t):
+        return "otr"
     if fact_value(facts, "supportNeed") == "daily_home_time":
         area = str(fact_value(facts, "operatingArea") or "")
         if area and area not in {"otr"}:
@@ -158,18 +187,31 @@ def detect_goal(facts: dict, arrangement: str | None, text: str) -> str | None:
 
 def detect_constraint(facts: dict, text: str) -> str | None:
     t = (text or "").lower()
-    if (
-        fact_value(facts, "operatingMode") == "local"
-        or fact_value(facts, "supportNeed") == "daily_home_time"
-        or re.search(r"home every night|daily home|\blocal\b", t)
+    if re.search(
+        r"home time (is )?(not|no longer)|don'?t need (to be )?home|can stay out|no longer home every night",
+        t,
     ):
+        return ""
+    if re.search(r"home every night|daily home", t) or fact_value(facts, "supportNeed") == "daily_home_time":
+        return "home_every_night"
+    if re.search(r"\botr\b|over the road", t) and not re.search(r"no otr|not otr", t):
+        return None
+    if fact_value(facts, "operatingMode") == "local" or re.search(r"\blocal\b|no otr|not otr", t):
         return "home_every_night"
     return None
 
 
 def detect_blocker(session: dict, intent: str, concern: str | None, text: str = "") -> str | None:
     t = (text or "").lower()
-    if re.search(r"waiting on insurance|insurance delay|coi delay|getting several quotes", t):
+    if re.search(
+        r"(got|have|received) (my )?(insurance|coi)|insurance is (ready|done|sorted|active)|coi is (ready|done)",
+        t,
+    ):
+        return ""
+    if re.search(
+        r"waiting on insurance|insurance delay|coi delay|getting several quotes|comparing quotes|agent hasn'?t finished",
+        t,
+    ):
         return "waiting_insurance"
     if re.search(r"pick(ing)? up (my )?truck|send (the )?registration (after|tomorrow|later)|registration after", t):
         return "waiting_registration"
@@ -186,9 +228,39 @@ def detect_blocker(session: dict, intent: str, concern: str | None, text: str = 
     return None
 
 
+def records_of(memory: dict | None, kind: str | None = None, status: str = "active") -> list[dict]:
+    rows = (memory or {}).get("records") or []
+    return [
+        row
+        for row in rows
+        if (kind is None or row.get("kind") == kind) and (status is None or row.get("status") == status)
+    ]
+
+
+def set_record(records: list | None, kind: str, key: str, status: str, note: str | None = None) -> list[dict]:
+    rows = [dict(row) for row in (records or [])]
+    found = False
+    for row in rows:
+        if row.get("kind") != kind or row.get("key") != key:
+            continue
+        if row.get("status") in {"resolved", "superseded"} and status == "active":
+            row["status"] = "reopened"
+        else:
+            row["status"] = status
+        if note:
+            row["note"] = note
+        found = True
+    if not found:
+        rows.append({"kind": kind, "key": key, "status": status, "note": note})
+    return rows
+
+
 def episodic_line(memory: dict | None, user_text: str = "") -> str | None:
     last = (memory or {}).get("last_blocker")
     t = (user_text or "").lower()
+    if any(row.get("key") == "home_time_vs_otr" for row in records_of(memory, "concern")):
+        if not re.search(r"home every night|daily home|can stay out|not required", t):
+            return "OTR is recorded. Daily home time is still on file — has that changed too?"
     if last == "waiting_insurance" and not re.search(r"insurance|coi", t):
         return "Last time you were waiting on insurance — is that still the hold-up?"
     if last == "waiting_registration" and not re.search(r"registration|truck tomorrow|picked up", t):
@@ -209,7 +281,18 @@ def update(session: dict, proposal: dict, user_text: str) -> dict:
     arrangement = proposal.get("arrangement")
     concern = detect_concern(user_text, intent)
     goal = detect_goal(facts, arrangement, user_text) or current.get("goal")
-    constraint = detect_constraint(facts, user_text) or current.get("hard_constraint")
+    detected_constraint = detect_constraint(facts, user_text)
+    stated_home = fact_value(facts, "supportNeed") == "daily_home_time" or bool(
+        re.search(r"home every night|daily home", user_text or "", re.I)
+    )
+    if detected_constraint == "":
+        constraint = None
+    elif detected_constraint:
+        constraint = detected_constraint
+    elif re.search(r"\botr\b|over the road", user_text or "", re.I) and not stated_home:
+        constraint = None
+    else:
+        constraint = current.get("hard_constraint")
     answered = answered_keys(facts)
     repair = proposal.get("repair") or current.get("repair")
     if concern == "pause":
@@ -219,7 +302,46 @@ def update(session: dict, proposal: dict, user_text: str) -> dict:
     else:
         follow_up = current.get("follow_up") or "assistant"
     blocker = detect_blocker(session, intent, concern, user_text)
-    last_blocker = blocker if blocker and blocker != "missing_fit" else current.get("last_blocker")
+    records = list(current.get("records") or [])
+    if blocker == "":
+        records = set_record(
+            records,
+            "blocker",
+            current.get("last_blocker") or "waiting_insurance",
+            "superseded",
+            "Driver reports insurance arranged. Certificate receipt and review remain separate.",
+        )
+        last_blocker = None
+        blocker = None
+    else:
+        last_blocker = blocker if blocker and blocker != "missing_fit" else current.get("last_blocker")
+        if blocker and blocker != "missing_fit":
+            records = set_record(records, "blocker", blocker, "active")
+    if re.search(r"\botr\b|over the road", user_text or "", re.I) and not re.search(r"no otr|not otr", user_text or "", re.I):
+        if current.get("goal") == "local_work":
+            records = set_record(records, "goal", "local_work", "superseded", "Operating preference updated to OTR")
+        records = set_record(records, "goal", "otr", "active")
+        if constraint == "home_every_night":
+            records = set_record(
+                records,
+                "concern",
+                "home_time_vs_otr",
+                "active",
+                "OTR stated; daily home time is still on file until the driver withdraws it.",
+            )
+        else:
+            records = set_record(records, "concern", "home_time_vs_otr", "superseded")
+    if constraint is None and current.get("hard_constraint") == "home_every_night" and detected_constraint == "":
+        records = set_record(records, "constraint", "home_every_night", "superseded", "Home-time requirement withdrawn")
+    elif constraint == "home_every_night":
+        records = set_record(records, "constraint", "home_every_night", "active")
+    action = proposal.get("action") or proposal.get("proposed_action") or "none"
+    owner = "driver" if follow_up == "driver_initiates" else ("staff" if action in {"create_case", "callback", "takeover"} else "assistant")
+    next_agreed = {
+        "step": proposal.get("next_question_id") or proposal.get("next_field") or action,
+        "owner": owner,
+        "status": "proposed",
+    }
     readiness = "ready" if intent == "onboard" else ("paused" if follow_up == "driver_initiates" else "needs_explanation")
     state = {
         "goal": goal,
@@ -231,10 +353,14 @@ def update(session: dict, proposal: dict, user_text: str) -> dict:
         "last_offer": proposal.get("reply_variant_id") or current.get("last_offer"),
         "last_channel": session.get("channel") or current.get("last_channel") or "chat",
         "last_move": proposal.get("conversation_move") or current.get("last_move"),
+        "last_question_id": proposal.get("next_question_id") or proposal.get("next_field"),
         "follow_up": follow_up,
         "preferred_channel": session.get("channel") or "chat",
         "next_step_readiness": readiness,
         "repair": repair,
+        "records": records,
+        "next_agreed": next_agreed,
+        "follow_up_permission": follow_up,
     }
     session["memory"] = state
     return state

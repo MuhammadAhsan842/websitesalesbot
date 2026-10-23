@@ -118,6 +118,9 @@ class MovesAndWording(unittest.TestCase):
         self.assertEqual(user["examples"][0]["id"], "authority_ready")
         self.assertIn("conversation_move", payload["format"]["properties"])
         self.assertIn("reply_variant_id", payload["format"]["properties"])
+        self.assertIn("answer_topics", payload["format"]["properties"])
+        self.assertIn("next_question_id", payload["format"]["properties"])
+        self.assertIn("last_question_id", user["memory"])
 
     def test_episodic_line_only_when_blocker_is_stale(self):
         mem = {"last_blocker": "waiting_insurance"}

@@ -26,6 +26,27 @@ MOVES = (
     "pause",
 )
 
+ANSWER_TOPICS = (
+    "dispatch_fee",
+    "commitment",
+    "guarantee",
+    "home_time",
+    "services",
+    "onboarding",
+    "own_mc",
+    "lease",
+    "support",
+    "email_delivery",
+    "docs_status",
+    "competitor",
+    "net_after_costs",
+    "talk_here",
+    "call_me",
+    "pause",
+)
+
+PERMITTED_ACTIONS = ("none", "create_case", "callback", "talk_here", "takeover")
+
 VARIANTS = (
     "welcome",
     "answer_services",

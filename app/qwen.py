@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from app import router
 from app.cpu import default_threads
-from app.schema import CATALOGUE, FACT_KEYS, INTENTS, MOVES, VARIANTS
+from app.schema import ANSWER_TOPICS, CATALOGUE, FACT_KEYS, INTENTS, MOVES, VARIANTS
 
 log = logging.getLogger("ayyan.qwen")
 
@@ -112,6 +112,7 @@ class Fact(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     key: str = Field(json_schema_extra={"enum": [*dict.fromkeys(FACT_KEYS), "_unknown"]})
     value: str | int | float | bool | None
+    evidence: str | None = Field(default=None, max_length=80)
 
     @field_validator("key")
     @classmethod
@@ -135,14 +136,26 @@ class Proposal(BaseModel):
     task: str | None = Field(default=None, json_schema_extra={"enum": [*CATALOGUE, None]})
     conversation_move: str | None = Field(default=None, json_schema_extra={"enum": [*MOVES, None]})
     reply_variant_id: str | None = Field(default=None, json_schema_extra={"enum": [*VARIANTS, None]})
-    wording: str | None = Field(default=None, max_length=180)
+    answer_topics: list[str] = Field(default_factory=list, max_length=6)
+    next_question_id: str | None = Field(default=None, json_schema_extra={"enum": [*dict.fromkeys(FACT_KEYS), None]})
+    wording: str | None = Field(default=None, max_length=240)
 
-    @field_validator("intent", "next_field", "arrangement", "action", "task", "conversation_move", "reply_variant_id")
+    @field_validator(
+        "intent",
+        "next_field",
+        "next_question_id",
+        "arrangement",
+        "action",
+        "task",
+        "conversation_move",
+        "reply_variant_id",
+    )
     @classmethod
     def allowed_value(cls, value: str | None, info):
         allowed = {
             "intent": INTENTS,
             "next_field": [*FACT_KEYS, None],
+            "next_question_id": [*FACT_KEYS, None],
             "arrangement": ["dispatch_service", "lease_on", "needs_clarification", None],
             "action": ["none", "create_case", "callback", "talk_here", "takeover"],
             "task": [*CATALOGUE, None],
@@ -152,6 +165,11 @@ class Proposal(BaseModel):
         if value not in allowed[info.field_name]:
             raise ValueError(f"invalid {info.field_name}")
         return value
+
+    @field_validator("answer_topics")
+    @classmethod
+    def known_topics(cls, value: list[str]) -> list[str]:
+        return [topic for topic in value if topic in ANSWER_TOPICS][:6]
 
 
 OUTPUT_SCHEMA = Proposal.model_json_schema()
@@ -164,7 +182,7 @@ def _sanitize(raw: dict) -> dict:
     if not isinstance(raw, dict):
         raise ValueError("not an object")
     facts = []
-    for item in raw.get("facts") or []:
+    for item in raw.get("facts_patch") or raw.get("facts") or []:
         if not isinstance(item, dict):
             continue
         key = item.get("key")
@@ -175,20 +193,36 @@ def _sanitize(raw: dict) -> dict:
             value = None
         if key != "_unknown" and value is None:
             continue
-        facts.append({"key": key, "value": True if key == "_unknown" and value is None else value})
-    next_field = raw.get("next_field")
-    action = raw.get("action") if raw.get("action") in _ACTIONS else "none"
+        evidence = item.get("evidence") if isinstance(item.get("evidence"), str) else None
+        facts.append(
+            {
+                "key": key,
+                "value": True if key == "_unknown" and value is None else value,
+                "evidence": (evidence.strip()[:80] if evidence else None),
+            }
+        )
+    next_question = raw.get("next_question_id") if raw.get("next_question_id") in FACT_KEYS else None
+    next_field = next_question or (raw.get("next_field") if raw.get("next_field") in FACT_KEYS else None)
+    action = raw.get("action") or raw.get("proposed_action")
+    action = action if action in _ACTIONS else "none"
     wording = raw.get("wording") if isinstance(raw.get("wording"), str) else None
     if wording:
-        wording = wording.strip()[:180]
-        if re.search(r"\$|\d+\s*%|approved|zoho|loads tomorrow|guarantee", wording, re.I):
+        wording = wording.strip()[:240]
+        if re.search(
+            r"\$|\d+\s*%|approved|zoho|loads tomorrow|guarantee|emailed|booked|packet sent|documents were received|case was assigned",
+            wording,
+            re.I,
+        ):
             wording = None
+    topics = [topic for topic in raw.get("answer_topics") or [] if topic in ANSWER_TOPICS][:6]
     return {
         "intent": raw.get("intent") if raw.get("intent") in INTENTS else "general",
         "facts": facts,
         "knowledge_keys": [k for k in raw.get("knowledge_keys") or [] if isinstance(k, str)][:32],
         "blocked": [b for b in raw.get("blocked") or [] if isinstance(b, str)][:16],
-        "next_field": next_field if next_field in FACT_KEYS else None,
+        "next_field": next_field,
+        "next_question_id": next_field,
+        "answer_topics": topics,
         "arrangement": raw.get("arrangement") if raw.get("arrangement") in _ARRANGEMENTS else None,
         "action": action or "none",
         "task": raw.get("task") if raw.get("task") in CATALOGUE else None,
@@ -202,13 +236,14 @@ def parse_content(content: str) -> Proposal:
     return Proposal.model_validate(_sanitize(json.loads(content or "{}")))
 
 
-SYSTEM = """Ayyan Group sales proposer. JSON only. /no_think
-Output: {"intent":"...","facts":[{"key":"...","value":"..."}],"knowledge_keys":[],"blocked":[],"conversation_move":"answer","reply_variant_id":null,"wording":null}. Omit empty optional fields.
+SYSTEM = """Ayyan Group after-hours sales assistant. Warm, direct, brief. Respect the driver's timing. JSON only. /no_think
+Output one plan: {"intent":"...","facts":[{"key":"...","value":"...","evidence":"..."}],"answer_topics":[],"conversation_move":"answer","next_question_id":null,"action":"none","wording":"..."}. Omit empty.
+facts = new or corrected facts only, with a short evidence span copied from this message. answer_topics = every question this message asked (dispatch_fee,commitment,guarantee,home_time,services,onboarding). Keep both if they asked two.
 conversation_move: acknowledge|answer|clarify|qualify|explain_objection|offer_handoff|pause.
-Match example wording: acknowledge one stated fact, then at most one question. Short like the examples. No sir, no weekly gross.
-Fact keys include trailerLength,payload,liftgate,deadline,operatingMode,commitmentStance. 26ft => trailerLength 26ft. local/no OTR => operatingMode local. Authority is ready without own vs lease => mcOwnership unclear, move clarify. I meant the fee => intent fee. Need to get paid / forget onboarding => existing_customer. Mailbox full / send again => move acknowledge, not a signature ask.
-Extract only stated new/corrected facts. Code assigns status. Never approve, quote %, or claim CRM saved. wording: max 18 words, no $, %, approved, Zoho, loads.
-Own MC => mcOwnership own_mc. Respect memory.answered and hard_constraint. If follow_up is driver_initiates, omit next_field."""
+next_question_id from memory catalogue, or null. Not every reply needs a question. action from permitted only, else none.
+Examples are strategy, not this driver's facts. Do not copy another truck, city, or day. Do not claim emailed, booked, assigned, or approved.
+wording: one or two short sentences as acknowledgement. Code supplies fees, document lists, and action receipts.
+Own MC => mcOwnership own_mc. Authority is ready without own vs lease => unclear, move clarify. I meant the fee => intent fee. Need to get paid => existing_customer. Mailbox full => acknowledge. OTR does not drop a separately stated home-every-night requirement. Respect memory.answered, last_question_id, records, and follow_up."""
 
 
 def request_payload(
@@ -219,6 +254,7 @@ def request_payload(
     memory: dict | None = None,
     examples: list | None = None,
     model: str | None = None,
+    recent: list | None = None,
 ) -> dict:
     cfg = settings or CONFIG
     current = {
@@ -235,10 +271,21 @@ def request_payload(
             "answered": memory.get("answered") or [],
             "blocker": memory.get("blocker"),
             "last_blocker": memory.get("last_blocker"),
+            "last_question_id": memory.get("last_question_id"),
             "follow_up": memory.get("follow_up") or "assistant",
+            "next_agreed": memory.get("next_agreed"),
+            "records": [
+                {"kind": row.get("kind"), "key": row.get("key"), "status": row.get("status")}
+                for row in (memory.get("records") or [])
+                if row.get("status") in {"active", "reopened"}
+            ][:6],
         }
     if examples:
-        payload["examples"] = examples[:2]
+        from app.examples import prompt_examples
+
+        payload["examples"] = prompt_examples(examples)
+    if recent:
+        payload["recent"] = recent[:4]
     user = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     return {
         "model": model or cfg.model,
@@ -316,13 +363,20 @@ async def _infer(
     memory: dict | None,
     examples: list | None,
     queue_ms: float,
+    recent: list | None = None,
 ) -> dict[str, Any]:
     global last_error, ready
     started = perf_counter()
     response = await client().post(
         f"{OLLAMA}/api/chat",
         json=request_payload(
-            user_text, facts, conversation_state, memory=memory, examples=examples, model=model
+            user_text,
+            facts,
+            conversation_state,
+            memory=memory,
+            examples=examples,
+            model=model,
+            recent=recent,
         ),
     )
     response.raise_for_status()
@@ -356,6 +410,7 @@ async def propose(
     examples: list | None = None,
     intent: str | None = None,
     repair: str | None = None,
+    recent: list | None = None,
 ) -> dict[str, Any]:
     global last_error, ready, last_route
     choice = router.pick(user_text, intent, repair, memory, gemma_ready=gemma_ready)
@@ -363,13 +418,21 @@ async def propose(
     async with _gate.enter() as queue_ms:
         try:
             return await _infer(
-                choice["model"], choice["family"], user_text, facts, conversation_state, memory, examples, queue_ms
+                choice["model"],
+                choice["family"],
+                user_text,
+                facts,
+                conversation_state,
+                memory,
+                examples,
+                queue_ms,
+                recent,
             )
         except (httpx.HTTPError, ValidationError, ValueError, TypeError, AttributeError) as first:
             if choice["family"] == "gemma" and router.mode() != "gemma":
                 try:
                     result = await _infer(
-                        MODEL, "qwen", user_text, facts, conversation_state, memory, examples, queue_ms
+                        MODEL, "qwen", user_text, facts, conversation_state, memory, examples, queue_ms, recent
                     )
                     last_route = {"model": MODEL, "family": "qwen", "reason": "gemma_failover_qwen"}
                     return result

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.knowledge import EQUIP_KEYS, lookup
+from app.plan import allow_action_message, topic_lines, validate_plan
 from app.schema import ASK_ORDER, CHIPS, EQUIP_LABELS, FACT_KEYS, QUESTIONS
 
 
@@ -199,8 +200,11 @@ def desk_card(session: dict) -> dict:
         "blocker": mem.get("last_blocker") or mem.get("blocker"),
         "next_question": QUESTIONS.get(ask) if ask else None,
         "next_step": step,
+        "next_agreed": mem.get("next_agreed") or {"step": step, "owner": owner, "status": "active"},
         "owner": owner,
         "follow_up": mem.get("follow_up") or "assistant",
+        "follow_up_permission": mem.get("follow_up_permission") or mem.get("follow_up") or "assistant",
+        "records": list(mem.get("records") or []),
         "arrangement": arrangement,
         "facts": known,
         "line": line.strip(),
@@ -220,69 +224,77 @@ def compose(
     variant_text: str | None = None,
     episodic: str | None = None,
     repair: str | None = None,
+    plan: dict | None = None,
+    user_text: str = "",
 ) -> tuple[str, list[str], str | None]:
     parts: list[str] = []
     summary = None
     mem = memory or {}
     concern = mem.get("concern")
-    paused = mem.get("follow_up") == "driver_initiates" or concern == "pause"
     core_done = not missing_core(facts, mem)
     spoken = (wording or "").strip()
+    validated = plan if plan and "answer_topics" in plan else validate_plan(
+        user_text,
+        {"facts": facts, "memory": mem},
+        {
+            "intent": intent,
+            "facts": [],
+            "answer_topics": (plan or {}).get("answer_topics") or [],
+            "next_question_id": (plan or {}).get("next_question_id", next_field),
+            "next_field": next_field,
+            "action": (plan or {}).get("proposed_action") or ("create_case" if saved else "none"),
+            "task": (plan or {}).get("task"),
+            "wording": spoken or None,
+            "repair": repair,
+            "conversation_move": (plan or {}).get("conversation_move"),
+        },
+    )
+    topics = list(validated.get("answer_topics") or [])
+    ask = validated.get("next_question_id")
+    spoken = (validated.get("wording") or spoken or "").strip()
+    receipt = action_confirmation(action_message, saved)
 
     if episodic:
         parts.append(episodic)
     if spoken:
         parts.append(spoken)
 
-    def _use_variant() -> None:
-        if spoken:
-            return
-        if variant_text and variant_text not in parts and not any(variant_text == (bit or "") for bit in bits):
-            parts.append(variant_text)
-
-    if paused:
-        parts.append(variant_text or lookup("concern_pause"))
-        return " ".join(_dedupe(parts)), [], None
-
     if intent == "existing_customer" or repair == "leave_sales":
-        parts.append(lookup("support"))
+        if not spoken:
+            parts.append(lookup("support"))
+        if receipt:
+            parts.append(receipt)
         return " ".join(_dedupe(parts)), CHIPS["handoff"], None
 
-    if repair == "email_delivery" or concern == "email_delivery":
-        parts.append(spoken or variant_text or lookup("email_delivery"))
+    if repair == "email_delivery" or concern == "email_delivery" or "email_delivery" in topics:
+        if not spoken:
+            parts.append(variant_text or lookup("email_delivery"))
         return " ".join(_dedupe(parts)), CHIPS["default"], None
 
     if repair == "authority_uncertain":
-        parts.append(spoken or lookup("mc_new"))
+        if not spoken:
+            parts.append(lookup("mc_new"))
         ask = "mcOwnership"
         if not _has_question(" ".join(parts)):
             parts.append(QUESTIONS[ask])
         return " ".join(_dedupe(parts)), CHIPS.get(ask) or CHIPS["default"], None
 
-    if concern == "commitment":
-        _use_variant()
-        if not spoken and not variant_text:
-            parts.append(lookup("concern_commitment"))
-        return " ".join(_dedupe(parts)), CHIPS["default"], None
-
-    if concern == "net_after_costs":
-        _use_variant()
-        if not spoken and not variant_text:
-            parts.append(lookup("concern_net"))
-        return " ".join(_dedupe(parts)), CHIPS["default"], None
+    if "pause" in topics or mem.get("follow_up") == "driver_initiates" or concern == "pause":
+        if not spoken:
+            parts.append(variant_text or lookup("concern_pause"))
+        return " ".join(_dedupe(parts)), [], None
 
     if concern == "repetition" or repair == "repetition_unverified":
-        _use_variant()
-        if not spoken and not variant_text:
-            parts.append(lookup("concern_repetition"))
+        if not spoken:
+            parts.append(variant_text or lookup("concern_repetition"))
         parts.append(recorded_line(facts, mem))
 
-    claim_bits = [bit for bit in bits if bit and bit not in parts]
-    if spoken:
-        claim_bits = claim_bits[:1]
-    if claim_bits:
-        parts.extend(claim_bits[:1] if concern else claim_bits[:1])
-    elif not spoken:
+    answers = topic_lines(topics, arrangement, bits, facts)
+    for line in answers:
+        if line and line not in parts and line != spoken:
+            parts.append(line)
+
+    if not spoken and not answers:
         if intent == "service":
             parts.append(lookup("services"))
             line = _equip_line(facts)
@@ -292,11 +304,11 @@ def compose(
             line = _equip_line(facts)
             if line:
                 parts.append(line)
-        else:
-            _use_variant()
+        elif variant_text:
+            parts.append(variant_text)
 
-    if action_message:
-        parts.append(action_message)
+    if receipt:
+        parts.append(receipt)
 
     if saved:
         if spoken:
@@ -312,25 +324,29 @@ def compose(
         parts.append("I do not send, sign, or approve.")
         return " ".join(_dedupe(parts)), CHIPS["handoff"], summary
 
-    ask = None if concern in {"total_fees", "guarantee", "repetition", "home_time"} else (
-        next_field if next_field in QUESTIONS else next_ask(facts, mem)
-    )
-    if concern in {"total_fees", "guarantee", "home_time"}:
-        text = " ".join(_dedupe(parts)) or lookup("unknown")
-        return text, CHIPS["assess"] if core_done else (CHIPS.get(next_ask(facts, mem)) or CHIPS["default"]), None
-
-    if core_done and concern not in {"repetition"} and not bits and not spoken:
+    if core_done and concern not in {"repetition"} and not bits and not spoken and not topics:
         summary = fit_summary(facts, arrangement)
         parts.append(summary)
         if mem.get("follow_up") != "driver_initiates":
             parts.append(lookup("next_invite"))
         return " ".join(_dedupe(parts)), CHIPS["assess"], summary
 
-    joined = " ".join(_dedupe(parts))
-    if ask and QUESTIONS.get(ask) and not _has_question(joined):
-        parts.append(QUESTIONS[ask])
+    question, ask = select_question(validated, parts)
+    if question:
+        parts.append(question)
     elif not parts:
         parts.append(lookup("welcome"))
 
-    chips = CHIPS.get(ask) or CHIPS["default"]
+    chips = CHIPS.get(ask) or (CHIPS["assess"] if core_done else CHIPS["default"])
     return " ".join(_dedupe(parts)), chips, summary
+
+
+def action_confirmation(action_message: str | None, saved: bool) -> str | None:
+    return action_message if allow_action_message(action_message, saved) else None
+
+
+def select_question(plan: dict, parts: list[str]) -> tuple[str | None, str | None]:
+    ask = (plan or {}).get("next_question_id")
+    if ask and QUESTIONS.get(ask) and not _has_question(" ".join(parts)):
+        return QUESTIONS[ask], ask
+    return None, ask

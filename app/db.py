@@ -189,6 +189,11 @@ def init():
             "ALTER TABLE hard_turns ADD COLUMN reviewed INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE outbox ADD COLUMN zoho_id TEXT",
             "ALTER TABLE sessions ADD COLUMN memory_json TEXT NOT NULL DEFAULT '{}'",
+            "ALTER TABLE conversation_examples ADD COLUMN version INTEGER NOT NULL DEFAULT 1",
+            "ALTER TABLE conversation_examples ADD COLUMN strategy TEXT",
+            "ALTER TABLE conversation_examples ADD COLUMN pattern TEXT",
+            "ALTER TABLE conversation_examples ADD COLUMN situation TEXT",
+            "ALTER TABLE conversation_examples ADD COLUMN applicability_json TEXT NOT NULL DEFAULT '[]'",
         ):
             try:
                 conn.execute(stmt)
@@ -643,13 +648,19 @@ def _example_from_row(row: dict | None) -> dict | None:
         return None
     row = dict(row)
     row["tags"] = loads(row.pop("tags_json", None), [])
+    row["applicability"] = loads(row.pop("applicability_json", None), [])
     row["user"] = row.get("user_text")
+    if row.get("status") == "rejected":
+        row["status"] = "withdrawn"
     return row
 
 
 def save_example(partial: dict) -> dict:
     row_id = partial.get("id") or uid("ex")
     current = execute("SELECT * FROM conversation_examples WHERE id = ?", (row_id,), fetch="one")
+    status = partial.get("status") or "candidate"
+    if status == "rejected":
+        status = "withdrawn"
     payload = (
         partial.get("source_id"),
         partial.get("source"),
@@ -659,21 +670,28 @@ def save_example(partial: dict) -> dict:
         partial.get("move"),
         partial.get("variant"),
         dumps(list(partial.get("tags") or [])),
-        partial.get("status") or "candidate",
+        status,
         partial.get("reviewed_by"),
+        int(partial.get("version") or (current or {}).get("version") or 1),
+        partial.get("strategy"),
+        partial.get("pattern"),
+        partial.get("situation") or partial.get("context"),
+        dumps(list(partial.get("applicability") or partial.get("tags") or [])),
     )
     if current:
         execute(
             """UPDATE conversation_examples SET source_id=?, source=?, user_text=?, context=?, reply=?,
-               move=?, variant=?, tags_json=?, status=?, reviewed_by=? WHERE id=?""",
+               move=?, variant=?, tags_json=?, status=?, reviewed_by=?, version=?, strategy=?, pattern=?,
+               situation=?, applicability_json=? WHERE id=?""",
             (*payload, row_id),
         )
     else:
         execute(
             """INSERT INTO conversation_examples
-               (id, source_id, source, user_text, context, reply, move, variant, tags_json, status, reviewed_by, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (row_id, *payload, now()),
+               (id, source_id, source, user_text, context, reply, move, variant, tags_json, status, reviewed_by, created_at,
+                version, strategy, pattern, situation, applicability_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (row_id, *payload[:10], now(), *payload[10:]),
         )
     return _example_from_row(execute("SELECT * FROM conversation_examples WHERE id = ?", (row_id,), fetch="one"))
 

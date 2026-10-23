@@ -158,10 +158,18 @@ SKIP_SEEDS = (
 
 
 def seed_reviewed_bank() -> dict:
-    """Publish the rewritten bank. Record chat-file hashes so a re-upload is a duplicate."""
+    """Publish the rewritten bank without overwriting staff review decisions."""
     published = 0
+    skipped_staff = 0
     for row in examples.BANK:
         if not allowed(row):
+            continue
+        current = db.get_example(row["id"])
+        if current and (
+            current.get("status") in {"withdrawn", "rejected"}
+            or (current.get("reviewed_by") and current.get("reviewed_by") not in {"seed_rewrite", None})
+        ):
+            skipped_staff += 1
             continue
         db.save_example(
             {
@@ -169,12 +177,17 @@ def seed_reviewed_bank() -> dict:
                 "source": row.get("source"),
                 "user_text": row["user"],
                 "context": row.get("context"),
+                "situation": row.get("situation") or row.get("context"),
+                "strategy": row.get("strategy"),
+                "pattern": row.get("pattern"),
                 "reply": row["reply"],
                 "move": row["move"],
                 "variant": row["variant"],
                 "tags": list(row.get("tags") or ()),
+                "applicability": list(row.get("tags") or ()),
                 "status": "published",
                 "reviewed_by": "seed_rewrite",
+                "version": 1,
             }
         )
         published += 1
@@ -213,4 +226,11 @@ def seed_reviewed_bank() -> dict:
             )
         )
     n = examples.reload_index()
-    return {"published": published, "chat_sources": len(sources), "skipped_private": len(skipped), "index": n}
+    return {
+        "published": published,
+        "preserved_staff": skipped_staff,
+        "chat_sources": len(sources),
+        "skipped_private": len(skipped),
+        "index": n,
+        "version": examples.VERSION,
+    }
