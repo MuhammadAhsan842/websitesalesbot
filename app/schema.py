@@ -12,7 +12,37 @@ ASK_ORDER = [
 
 QUAL_FIELDS = CORE_FIELDS + ["lanes", "supportNeed", "startDate", "primaryProblem"]
 
-FACT_KEYS = QUAL_FIELDS + ["name", "phone", "requestedArrangement"]
+EXTRA_FIELDS = ["trailerLength", "payload", "liftgate", "deadline", "operatingMode", "commitmentStance"]
+
+FACT_KEYS = QUAL_FIELDS + ["name", "phone", "requestedArrangement"] + EXTRA_FIELDS
+
+MOVES = (
+    "acknowledge",
+    "answer",
+    "clarify",
+    "qualify",
+    "explain_objection",
+    "offer_handoff",
+    "pause",
+)
+
+VARIANTS = (
+    "welcome",
+    "answer_services",
+    "answer_fee",
+    "answer_fee_need_mc",
+    "answer_guarantee",
+    "explain_commitment",
+    "explain_net",
+    "repair_repetition",
+    "pause",
+    "clarify_mc",
+    "qualify_next",
+    "offer_handoff",
+    "route_operations",
+    "ack_constraints",
+    "email_delivery",
+)
 
 INTENTS = (
     "dispatch_inquiry",
@@ -49,7 +79,12 @@ QUESTIONS = {
     "mcOwnership": "Will you run under your own MC, or are you looking to lease on under Ayyan’s authority?",
     "supportNeed": "What support matters most — home time, paperwork, or keeping the truck loaded?",
     "startDate": "When do you want to start? Unknown is fine.",
+    "deadline": "When do you need to be rolling?",
     "phone": "Confirm the callback number, preferred time, and timezone.",
+    "trailerLength": "What trailer length are you running?",
+    "payload": "What payload do you need to haul?",
+    "liftgate": "Do you need a liftgate?",
+    "operatingMode": "Is this local work or OTR?",
 }
 
 CHIPS = {
@@ -60,6 +95,9 @@ CHIPS = {
     "fleetSize": ["1 truck", "2 trucks", "3 trucks", "I don't know yet"],
     "startDate": ["Next week", "I don't know yet"],
     "supportNeed": ["Home every night", "Paperwork", "Keep me loaded"],
+    "deadline": ["Monday", "Next week", "I don't know yet"],
+    "liftgate": ["Liftgate yes", "No liftgate"],
+    "operatingMode": ["Local work", "OTR"],
     "handoff": ["What's my status?", "Talk here", "Call me", "Talk to a human"],
     "voice_id": ["My name is Alex Rivera"],
     "assess": ["I'm ready to start", "Talk here", "Call me", "What is the fee?", "Talk to a human"],

@@ -1,15 +1,12 @@
-"""Hybrid retrieve + rerank over approved register only. Packet PDFs are never indexed."""
+"""Hybrid retrieve over the approved register only. Packet PDFs are never indexed."""
 
 from __future__ import annotations
 
 import math
 import re
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-import httpx
-
-from app import fees, qwen
+from app import embed, fees
 from app.knowledge import REGISTER, lookup
 
 _INDEX: list[dict] = []
@@ -17,8 +14,7 @@ SKIP = {"version", "unknown"}
 TOKEN = re.compile(r"[a-z0-9]+")
 PERCENT = re.compile(r"(\d+(?:\.\d+)?)\s*%")
 PACKET_DIR = Path(__file__).resolve().parent.parent / "data" / "packets"
-RRF_K = 10
-MIN_RRF = 0.12
+MIN_RRF = 0.08
 STOP = {
     "a", "an", "and", "are", "as", "at", "be", "can", "do", "does", "for", "from", "have", "how",
     "i", "in", "is", "it", "me", "my", "not", "of", "on", "or", "our", "that", "the", "this",
@@ -49,31 +45,6 @@ def query_tokens(text: str) -> set[str]:
     return toks | extra
 
 
-def _embed(text: str) -> list[float] | None:
-    try:
-        response = httpx.post(
-            f"{qwen.OLLAMA}/api/embeddings",
-            json={"model": "nomic-embed-text", "prompt": text},
-            timeout=20.0,
-        )
-        response.raise_for_status()
-        vec = response.json().get("embedding")
-        return vec if isinstance(vec, list) else None
-    except Exception:
-        return None
-
-
-def _cosine(a: list[float] | None, b: list[float] | None) -> float:
-    if not a or not b or len(a) != len(b):
-        return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
-    na = math.sqrt(sum(x * x for x in a))
-    nb = math.sqrt(sum(y * y for y in b))
-    if na == 0 or nb == 0:
-        return 0.0
-    return dot / (na * nb)
-
-
 def _lex(query: set[str], doc: set[str]) -> float:
     if not query or not doc:
         return 0.0
@@ -94,7 +65,7 @@ def _unknown() -> dict:
     return {"key": "unknown", "text": lookup("unknown"), "lexical": 0, "vector": 0, "hybrid": 0}
 
 
-def build_index() -> int:
+def _rows() -> list[dict]:
     rows = []
     for key, text in REGISTER.items():
         if key in SKIP or not text or not isinstance(text, str):
@@ -106,15 +77,16 @@ def build_index() -> int:
                 "key": key,
                 "text": text,
                 "tokens": tokenize(f"{key.replace('_', ' ')} {text}"),
-                "vec": None,
             }
         )
+    return rows
+
+
+def build_index() -> int:
+    """Lexical index always; vectors only for changed register copy, one at a time."""
+    rows = _rows()
     _INDEX[:] = rows
-    if rows and _embed("dispatch fit check") is not None:
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            vectors = list(pool.map(lambda row: _embed(row["text"]), rows))
-        for row, vec in zip(rows, vectors):
-            row["vec"] = vec
+    embed.ensure("register", [{"id": row["key"], "text": row["text"]} for row in rows])
     return len(rows)
 
 
@@ -124,44 +96,44 @@ def status() -> dict:
         "source": REGISTER.get("version"),
         "packets_indexed": False,
         "keys": [row["key"] for row in _INDEX],
+        "embed": embed.status(),
     }
 
 
 def search(query: str, limit: int = 2) -> list[dict]:
     if not _INDEX:
-        build_index()
+        rows = _rows()
+        _INDEX[:] = rows
     q_tokens = query_tokens(query)
-    q_vec = _embed(query)
+    q_vec = embed.embed(query) if any(embed.get_cached("register", row["key"]) for row in _INDEX) else None
     scored = []
     for item in _INDEX:
-        if not (q_tokens & item["tokens"]):
-            continue
         lexical = _lex(q_tokens, item["tokens"])
-        vector = _cosine(q_vec, item["vec"])
+        vector = embed.cosine(q_vec, embed.get_cached("register", item["key"]))
+        if lexical <= 0 and vector <= 0:
+            continue
         scored.append({"key": item["key"], "text": item["text"], "lexical": lexical, "vector": vector})
     if not scored:
         return [_unknown()]
-    lex_rank = {row["key"]: i for i, row in enumerate(sorted(scored, key=lambda r: r["lexical"], reverse=True))}
-    vec_rank = {row["key"]: i for i, row in enumerate(sorted(scored, key=lambda r: r["vector"], reverse=True))}
+    lex_rank = {row["key"]: i for i, row in enumerate(sorted((r for r in scored if r["lexical"] > 0), key=lambda r: r["lexical"], reverse=True))}
+    vec_rank = {row["key"]: i for i, row in enumerate(sorted((r for r in scored if r["vector"] > 0), key=lambda r: r["vector"], reverse=True))}
+    fused = embed.rrf(lex_rank, vec_rank, [row["key"] for row in scored])
+    by_key = {row["key"]: row for row in scored}
     reranked = []
-    for row in scored:
-        if row["text"] != REGISTER.get(row["key"]):
+    for key, hybrid in fused:
+        row = by_key[key]
+        if row["text"] != REGISTER.get(key):
             continue
         if not _percent_ok(row["text"]):
             continue
-        key_toks = tokenize(row["key"].replace("_", " "))
-        rrf = 1 / (RRF_K + lex_rank[row["key"]] + 1) + 1 / (RRF_K + vec_rank[row["key"]] + 1)
-        if key_toks & q_tokens:
-            rrf += 0.2
         reranked.append(
             {
-                "key": row["key"],
+                "key": key,
                 "text": row["text"],
                 "lexical": round(row["lexical"], 4),
                 "vector": round(row["vector"], 4),
-                "hybrid": round(rrf, 4),
+                "hybrid": round(hybrid, 4),
             }
         )
-    reranked.sort(key=lambda row: row["hybrid"], reverse=True)
     hits = [row for row in reranked if row["hybrid"] >= MIN_RRF][:limit]
     return hits or [_unknown()]

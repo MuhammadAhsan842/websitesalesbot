@@ -8,10 +8,38 @@ from app.playbook import next_ask
 from app.schema import INTENTS
 
 
+def detect_repair(text: str) -> str | None:
+    t = (text or "").lower()
+    if re.search(r"mailbox|inbox (is )?full|email (couldn'?t|could not|bounced)|send (it )?again|sand again", t):
+        return "email_delivery"
+    if re.search(r"forget (onboarding|the packet|sales)|need to get paid|where'?s my (money|settlement|paycheck)", t):
+        return "leave_sales"
+    if re.search(r"no,? i meant|i meant (the )?(fee|percent|charge)|i was asking about (the )?(fee|percent|charge)", t):
+        return "topic_fee"
+    if re.search(r"authority is ready|mc is ready|authority came (in|through)", t) and not re.search(
+        r"own mc|lease on|lease-on", t
+    ):
+        return "authority_uncertain"
+    if re.search(r"already (sent|gave|provided) everything|i have everything", t):
+        return "repetition_unverified"
+    if re.search(r"actually|make that|not two|three instead|correction", t):
+        return "correct_fact"
+    return None
+
+
 def detect_intent(text: str) -> str:
     t = text.lower()
+    repair = detect_repair(text)
+    if repair == "leave_sales":
+        return "existing_customer"
+    if repair == "topic_fee":
+        return "fee"
+    if repair == "authority_uncertain":
+        return "mc_new"
     if re.search(r"(existing|already (a )?carrier|where's my load|where is my load|detention|tonu)", t):
         return "existing_customer"
+    if re.search(r"let you know|not right now|i'?ll think|maybe later", t):
+        return "general"
     if re.search(r"(talk here|speak|voice|microphone)", t):
         return "talk_here"
     if re.search(r"(call me|callback|phone me|dial)", t):
@@ -60,9 +88,12 @@ def detect_intent(text: str) -> str:
 def extract_facts(text: str) -> list[dict]:
     t = text.lower()
     items = []
-    equip = re.search(r"reefer|dry van|flatbed|box truck|hotshot", t)
+    equip = re.search(r"reefer|dry van|flatbed|box truck|hotshot|\bbox\b", t)
     if equip:
-        items.append({"key": "equipment", "value": equip.group(0).replace(" ", "_"), "status": "user_stated"})
+        value = equip.group(0).replace(" ", "_")
+        if value == "box":
+            value = "box_truck"
+        items.append({"key": "equipment", "value": value, "status": "user_stated"})
     words = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "a": 1}
     count = re.search(
         r"(\d+|one|two|three|four|five|six|a)\s+(?:box\s+|dry\s+|flatbed\s+|reefer\s+|hotshot\s+)?(trucks?|reefers?|vans?|hotshots?)",
@@ -74,7 +105,15 @@ def extract_facts(text: str) -> list[dict]:
         if value is not None:
             status = "corrected" if re.search(r"actually|make that|correction|not one|changed|three instead|now \d", t) else "user_stated"
             items.append({"key": "fleetSize", "value": value, "status": status})
-    if re.search(r"(own mc|my own mc|my authority|have (an? )?mc)", t) and not re.search(r"new mc|pending", t):
+    if re.search(r"authority is ready|mc is ready|authority came (in|through)", t) and not re.search(
+        r"own mc|lease on|lease-on", t
+    ):
+        items.append({"key": "mcOwnership", "value": "unclear", "status": "user_stated"})
+        items.append({"key": "requestedArrangement", "value": "needs_clarification", "status": "user_stated"})
+    elif re.search(r"(own mc|my own mc|have (an? )?mc)", t) and not re.search(r"new mc|pending|authority is ready", t):
+        items.append({"key": "mcOwnership", "value": "own_mc", "status": "user_stated"})
+        items.append({"key": "requestedArrangement", "value": "dispatch_service", "status": "user_stated"})
+    elif re.search(r"my authority", t) and not re.search(r"ready|pending|new mc", t):
         items.append({"key": "mcOwnership", "value": "own_mc", "status": "user_stated"})
         items.append({"key": "requestedArrangement", "value": "dispatch_service", "status": "user_stated"})
     if re.search(r"(no mc|don'?t have.*mc|lease on|lease-on)", t):
@@ -84,15 +123,37 @@ def extract_facts(text: str) -> list[dict]:
         items.append({"key": "mcOwnership", "value": "unclear", "status": "user_stated"})
         items.append({"key": "requestedArrangement", "value": "needs_clarification", "status": "user_stated"})
     area = re.search(
-        r"midwest|southeast|northeast|southwest|west coast|texas|california|georgia|florida|otr|"
-        r"dallas|houston|atlanta|chicago|irving",
+        r"midwest|southeast|northeast|southwest|west coast|texas|california|georgia|florida|"
+        r"dallas|houston|atlanta|chicago|irving|new jersey|\bnj\b|jersey",
         t,
         re.I,
     )
     if area:
-        value = area.group(0).lower()
+        value = area.group(0).lower().replace("new jersey", "nj")
+        if value in {"jersey"}:
+            value = "nj"
         items.append({"key": "operatingArea", "value": value, "status": "user_stated"})
         items.append({"key": "lanes", "value": value, "status": "user_stated"})
+    length = re.search(r"(\d+)\s*(?:-)?\s*(?:ft|foot|feet)\b", t)
+    if length:
+        items.append({"key": "trailerLength", "value": f"{length.group(1)}ft", "status": "user_stated"})
+    payload = re.search(r"(?:payload|weigh(?:t|s)|haul)\s*(?:of\s*)?(\d[\d,]*)\s*(lb|lbs|pound)", t) or re.search(
+        r"(\d[\d,]*)\s*(lb|lbs|pounds)\s*(?:payload)?", t
+    )
+    if payload:
+        items.append({"key": "payload", "value": payload.group(1).replace(",", ""), "status": "user_stated"})
+    if re.search(r"liftgate", t):
+        items.append({"key": "liftgate", "value": "yes" if not re.search(r"no liftgate|without liftgate", t) else "no", "status": "user_stated"})
+    if re.search(r"\blocal\b|no otr|not otr|home every night", t):
+        items.append({"key": "operatingMode", "value": "local", "status": "user_stated"})
+    elif re.search(r"\botr\b", t):
+        items.append({"key": "operatingMode", "value": "otr", "status": "user_stated"})
+    if re.search(r"don'?t want to sign|won'?t sign|sign for nothing", t):
+        items.append({"key": "commitmentStance", "value": "wont_sign", "status": "user_stated"})
+    day = re.search(r"\b(monday|tuesday|wednesday|thursday|friday|asap|immediately)\b", t)
+    if day:
+        items.append({"key": "deadline", "value": day.group(1), "status": "user_stated"})
+        items.append({"key": "startDate", "value": day.group(1), "status": "user_stated"})
     if re.search(r"home every night|daily home|home time", t):
         items.append({"key": "supportNeed", "value": "daily_home_time", "status": "user_stated"})
         items.append({"key": "primaryProblem", "value": "home_time", "status": "user_stated"})
@@ -131,7 +192,7 @@ def blocked_from_text(text: str) -> list[str]:
     return blocked
 
 
-def knowledge_for(intent: str, blocked: list[str], equipment: str | None, text: str = "") -> list[str]:
+def knowledge_for(intent: str, blocked: list[str], equipment: str | None, text: str = "", extracted: list | None = None) -> list[str]:
     keys = []
     if "guarantee" in blocked or intent == "guarantee":
         keys.append("guarantee")
@@ -147,9 +208,10 @@ def knowledge_for(intent: str, blocked: list[str], equipment: str | None, text: 
         "lease": ["lease"],
         "mc": ["own_mc"],
         "mc_new": ["mc_new"],
-        "onboard": ["commit"],
+        "onboard": ["onboarding", "commit"],
         "trust": ["trust"],
         "commit": ["commit"],
+        "email_delivery": ["email_delivery"],
         "decline": ["commit"],
         "dispatch_inquiry": ["services"],
         "status": ["docs_status"],
@@ -162,7 +224,14 @@ def knowledge_for(intent: str, blocked: list[str], equipment: str | None, text: 
         keys.append("competitor")
     if re.search(r"invoice|pay after|when.{0,20}paid|payment timing", t):
         keys.append("payment_timing")
-    if equipment:
+    stated = {item.get("key") for item in extracted or []}
+    if equipment and intent in {"service", "dispatch_inquiry"}:
+        from app.knowledge import EQUIP_KEYS
+
+        extra = EQUIP_KEYS.get(str(equipment))
+        if extra:
+            keys.append(extra)
+    elif equipment and "equipment" in stated and intent not in {"fee", "guarantee", "commit", "mc", "lease"}:
         from app.knowledge import EQUIP_KEYS
 
         extra = EQUIP_KEYS.get(str(equipment))
@@ -196,8 +265,9 @@ def task_for(arrangement: str | None, intent: str) -> str | None:
     return None
 
 
-def propose(text: str, facts: dict) -> dict:
+def propose(text: str, facts: dict, memory: dict | None = None) -> dict:
     intent = detect_intent(text)
+    repair = detect_repair(text)
     items = extract_facts(text)
     blocked = blocked_from_text(text)
     preview = dict(facts)
@@ -207,7 +277,7 @@ def propose(text: str, facts: dict) -> dict:
         preview[item["key"]] = {"value": item["value"], "status": item["status"]}
     arrangement = arrangement_of(preview)
     equip = preview.get("equipment", {}).get("value") if isinstance(preview.get("equipment"), dict) else None
-    ask = next_ask(preview)
+    ask = next_ask(preview, memory, intent, repair)
     action = "none"
     if intent == "talk_here":
         action = "talk_here"
@@ -215,18 +285,28 @@ def propose(text: str, facts: dict) -> dict:
         action = "callback"
     elif intent == "human":
         action = "takeover"
-    elif intent == "existing_customer":
+    elif intent == "existing_customer" or repair == "leave_sales":
         action = "create_case"
+        intent = "existing_customer"
     elif intent == "onboard" and arrangement and equip:
         action = "create_case"
+    if repair == "authority_uncertain":
+        action = "none"
+    if repair == "repetition_unverified":
+        blocked.append("insurance_approved")
     return {
         "intent": intent if intent in INTENTS else "general",
         "facts": items,
-        "knowledge_keys": knowledge_for(intent, blocked, equip, text),
+        "knowledge_keys": (
+            ["email_delivery"]
+            if repair == "email_delivery"
+            else knowledge_for(intent, blocked, equip, text, items)
+        ),
         "blocked": blocked,
         "next_field": ask,
         "arrangement": arrangement,
         "action": action,
         "task": task_for(arrangement, intent),
+        "repair": repair,
         "_source": "rules",
     }

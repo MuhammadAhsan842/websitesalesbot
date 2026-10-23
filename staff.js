@@ -124,6 +124,65 @@ async function renderZohoConnect() {
   });
 }
 
+async function renderExamples() {
+  const box = document.getElementById("examples-box");
+  if (!box) return;
+  const data = await (await fetch(`${API}/v1/examples`)).json();
+  const rows = data.examples || [];
+  const sources = data.sources || [];
+  box.innerHTML = `
+    <h3>Conversation examples</h3>
+    <p>Published index: <strong>${data.index || 0}</strong> · sources ${sources.length}</p>
+    <p class="muted">Chat PDFs can become examples after review. Packets, COIs, W-9s, and licences stay on the case — they are not personality.</p>
+    <form id="example-upload" class="actions" style="align-items:center">
+      <input type="file" name="file" accept=".pdf,image/*" required />
+      <button class="btn btn-navy" type="submit">Ingest chat PDF</button>
+    </form>
+    ${sources.slice(0, 8).map((s) => `<p class="muted">${s.filename} · ${s.kind} · ${s.status}</p>`).join("")}
+    ${rows.slice(0, 12).map((row) => `
+      <div class="card" style="margin-top:8px">
+        <p><strong>${row.id}</strong> · ${row.status} · ${(row.tags || []).join(", ")}</p>
+        <p class="muted">${(row.user_text || "").slice(0, 160)}</p>
+        <p>${(row.reply || "").slice(0, 220)}</p>
+        ${row.status !== "published" ? `<button class="btn btn-ghost" type="button" data-publish="${row.id}">Publish</button>` : ""}
+        ${row.status !== "rejected" ? `<button class="btn btn-ghost" type="button" data-reject="${row.id}">Reject</button>` : ""}
+      </div>
+    `).join("")}
+  `;
+  box.querySelector("#example-upload").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const file = event.target.file.files[0];
+    if (!file) return;
+    const body = new FormData();
+    body.append("file", file);
+    const result = await fetch(`${API}/v1/examples/ingest`, { method: "POST", body });
+    const payload = await result.json().catch(() => ({}));
+    if (payload.status === "duplicate") alert("That file was already ingested. Duplicate, not new experience.");
+    if (payload.status === "rejected_kind") alert("That file is a packet or identity document. It is not a conversation example.");
+    await renderExamples();
+  });
+  box.querySelectorAll("[data-publish]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      await fetch(`${API}/v1/examples/${btn.dataset.publish}/review`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "published", reviewed_by: "Staff desk" }),
+      });
+      await renderExamples();
+    });
+  });
+  box.querySelectorAll("[data-reject]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      await fetch(`${API}/v1/examples/${btn.dataset.reject}/review`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "rejected", reviewed_by: "Staff desk" }),
+      });
+      await renderExamples();
+    });
+  });
+}
+
 async function renderPeft() {
   const box = document.getElementById("peft-box");
   if (!box) return;
@@ -174,7 +233,7 @@ async function renderDetail(id) {
       <p>${chip(current.task)} · ${current.status}</p>
       <p class="muted">${factLine(current.facts)}</p>
       <p>${current.summary || ""}</p>
-      <p><strong>Next:</strong> ${current.next_action || "—"}</p>
+      ${current.desk ? `<p><strong>After-hours card:</strong> ${current.desk.line || ""}</p><p class="muted">Owner: ${current.desk.owner || "assistant"} · next: ${current.desk.next_step || current.next_action || "—"}</p>` : `<p><strong>Next:</strong> ${current.next_action || "—"}</p>`}
       <p class="muted">Received is not reviewed. Reviewed is not approved. Approved is not production-accepted. The worker cannot approve a COI.</p>
       <div class="card" style="margin-top:12px">
         <h3>Zoho</h3>
@@ -238,6 +297,7 @@ async function renderDetail(id) {
 (async () => {
   await renderZohoConnect();
   await renderFees();
+  await renderExamples();
   await renderPeft();
   const rows = await render();
   const selected = new URLSearchParams(location.search).get("case") || rows[0]?.id;

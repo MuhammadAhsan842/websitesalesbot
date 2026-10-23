@@ -2,7 +2,7 @@
 
 REGISTER = {
     "version": "ayyan_sales_v1",
-    "welcome": "I'm Ayyan's dispatch fit check — not a load board and not a contract. In a few questions I'll see if we support your trucks and lanes. A person handles papers. What are you running?",
+    "welcome": "I'm Ayyan Group's AI sales assistant. I can check dispatch fit; a person handles papers. What are you running?",
     "services": "We dispatch dry van, reefer, flatbed, box truck, and hotshot for owner-operators and small fleets. You approve every load. We handle brokers and paperwork.",
     "equip_dry_van": "Dry van is in scope. You still approve every load; we work brokers and paperwork for that equipment.",
     "equip_reefer": "Reefer is in scope. Temperature and appointment work still go through you on each load; we handle the broker side.",
@@ -28,10 +28,15 @@ REGISTER = {
     "call_me": "Call me is a callback on this opportunity. Confirm number, time, and timezone. I will not dial from the website mic.",
     "home_time": "Daily home time is recorded as a hard constraint. I will not swap it for a weekend-home promise. If the lanes cannot support it, staff must say so.",
     "commit": "You are not committing by talking here. The next step is a human packet, a lease review, or a callback — and only if you ask for it.",
+    "concern_commitment": "Fair question. Signing does not guarantee a load. What would you like clarified before deciding?",
+    "concern_net": "You're asking about what remains after costs. We'd need actual load details and your operating costs to work that out.",
+    "concern_repetition": "Let me check what's recorded on this chat so you don't have to resend it.",
+    "concern_pause": "Understood. Reach out whenever you're ready.",
     "trust": "Staff handle contracting and documents. I can explain the process and record fit. I cannot prove a payday or a load.",
     "next_invite": "I can start the human task, keep this chat, Talk here, or set a callback. You choose.",
     "competitor": "I will not match another dispatcher’s percent or promise. Staff quote Ayyan’s live schedule only after the arrangement is known. Leo, ATL, and Silver Arrow are not Ayyan.",
     "payment_timing": "When the carrier is paid is a contract term. I will not pick invoice-now versus pay-after-broker from a sample packet. Staff own that clause.",
+    "email_delivery": "The packet email did not go through. Clear space and tell me when to resend. I will not ask you to sign until that lands.",
 }
 
 META = {

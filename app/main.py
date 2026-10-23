@@ -2,15 +2,15 @@ import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from pydantic import BaseModel
 
-from app import db, docworker, entities, fees, qwen, requirements, retrieve, second_pass, zoho
-from app.graph import build_graph
+from app import db, docworker, embed, entities, examples, fees, ingest, playbook, qwen, requirements, retrieve, second_pass, zoho
+from app.graph import _chips, build_graph
 from app.knowledge import EQUIP_KEYS, lookup
 from app.schema import CHIPS, STAFF_ACTS
 
@@ -48,15 +48,29 @@ async def lifespan(app: FastAPI):
         app.state.graph = build_graph(saver)
 
         async def boot():
-            await asyncio.to_thread(retrieve.build_index)
+            await asyncio.to_thread(ingest.seed_reviewed_bank)
             await qwen.warmup()
+            # Embeddings use EMBED_URL (MiniLM), never the chat process. Skip unchanged hashes.
+            await asyncio.to_thread(examples.reload_index)
+            await asyncio.to_thread(examples.ensure_embeddings)
+            await asyncio.to_thread(retrieve.build_index)
 
-        asyncio.create_task(boot())
-        yield
+        boot_task = asyncio.create_task(boot())
+        try:
+            yield
+        finally:
+            boot_task.cancel()
+            await asyncio.gather(boot_task, return_exceptions=True)
+            await qwen.close()
 
 
 app = FastAPI(title="Ayyan sales assistant", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+
+@app.exception_handler(qwen.InferenceBusy)
+async def inference_busy(request: Request, exc: qwen.InferenceBusy):
+    return JSONResponse(status_code=503, headers={"Retry-After": "2"}, content={"detail": str(exc)})
 
 
 @app.get("/v1/health")
@@ -65,10 +79,14 @@ def health():
     reviewed = second_pass.reviewed_count()
     return {
         "ok": True,
-        "model": qwen.MODEL,
+        "model": (qwen.last_route or {}).get("model") or qwen.MODEL,
         "qwen_ready": qwen.ready,
+        "gemma_ready": qwen.gemma_ready,
         "qwen_error": qwen.last_error,
+        "last_route": qwen.last_route,
+        "qwen_runtime": qwen.status(),
         "retrieve": retrieve.status(),
+        "embed": embed.status(),
         "hard_turns": n,
         "hard_turns_reviewed": reviewed,
         "peft_ready": reviewed >= 1000,
@@ -117,11 +135,38 @@ def open_session(body: SessionIn | None = None):
     }
 
 
+@app.get("/v1/session/{session_id}")
+def session_history(session_id: str):
+    session = db.get_session(session_id)
+    if not session:
+        raise HTTPException(404, "unknown session")
+    messages = [{"role": row["role"], "text": row["text"]} for row in db.list_messages(session_id)]
+    mem = session.get("memory") or {}
+    ask = playbook.next_ask(session.get("facts") or {}, mem, intent=None, repair=mem.get("repair"))
+    return {
+        "session_id": session["id"],
+        "opportunity_id": session["opportunity_id"],
+        "case_id": session.get("case_id"),
+        "channel": session["channel"],
+        "conversation_state": session["conversation_state"],
+        "state_version": session["state_version"],
+        "takeover": session["takeover"],
+        "messages": messages,
+        "chips": CHIPS["open"] if not messages else _chips(session, {"next_field": ask}),
+        "text": None if messages else lookup("welcome"),
+        "memory": session.get("memory") or {},
+        "desk": playbook.desk_card(session),
+    }
+
+
 @app.post("/v1/turn")
 async def turn(body: TurnIn, background: BackgroundTasks):
     session = db.get_session(body.session_id)
     if not session:
         raise HTTPException(404, "unknown session")
+    replay = db.get_turn(body.turn_id)
+    if replay:
+        return replay
     db.add_message(session["id"], "user", body.text)
     result = await app.state.graph.ainvoke(
         {"session": session, "user_text": body.text, "traces": [{"_reset": True}]},
@@ -130,9 +175,7 @@ async def turn(body: TurnIn, background: BackgroundTasks):
     session = result["session"]
     db.save_session(session)
     db.add_message(session["id"], "assistant", result["reply_text"])
-    zoho.drain()
-    background.add_task(zoho.drain)
-    return {
+    payload = {
         "session_id": session["id"],
         "opportunity_id": session["opportunity_id"],
         "case_id": session.get("case_id"),
@@ -144,8 +187,13 @@ async def turn(body: TurnIn, background: BackgroundTasks):
         "traces": result.get("traces") or [],
         "takeover": session["takeover"],
         "fit_summary": session.get("fit_summary"),
+        "desk": playbook.desk_card(session),
         "zoho": zoho.sync_status(session_id=session["id"], case_id=session.get("case_id"), opportunity_id=session.get("opportunity_id")),
     }
+    if body.turn_id:
+        db.save_turn(body.turn_id, session["id"], body.text, payload)
+    background.add_task(zoho.drain)
+    return payload
 
 
 @app.get("/v1/cases")
@@ -163,6 +211,10 @@ def case_detail(case_id: str):
     row["entities"] = entities.resolve(case_id)
     row["packet"] = requirements.snapshot(case_id)
     row["zoho"] = zoho.sync_status(session_id=row.get("session_id"), case_id=case_id, opportunity_id=row.get("opportunity_id"))
+    if row.get("session_id"):
+        linked = db.get_session(row["session_id"])
+        if linked:
+            row["desk"] = playbook.desk_card(linked)
     return row
 
 
@@ -208,6 +260,50 @@ def zoho_self_client(body: ZohoGrantIn):
         raise HTTPException(400, str(exc)) from exc
     zoho.drain()
     return zoho.connection()
+
+
+class ExampleReview(BaseModel):
+    status: str
+    reply: str | None = None
+    reviewed_by: str = "Staff desk"
+
+
+@app.get("/v1/examples")
+def list_conversation_examples(status: str | None = None):
+    return {
+        "index": examples.reload_index(),
+        "sources": db.list_example_sources(),
+        "examples": db.list_examples(status),
+        "published_ids": [row["id"] for row in examples.published() if examples.allowed(row)],
+    }
+
+
+@app.post("/v1/examples/ingest")
+async def ingest_example_file(file: UploadFile = File(...)):
+    suffix = Path(file.filename or "upload.bin").suffix or ".bin"
+    dest = ROOT / "data" / "example_uploads" / f"{db.uid('up')}{suffix}"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(await file.read())
+    try:
+        result = ingest.ingest_path(dest)
+    except FileNotFoundError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return result
+
+
+@app.post("/v1/examples/{example_id}/review")
+def review_example(example_id: str, body: ExampleReview):
+    if body.status not in {"published", "rejected", "candidate"}:
+        raise HTTPException(400, "status must be published, rejected, or candidate")
+    current = db.get_example(example_id)
+    if not current:
+        raise HTTPException(404, "unknown example")
+    reply = body.reply if body.reply is not None else current["reply"]
+    if body.status == "published" and not examples.allowed({**current, "reply": reply, "user": current.get("user_text")}):
+        raise HTTPException(400, "example still contains blocked commercial claims")
+    saved = db.save_example({**current, "reply": reply, "status": body.status, "reviewed_by": body.reviewed_by})
+    examples.reload_index()
+    return saved
 
 
 @app.get("/v1/eval/hard-turns")

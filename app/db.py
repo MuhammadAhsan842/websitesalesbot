@@ -39,6 +39,7 @@ def init():
               handed_over INTEGER NOT NULL DEFAULT 0,
               identity_confirmed INTEGER NOT NULL DEFAULT 0,
               facts_json TEXT NOT NULL DEFAULT '{}',
+              memory_json TEXT NOT NULL DEFAULT '{}',
               created_at TEXT NOT NULL,
               updated_at TEXT NOT NULL
             );
@@ -123,6 +124,48 @@ def init():
               created_at TEXT NOT NULL,
               updated_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS example_sources (
+              id TEXT PRIMARY KEY,
+              filename TEXT NOT NULL,
+              sha256 TEXT UNIQUE NOT NULL,
+              kind TEXT NOT NULL,
+              status TEXT NOT NULL,
+              pages INTEGER NOT NULL DEFAULT 0,
+              method TEXT,
+              created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS conversation_examples (
+              id TEXT PRIMARY KEY,
+              source_id TEXT,
+              source TEXT,
+              user_text TEXT NOT NULL,
+              context TEXT,
+              reply TEXT NOT NULL,
+              move TEXT,
+              variant TEXT,
+              tags_json TEXT NOT NULL DEFAULT '[]',
+              status TEXT NOT NULL,
+              reviewed_by TEXT,
+              created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS embeddings (
+              id TEXT PRIMARY KEY,
+              kind TEXT NOT NULL,
+              doc_id TEXT NOT NULL,
+              model TEXT NOT NULL,
+              dims INTEGER NOT NULL,
+              sha256 TEXT NOT NULL,
+              vec BLOB NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS embeddings_doc ON embeddings(kind, doc_id, model);
+            CREATE TABLE IF NOT EXISTS turns (
+              turn_id TEXT PRIMARY KEY,
+              session_id TEXT NOT NULL,
+              user_text TEXT NOT NULL,
+              reply_json TEXT NOT NULL,
+              created_at TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS zoho_mirror (
               id TEXT PRIMARY KEY,
               module TEXT NOT NULL,
@@ -145,6 +188,7 @@ def init():
             "ALTER TABLE case_files ADD COLUMN requirement_id TEXT",
             "ALTER TABLE hard_turns ADD COLUMN reviewed INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE outbox ADD COLUMN zoho_id TEXT",
+            "ALTER TABLE sessions ADD COLUMN memory_json TEXT NOT NULL DEFAULT '{}'",
         ):
             try:
                 conn.execute(stmt)
@@ -202,6 +246,31 @@ def add_message(session_id: str, role: str, text: str):
     )
 
 
+def get_turn(turn_id: str | None) -> dict | None:
+    if not turn_id:
+        return None
+    row = execute("SELECT reply_json FROM turns WHERE turn_id = ?", (turn_id,), fetch="one")
+    return loads(row["reply_json"], None) if row else None
+
+
+def save_turn(turn_id: str, session_id: str, user_text: str, reply: dict):
+    execute(
+        "INSERT OR REPLACE INTO turns (turn_id, session_id, user_text, reply_json, created_at) VALUES (?, ?, ?, ?, ?)",
+        (turn_id, session_id, user_text, dumps(reply), now()),
+    )
+
+
+def list_messages(session_id: str) -> list[dict]:
+    return (
+        execute(
+            "SELECT role, text, created_at FROM messages WHERE session_id = ? ORDER BY id",
+            (session_id,),
+            fetch="all",
+        )
+        or []
+    )
+
+
 def create_session(seed_facts: dict | None = None) -> dict:
     session_id = uid("session")
     opportunity_id = uid("opp")
@@ -216,6 +285,7 @@ def create_session(seed_facts: dict | None = None) -> dict:
 
 def _session_from_row(row: dict) -> dict:
     row["facts"] = loads(row.pop("facts_json"), {})
+    row["memory"] = loads(row.pop("memory_json", None), {})
     row["takeover"] = bool(row["takeover"])
     row["handed_over"] = bool(row["handed_over"])
     row["identity_confirmed"] = bool(row["identity_confirmed"])
@@ -230,7 +300,7 @@ def get_session(session_id: str) -> dict | None:
 def save_session(session: dict):
     execute(
         """UPDATE sessions SET case_id=?, channel=?, conversation_state=?, state_version=?,
-           takeover=?, handed_over=?, identity_confirmed=?, facts_json=?, updated_at=?
+           takeover=?, handed_over=?, identity_confirmed=?, facts_json=?, memory_json=?, updated_at=?
            WHERE id=?""",
         (
             session.get("case_id"),
@@ -241,6 +311,7 @@ def save_session(session: dict):
             int(session["handed_over"]),
             int(session["identity_confirmed"]),
             dumps(session["facts"]),
+            dumps(session.get("memory") or {}),
             now(),
             session["id"],
         ),
@@ -535,4 +606,91 @@ def update_requirement(req_id: str, partial: dict) -> dict | None:
         (merged.get("status"), merged.get("due_at"), merged.get("current_file_id"), now(), req_id),
     )
     return get_requirement_by_id(req_id)
+
+
+def get_example_source_by_hash(digest: str) -> dict | None:
+    return execute("SELECT * FROM example_sources WHERE sha256 = ?", (digest,), fetch="one")
+
+
+def save_example_source(partial: dict) -> dict:
+    existing = get_example_source_by_hash(partial["sha256"])
+    if existing:
+        return existing
+    row_id = partial.get("id") or uid("exsrc")
+    execute(
+        """INSERT INTO example_sources (id, filename, sha256, kind, status, pages, method, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            row_id,
+            partial["filename"],
+            partial["sha256"],
+            partial.get("kind") or "other",
+            partial.get("status") or "ingested",
+            int(partial.get("pages") or 0),
+            partial.get("method"),
+            now(),
+        ),
+    )
+    return execute("SELECT * FROM example_sources WHERE id = ?", (row_id,), fetch="one")
+
+
+def list_example_sources() -> list[dict]:
+    return execute("SELECT * FROM example_sources ORDER BY created_at DESC", fetch="all") or []
+
+
+def _example_from_row(row: dict | None) -> dict | None:
+    if not row:
+        return None
+    row = dict(row)
+    row["tags"] = loads(row.pop("tags_json", None), [])
+    row["user"] = row.get("user_text")
+    return row
+
+
+def save_example(partial: dict) -> dict:
+    row_id = partial.get("id") or uid("ex")
+    current = execute("SELECT * FROM conversation_examples WHERE id = ?", (row_id,), fetch="one")
+    payload = (
+        partial.get("source_id"),
+        partial.get("source"),
+        partial.get("user_text") or partial.get("user") or "",
+        partial.get("context"),
+        partial.get("reply") or "",
+        partial.get("move"),
+        partial.get("variant"),
+        dumps(list(partial.get("tags") or [])),
+        partial.get("status") or "candidate",
+        partial.get("reviewed_by"),
+    )
+    if current:
+        execute(
+            """UPDATE conversation_examples SET source_id=?, source=?, user_text=?, context=?, reply=?,
+               move=?, variant=?, tags_json=?, status=?, reviewed_by=? WHERE id=?""",
+            (*payload, row_id),
+        )
+    else:
+        execute(
+            """INSERT INTO conversation_examples
+               (id, source_id, source, user_text, context, reply, move, variant, tags_json, status, reviewed_by, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (row_id, *payload, now()),
+        )
+    return _example_from_row(execute("SELECT * FROM conversation_examples WHERE id = ?", (row_id,), fetch="one"))
+
+
+def list_examples(status: str | None = None) -> list[dict]:
+    if status:
+        rows = execute(
+            "SELECT * FROM conversation_examples WHERE status = ? ORDER BY created_at DESC",
+            (status,),
+            fetch="all",
+        )
+    else:
+        rows = execute("SELECT * FROM conversation_examples ORDER BY created_at DESC", fetch="all")
+    return [_example_from_row(row) for row in rows or []]
+
+
+def get_example(example_id: str) -> dict | None:
+    return _example_from_row(execute("SELECT * FROM conversation_examples WHERE id = ?", (example_id,), fetch="one"))
+
 

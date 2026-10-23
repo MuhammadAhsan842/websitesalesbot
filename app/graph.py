@@ -14,9 +14,9 @@ def merge_traces(left: list, right: list) -> list:
         return [item for item in right if not item.get("_reset")]
     return (left or []) + right
 
-from app import db, fees, playbook, qwen, requirements as reqmod, retrieve, rules, second_pass, zoho
+from app import db, examples, fees, memory, playbook, qwen, requirements as reqmod, retrieve, rules, second_pass, variants, zoho
 from app.knowledge import BLOCKED_CLAIMS, REGISTER, lookup
-from app.schema import CATALOGUE, CHIPS, FACT_KEYS, INTENTS
+from app.schema import CATALOGUE, CHIPS, FACT_KEYS, INTENTS, MOVES, VARIANTS
 from app.tasks import fact_value, persist_human_task
 
 
@@ -86,13 +86,18 @@ def _merge_facts(model_facts: list | None, ruled_facts: list | None) -> list[dic
     return list(by_key.values())
 
 
-def _from_qwen(model: dict, ruled: dict) -> dict:
+def _from_qwen(model: dict, ruled: dict, user_text: str = "") -> dict:
     intent = model.get("intent") if model.get("intent") in INTENTS else None
     ruled_intent = ruled["intent"]
     if intent in {"existing_customer", "decline", "talk_here", "call_me", "human"} and ruled_intent not in {intent}:
         intent = ruled_intent
     if not intent or intent == "general":
         intent = ruled_intent
+    t = (user_text or "").lower()
+    fee_turn = ruled_intent == "fee" or bool(re.search(r"what do you charge|percent|\d+\s*%|\bfee\b", t))
+    guarantee_said = bool(re.search(r"guarantee|weekly gross|\$\s*\d", t))
+    if fee_turn and not guarantee_said and intent == "guarantee":
+        intent = "fee"
     action = model.get("action") if model.get("action") in ALLOWED_ACTIONS else None
     ruled_action = ruled.get("action") or "none"
     if not action or action == "none":
@@ -110,15 +115,48 @@ def _from_qwen(model: dict, ruled: dict) -> dict:
         next_field = ruled.get("next_field")
     keys = [k for k in (model.get("knowledge_keys") or []) + ruled["knowledge_keys"] if isinstance(k, str)]
     blocked = [b for b in (model.get("blocked") or []) + ruled["blocked"] if isinstance(b, str)]
+    if fee_turn and not guarantee_said:
+        keys = [k for k in keys if k != "guarantee"]
+        blocked = [b for b in blocked if b != "guarantee"]
+    repair = ruled.get("repair")
+    if repair == "leave_sales":
+        intent = "existing_customer"
+        action = "create_case"
+        task = "operations_support"
+    elif repair == "topic_fee":
+        intent = "fee"
+    elif repair == "authority_uncertain":
+        intent = "mc_new"
+        action = "none"
+        task = "clarification"
+        arrangement = "needs_clarification"
+    elif repair == "repetition_unverified":
+        action = "none"
+    facts = _merge_facts(model.get("facts"), ruled.get("facts"))
+    if repair == "authority_uncertain":
+        by_key = {item["key"]: item for item in facts}
+        for item in _clean_facts(ruled.get("facts")):
+            if item["key"] in {"mcOwnership", "requestedArrangement"}:
+                by_key[item["key"]] = item
+        facts = list(by_key.values())
+    wording = model.get("wording") if isinstance(model.get("wording"), str) else None
+    if wording and _leaks(wording):
+        wording = None
+    move = model.get("conversation_move") if model.get("conversation_move") in MOVES else None
+    variant = model.get("reply_variant_id") if model.get("reply_variant_id") in VARIANTS else None
     return {
         "intent": intent,
-        "facts": _merge_facts(model.get("facts"), ruled.get("facts")),
+        "facts": facts,
         "knowledge_keys": list(dict.fromkeys(keys)),
         "blocked": list(dict.fromkeys(blocked)),
         "next_field": next_field,
         "arrangement": arrangement,
         "action": action,
         "task": task,
+        "repair": repair,
+        "conversation_move": move,
+        "reply_variant_id": variant,
+        "wording": wording,
         "_source": "qwen",
     }
 
@@ -126,17 +164,60 @@ def _from_qwen(model: dict, ruled: dict) -> dict:
 async def node_propose(state: TurnState) -> dict:
     session = state["session"]
     text = state["user_text"]
-    ruled = rules.propose(text, session["facts"])
-    model = await qwen.propose(text, session["facts"], session["conversation_state"])
+    ruled = rules.propose(text, session["facts"], session.get("memory"))
+    mem = session.get("memory") or {}
+    tags = [
+        tag
+        for tag in (ruled.get("repair"), mem.get("concern"), mem.get("goal"), mem.get("last_blocker"))
+        if tag
+    ]
+    hits = examples.search(text, tags=tags)
+    model = await qwen.propose(
+        text,
+        session["facts"],
+        session["conversation_state"],
+        session.get("memory"),
+        examples=hits,
+        intent=ruled.get("intent"),
+        repair=ruled.get("repair"),
+    )
     if not model:
+        ruled = dict(ruled)
+        ruled["retrieved"] = hits
+        if hits and not ruled.get("wording"):
+            ruled["wording"] = hits[0].get("reply")
         return {
             "proposal": ruled,
-            **_trace("propose", source="rules_fallback", intent=ruled["intent"], model=qwen.MODEL, error=qwen.last_error),
+            **_trace(
+                "propose",
+                source="rules_fallback",
+                intent=ruled["intent"],
+                model=(model or {}).get("_model") or qwen.last_route.get("model") or qwen.MODEL,
+                error=qwen.last_error,
+                route=qwen.last_route,
+                examples=[hit["id"] for hit in hits],
+            ),
         }
-    merged = _from_qwen(model, ruled)
+    merged = _from_qwen(model, ruled, text)
+    merged["retrieved"] = hits
+    if hits and not merged.get("wording"):
+        merged["wording"] = hits[0].get("reply")
+        if merged["wording"] and _leaks(merged["wording"]):
+            merged["wording"] = None
     return {
         "proposal": merged,
-        **_trace("propose", source="qwen", intent=merged["intent"], model=qwen.MODEL, action=merged["action"]),
+        **_trace(
+            "propose",
+            source=model.get("_source") or "qwen",
+            intent=merged["intent"],
+            model=model.get("_model") or qwen.MODEL,
+            action=merged["action"],
+            timing=model.get("_timing", {}),
+            examples=[hit["id"] for hit in hits],
+            conversation_move=merged.get("conversation_move"),
+            reply_variant_id=merged.get("reply_variant_id"),
+            route=qwen.last_route,
+        ),
     }
 
 
@@ -145,7 +226,7 @@ def node_reduce_facts(state: TurnState) -> dict:
     proposal = state["proposal"]
     unknown = any(item.get("key") == "_unknown" for item in proposal.get("facts") or [])
     if unknown:
-        missing = playbook.next_ask(session["facts"])
+        missing = playbook.next_ask(session["facts"], session.get("memory"))
         if missing:
             session["facts"][missing] = {
                 "value": None,
@@ -162,14 +243,17 @@ def node_reduce_facts(state: TurnState) -> dict:
             continue
         status = item.get("status") or "user_stated"
         previous = session["facts"].get(key)
-        if previous and previous.get("value") == item.get("value") and previous.get("status") != "unknown":
+        value = item.get("value")
+        if key == "mcOwnership":
+            value = memory.normalize_mc(value)
+        if previous and previous.get("value") == value and previous.get("status") != "unknown":
             continue
-        if previous and previous.get("value") != item.get("value"):
+        if previous and previous.get("value") != value:
             status = "corrected"
             db.cancel_unsent(session["id"], f"stale plan after {key} correction")
             cancelled = True
         session["facts"][key] = {
-            "value": item.get("value"),
+            "value": value,
             "status": status,
             "sourceChannel": session["channel"],
             "version": session["state_version"],
@@ -198,6 +282,8 @@ def node_knowledge(state: TurnState) -> dict:
         keys.append("guarantee")
     if "invented_fee" in blocked and "fee" not in keys:
         keys.append("fee")
+    if (state["session"].get("memory") or {}).get("concern") == "total_fees" and "fee" not in keys:
+        keys.insert(0, "fee")
     arrangement = proposal.get("arrangement") or rules.arrangement_of(state["session"]["facts"])
     hybrid = False
     hits = []
@@ -213,7 +299,10 @@ def node_knowledge(state: TurnState) -> dict:
         hits = retrieve.search(state.get("user_text") or "")
         bits = [hit["text"] for hit in hits]
         keys = [hit["key"] for hit in hits]
+    proposal = dict(state["proposal"])
+    proposal["knowledge_keys"] = keys
     return {
+        "proposal": proposal,
         "knowledge_bits": bits,
         **_trace(
             "knowledge",
@@ -229,8 +318,16 @@ def node_knowledge(state: TurnState) -> dict:
 def node_plan(state: TurnState) -> dict:
     session = state["session"]
     proposal = dict(state["proposal"])
+    repair = proposal.get("repair") or rules.detect_repair(state.get("user_text") or "")
+    proposal["repair"] = repair
     mc = fact_value(session["facts"], "mcOwnership")
-    if mc == "own_mc":
+    if repair == "authority_uncertain":
+        proposal["arrangement"] = "needs_clarification"
+        proposal["task"] = "clarification"
+        proposal["action"] = "none"
+        proposal["intent"] = "mc_new"
+        mc = "unclear"
+    elif mc == "own_mc":
         proposal["arrangement"] = "dispatch_service"
         proposal["task"] = "setup_packet"
     elif mc == "no_own_mc":
@@ -242,32 +339,93 @@ def node_plan(state: TurnState) -> dict:
     if proposal.get("task") not in CATALOGUE and proposal.get("task") is not None:
         proposal["task"] = None
         proposal["action"] = "none"
-    ask = playbook.next_ask(session["facts"])
+    keys, bits = memory.scoped_knowledge(
+        proposal.get("knowledge_keys") or [],
+        state.get("knowledge_bits") or [],
+        memory.detect_concern(state.get("user_text") or "", proposal.get("intent") or "general"),
+        state.get("user_text") or "",
+    )
+    proposal["knowledge_keys"] = keys
+    ask = playbook.next_ask(session["facts"], session.get("memory"), proposal.get("intent"), repair)
     proposal["next_field"] = ask
-    if proposal["intent"] == "talk_here":
+    if repair == "leave_sales" or proposal["intent"] == "existing_customer":
+        proposal["intent"] = "existing_customer"
+        proposal["action"] = "create_case"
+        proposal["task"] = "operations_support"
+    elif repair == "authority_uncertain":
+        proposal["action"] = "none"
+    elif repair == "repetition_unverified":
+        proposal["action"] = "none"
+    elif repair == "email_delivery":
+        proposal["action"] = "none"
+    elif proposal["intent"] == "talk_here":
         proposal["action"] = "talk_here"
     elif proposal["intent"] == "call_me":
         proposal["action"] = "callback"
     elif proposal["intent"] == "human":
         proposal["action"] = "takeover"
-    elif proposal["intent"] == "existing_customer":
-        proposal["action"] = "create_case"
-        proposal["task"] = "operations_support"
     elif proposal["action"] == "create_case" and proposal["task"] not in CATALOGUE:
         proposal["action"] = "none"
     if proposal["action"] == "create_case" and proposal["task"] in {"setup_packet", "lease_agreement"} and (
-        not fact_value(session["facts"], "equipment") or not mc
+        not fact_value(session["facts"], "equipment") or not mc or not fact_value(session["facts"], "operatingArea")
     ):
         proposal["action"] = "none"
     if proposal["action"] not in {"none", "create_case", "callback", "talk_here", "takeover"}:
         proposal["action"] = "none"
+    concern = memory.detect_concern(state.get("user_text") or "", proposal.get("intent") or "general")
+    move = proposal.get("conversation_move") if proposal.get("conversation_move") in MOVES else None
+    if repair == "authority_uncertain":
+        move = "clarify"
+    elif repair == "leave_sales":
+        move = "offer_handoff"
+    elif repair == "repetition_unverified":
+        move = "acknowledge"
+    elif repair == "email_delivery":
+        move = "acknowledge"
+    elif concern == "pause":
+        move = "pause"
+    elif not move:
+        move = variants.default_move(proposal.get("intent"), repair, concern, ask)
+    proposal["conversation_move"] = move
+    variant = proposal.get("reply_variant_id") if proposal.get("reply_variant_id") in VARIANTS else None
+    if not variant or repair in {"leave_sales", "authority_uncertain", "repetition_unverified", "email_delivery"} or concern in {
+        "pause",
+        "commitment",
+        "net_after_costs",
+        "email_delivery",
+    }:
+        variant = variants.default_variant(move, concern, proposal.get("intent"), repair)
+    proposal["reply_variant_id"] = variant
+    wording = proposal.get("wording")
+    if (not wording) and (proposal.get("retrieved") or []):
+        wording = proposal["retrieved"][0].get("reply")
+    if wording and _leaks(str(wording)):
+        wording = None
+    proposal["wording"] = wording
+    memory.update(session, proposal, state.get("user_text") or "")
+    if (session.get("memory") or {}).get("follow_up") == "driver_initiates" and proposal["action"] == "create_case":
+        proposal["action"] = "none"
     if session["handed_over"]:
         session["conversation_state"] = "handed_over"
-    elif not playbook.missing_core(session["facts"]):
+    elif not playbook.missing_core(session["facts"], session.get("memory")):
         session["conversation_state"] = "assess_fit"
     elif proposal["intent"] == "dispatch_inquiry" or session["conversation_state"] != "understand_request":
         session["conversation_state"] = "discover_needs"
-    return {"proposal": proposal, "session": session, **_trace("plan", action=proposal["action"], task=proposal.get("task"))}
+    return {
+        "proposal": proposal,
+        "session": session,
+        "knowledge_bits": bits,
+        **_trace(
+            "plan",
+            action=proposal["action"],
+            task=proposal.get("task"),
+            memory=session.get("memory") or {},
+            knowledge_keys=keys,
+            conversation_move=proposal.get("conversation_move"),
+            reply_variant_id=proposal.get("reply_variant_id"),
+            repair=proposal.get("repair"),
+        ),
+    }
 
 
 def node_execute(state: TurnState) -> dict:
@@ -352,7 +510,7 @@ def _chips(session: dict, proposal: dict) -> list[str]:
         return CHIPS["handoff"]
     if _voice_identity_required(session):
         return CHIPS["voice_id"]
-    if not playbook.missing_core(session["facts"]):
+    if not playbook.missing_core(session["facts"], session.get("memory")):
         return CHIPS["assess"]
     field = proposal.get("next_field")
     return CHIPS.get(field) or CHIPS["default"]
@@ -395,6 +553,7 @@ def node_reply(state: TurnState) -> dict:
                     flagged = sum(1 for item in files if item["status"] == "flagged")
                     text += f" Document worker read {len(files)} file(s); {flagged} still flagged for a person. A COI on file is not approved."
         return {"reply_text": text, "chips": _chips(session, proposal), **_trace("reply", composed="status")}
+    variant_text = variants.text_for(proposal.get("reply_variant_id"))
     text, chips, summary = playbook.compose(
         proposal.get("intent") or "general",
         session["facts"],
@@ -403,6 +562,11 @@ def node_reply(state: TurnState) -> dict:
         bool(action_result.get("saved")),
         action_result.get("message"),
         proposal.get("next_field"),
+        session.get("memory"),
+        wording=proposal.get("wording"),
+        variant_text=variant_text,
+        episodic=memory.episodic_line(session.get("memory"), state.get("user_text") or ""),
+        repair=proposal.get("repair"),
     )
     if not text:
         text = lookup("unknown")

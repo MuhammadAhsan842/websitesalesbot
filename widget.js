@@ -67,17 +67,44 @@
     addMsg(
       "bot",
       text ||
-        "I'm Ayyan's dispatch fit check — not a load board and not a contract. In a few questions I'll see if we support your trucks and lanes. A person handles papers. What are you running?",
+        "I'm Ayyan Group's AI sales assistant. I can check dispatch fit; a person handles papers. What are you running?",
     );
     renderChips(list && list.length ? list : ["I need dispatch", "What equipment do you support?", "I'm already a carrier"]);
   }
 
-  async function ensureSession() {
-    sessionId = sessionStorage.getItem(STORE);
-    if (sessionId) {
-      showIntro();
-      return;
+  function renderHistory(data) {
+    log.innerHTML = "";
+    channel = data.channel || channel;
+    channelLabel.textContent = channelText();
+    (data.messages || []).forEach((item) => {
+      addMsg(item.role === "user" ? "user" : "bot", item.text);
+    });
+    renderChips(data.chips || []);
+    if (!log.children.length) showIntro(data.text, data.chips);
+  }
+
+  async function restoreSession() {
+    const stored = sessionStorage.getItem(STORE);
+    if (!stored) return false;
+    try {
+      const response = await fetch(`${API}/v1/session/${stored}`);
+      if (response.status === 404) {
+        sessionStorage.removeItem(STORE);
+        sessionId = null;
+        return false;
+      }
+      if (!response.ok) throw new Error("session");
+      sessionId = stored;
+      renderHistory(await response.json());
+      return true;
+    } catch {
+      return false;
     }
+  }
+
+  async function ensureSession() {
+    if (sessionId && log.children.length) return;
+    if (await restoreSession()) return;
     try {
       const response = await fetch(`${API}/v1/session`, {
         method: "POST",
@@ -100,17 +127,29 @@
     await ensureSession();
     addMsg("user", value);
     renderChips([]);
-    const pending = addMsg("bot", "Checking fit against approved services…", true);
-    try {
-      const response = await fetch(`${API}/v1/turn`, {
+    const pending = addMsg("bot", "Listening — keeping this on the same case…", true);
+    const turnId = crypto.randomUUID ? crypto.randomUUID() : `turn_${Date.now()}`;
+    const post = () =>
+      fetch(`${API}/v1/turn`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session_id: sessionId, text: value, equipment: pageEquipment() }),
+        body: JSON.stringify({ session_id: sessionId, text: value, equipment: pageEquipment(), turn_id: turnId }),
       });
+    try {
+      let response = await post();
+      if (response.status === 503) {
+        pending.textContent = "Still on this CPU — retrying once…";
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        response = await post();
+      }
       const data = await response.json();
+      pending.classList.remove("pending");
+      if (response.status === 503) {
+        pending.textContent = "The assistant is still busy. Your message is saved here — send it again in a moment.";
+        return;
+      }
       channel = data.channel || channel;
       channelLabel.textContent = channelText();
-      pending.classList.remove("pending");
       pending.innerHTML = String(data.text || "I do not have an approved answer for that.").replace(/\n/g, "<br>");
       if (data.fit_summary) pending.classList.add("fit");
       renderChips(data.chips || []);
