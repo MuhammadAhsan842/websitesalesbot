@@ -266,6 +266,12 @@ async function renderDetail(id) {
         ${entityBox(current.entities)}
       </div>
       ${flagList(current.files)}
+      ${(current.attachments || []).length ? `
+      <div class="card" style="margin-top:8px">
+        <h3>Chat photos</h3>
+        <p class="muted">Stored unverified. Vision notes are not equipment eligibility, insurance, or approval. Screenshots keep OCR, not image similarity.</p>
+        ${current.attachments.map((a) => `<p class="muted">${a.filename} · ${a.kind} · ${a.vision_status || "unread"}${a.description ? ` · ${a.description}` : ""}</p>`).join("")}
+      </div>` : ""}
     </div>
   `;
   box.querySelectorAll("[data-act]").forEach((btn) => {

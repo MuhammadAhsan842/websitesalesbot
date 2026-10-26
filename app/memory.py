@@ -86,6 +86,12 @@ def scoped_knowledge(
         allowed = set(CONCERN_KEYS.get(concern) or ())
         if concern == "total_fees" and not re.search(r"leo|atl|silver arrow|like \d+\s*%", user_text or "", re.I):
             allowed.discard("competitor")
+    visual = [
+        bit
+        for bit in (bits or [])
+        if "unverified" in (bit or "").lower()
+        and any(token in bit.lower() for token in ("photo", "screenshot", "image", "outstanding", "w-9", "certificate of insurance", "notice of assignment"))
+    ]
     if not allowed:
         return keys, bits
     paired = [(key, bit) for key, bit in zip(keys, bits) if key in allowed]
@@ -94,10 +100,18 @@ def scoped_knowledge(
             fee_first = [(key, bit) for key, bit in paired if key in {"fee", "fee_need_arrangement", "fee_lease_blank"}]
             rest = [(key, bit) for key, bit in paired if key not in {"fee", "fee_need_arrangement", "fee_lease_blank"}]
             paired = fee_first[:1] + rest
-        return [key for key, _ in paired], [bit for _, bit in paired]
+        kept = [bit for _, bit in paired]
+        for line in visual:
+            if line not in kept:
+                kept.append(line)
+        return [key for key, _ in paired], kept
     if concern == "total_fees":
         paired = paired[:1]
-    return [key for key, _ in paired], [bit for _, bit in paired]
+    kept = [bit for _, bit in paired]
+    for line in visual:
+        if line not in kept:
+            kept.append(line)
+    return [key for key, _ in paired], kept
 
 
 def compact(memory: dict | None) -> dict:
@@ -196,8 +210,6 @@ def detect_constraint(facts: dict, text: str) -> str | None:
         return "home_every_night"
     if re.search(r"\botr\b|over the road", t) and not re.search(r"no otr|not otr", t):
         return None
-    if fact_value(facts, "operatingMode") == "local" or re.search(r"\blocal\b|no otr|not otr", t):
-        return "home_every_night"
     return None
 
 
@@ -267,10 +279,10 @@ def episodic_line(memory: dict | None, user_text: str = "") -> str | None:
         return "Last time you were collecting the truck, then sending registration."
     if last == "waiting_driver" and not re.search(r"ready|let you know|next week", t):
         return "Welcome back. You wanted to pick this up later."
-    if last == "reviewing_terms" and not re.search(r"charge|fee|sign|guarantee|percent", t):
-        return "Last time the open item was the agreement, not a new qualify."
+    if last == "reviewing_terms" and re.search(r"\b(i'?m back|hey|status|still thinking|what'?s left)\b", t):
+        return "Last time we were still on the agreement. What would you like clarified?"
     if last == "waiting_packet" and re.search(r"\b(i'?m back|hey|status|packet|document)\b", t):
-        return "Last time a packet was waiting on staff. That is still not approval."
+        return "Last time a packet was waiting on onboarding. That still isn't approval."
     return None
 
 
@@ -336,7 +348,7 @@ def update(session: dict, proposal: dict, user_text: str) -> dict:
     elif constraint == "home_every_night":
         records = set_record(records, "constraint", "home_every_night", "active")
     action = proposal.get("action") or proposal.get("proposed_action") or "none"
-    owner = "driver" if follow_up == "driver_initiates" else ("staff" if action in {"create_case", "callback", "takeover"} else "assistant")
+    owner = "driver" if follow_up == "driver_initiates" else ("onboarding" if action in {"create_case", "callback", "takeover"} else "assistant")
     next_agreed = {
         "step": proposal.get("next_question_id") or proposal.get("next_field") or action,
         "owner": owner,

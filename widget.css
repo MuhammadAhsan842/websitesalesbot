@@ -38,3 +38,7 @@
   flex: 1; border: 1px solid #d7e0ea; border-radius: 12px; padding: 10px;
 }
 .agoc-form button { border: 0; background: #c9a227; border-radius: 12px; padding: 10px 12px; font-weight: 800; cursor: pointer; }
+.agoc-attach {
+  border: 1px solid #d7e0ea; background: #fff; border-radius: 12px;
+  padding: 10px 8px; font-size: 12px; font-weight: 800; cursor: pointer; white-space: nowrap;
+}

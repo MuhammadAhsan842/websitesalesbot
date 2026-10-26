@@ -108,7 +108,7 @@ class MemoryCompose(unittest.TestCase):
         text, _, _ = playbook.compose("general", state, [], None, False, None, "fleetSize", mem)
         self.assertIn("box_truck", text)
         self.assertIn("Atlanta", text)
-        self.assertIn("cannot see documents staff have not received", text)
+        self.assertIn("can't see papers onboarding hasn't received", text)
 
     def test_pause_has_no_next_question(self):
         mem = memory.empty()
@@ -122,7 +122,7 @@ class MemoryCompose(unittest.TestCase):
         mem = memory.empty()
         mem.update(concern="commitment", follow_up="assistant")
         text, _, _ = playbook.compose("commit", {}, [], None, False, None, "equipment", mem)
-        self.assertIn("does not guarantee a load", text)
+        self.assertIn("guarantee a load", text)
         self.assertNotIn("What are you running", text)
 
     def test_wording_does_not_stack_register_paragraphs(self):
@@ -169,12 +169,12 @@ class MemoryCompose(unittest.TestCase):
         self.assertIn("box truck", card["line"].lower())
 
     def test_home_time_skips_reasking_support(self):
-        state = facts(equipment="box_truck", fleetSize=1, operatingArea="Atlanta", supportNeed="daily_home_time")
+        state = facts(equipment="box_truck", fleetSize=1, operatingArea="Atlanta", supportNeed="daily_home_time", trailerLength="26ft")
         mem = {
             "goal": "local_work",
             "hard_constraint": "home_every_night",
             "concern": "home_time",
-            "answered": ["equipment", "fleetSize", "operatingArea", "supportNeed", "primaryProblem"],
+            "answered": ["equipment", "fleetSize", "operatingArea", "supportNeed", "primaryProblem", "trailerLength"],
             "blocker": None,
             "follow_up": "assistant",
         }

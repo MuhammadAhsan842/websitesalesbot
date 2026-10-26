@@ -177,6 +177,21 @@ def init():
               data_json TEXT NOT NULL DEFAULT '{}',
               updated_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS attachments (
+              id TEXT PRIMARY KEY,
+              session_id TEXT,
+              case_id TEXT,
+              filename TEXT NOT NULL,
+              path TEXT NOT NULL,
+              sha256 TEXT UNIQUE NOT NULL,
+              kind TEXT NOT NULL,
+              ocr_text TEXT,
+              ocr_confidence REAL,
+              vision_json TEXT NOT NULL DEFAULT '{}',
+              vision_status TEXT NOT NULL DEFAULT 'pending',
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
             """
         )
         for stmt in (
@@ -710,5 +725,80 @@ def list_examples(status: str | None = None) -> list[dict]:
 
 def get_example(example_id: str) -> dict | None:
     return _example_from_row(execute("SELECT * FROM conversation_examples WHERE id = ?", (example_id,), fetch="one"))
+
+
+def _attachment_from_row(row: dict | None) -> dict | None:
+    if not row:
+        return None
+    row = dict(row)
+    row["vision"] = loads(row.pop("vision_json", None), {})
+    return row
+
+
+def save_attachment(partial: dict) -> dict:
+    row_id = partial.get("id") or uid("att")
+    current = execute("SELECT * FROM attachments WHERE id = ?", (row_id,), fetch="one")
+    payload = (
+        partial.get("session_id"),
+        partial.get("case_id"),
+        partial.get("filename") or "",
+        partial.get("path") or "",
+        partial.get("sha256") or "",
+        partial.get("kind") or "unknown",
+        partial.get("ocr_text"),
+        partial.get("ocr_confidence"),
+        dumps(partial.get("vision") or {}),
+        partial.get("vision_status") or "pending",
+        now(),
+    )
+    if current:
+        execute(
+            """UPDATE attachments SET session_id=?, case_id=?, filename=?, path=?, sha256=?, kind=?,
+               ocr_text=?, ocr_confidence=?, vision_json=?, vision_status=?, updated_at=? WHERE id=?""",
+            (*payload, row_id),
+        )
+    else:
+        execute(
+            """INSERT INTO attachments
+               (id, session_id, case_id, filename, path, sha256, kind, ocr_text, ocr_confidence,
+                vision_json, vision_status, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (row_id, *payload[:-1], now(), payload[-1]),
+        )
+    return get_attachment(row_id)
+
+
+def get_attachment(attachment_id: str) -> dict | None:
+    return _attachment_from_row(execute("SELECT * FROM attachments WHERE id = ?", (attachment_id,), fetch="one"))
+
+
+def get_attachment_by_hash(digest: str, session_id: str | None = None) -> dict | None:
+    if session_id:
+        return _attachment_from_row(
+            execute(
+                "SELECT * FROM attachments WHERE session_id = ? AND (sha256 = ? OR sha256 = ?) ORDER BY created_at DESC",
+                (session_id, digest, f"{digest}:{session_id}"),
+                fetch="one",
+            )
+        )
+    return _attachment_from_row(execute("SELECT * FROM attachments WHERE sha256 = ?", (digest,), fetch="one"))
+
+
+def list_attachments(session_id: str | None = None, case_id: str | None = None) -> list[dict]:
+    if session_id:
+        rows = execute(
+            "SELECT * FROM attachments WHERE session_id = ? ORDER BY created_at DESC",
+            (session_id,),
+            fetch="all",
+        )
+    elif case_id:
+        rows = execute(
+            "SELECT * FROM attachments WHERE case_id = ? ORDER BY created_at DESC",
+            (case_id,),
+            fetch="all",
+        )
+    else:
+        rows = []
+    return [_attachment_from_row(row) for row in rows or []]
 
 

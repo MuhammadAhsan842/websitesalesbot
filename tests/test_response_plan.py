@@ -102,6 +102,89 @@ class PlanContract(unittest.TestCase):
         )
         self.assertIsNone(merged.get("wording"))
 
+    def test_load_question_is_freight_only(self):
+        text = "do we have load in utah?"
+        self.assertEqual(plan.detect_topics(text, "freight"), ["freight"])
+        validated = plan.validate_plan(
+            text,
+            {"facts": {}, "memory": {"answered": [], "follow_up": "assistant"}},
+            {
+                "intent": "freight",
+                "answer_topics": ["dispatch_fee", "commitment", "guarantee", "home_time", "services", "onboarding"],
+                "wording": "I will check on the load availability in Utah for you now.",
+                "action": "none",
+            },
+        )
+        self.assertEqual(validated["answer_topics"], ["freight"])
+        self.assertIsNone(validated["wording"])
+        self.assertEqual(validated["next_question_id"], "equipment")
+        reply, _, _ = playbook.compose(
+            "freight",
+            {},
+            [],
+            None,
+            False,
+            None,
+            "equipment",
+            {"answered": [], "follow_up": "assistant"},
+            wording="I will check on the load availability in Utah for you now.",
+            plan=validated,
+            user_text=text,
+        )
+        low = reply.lower()
+        self.assertTrue("live load" in low or "load from chat" in low)
+        self.assertIn("what type of truck", low)
+        self.assertNotIn("8%", reply)
+        self.assertNotIn("daily home time", low)
+        self.assertNotIn("talking here isn't a contract", low)
+        self.assertNotIn("i will check", low)
+
+    def test_own_mc_after_load_does_not_ask_arrangement_again(self):
+        from app import rules
+
+        items = rules.extract_facts("I have my own MC")
+        self.assertEqual(next(i["value"] for i in items if i["key"] == "mcOwnership"), "own_mc")
+        validated = plan.validate_plan(
+            "I have my own MC",
+            {
+                "facts": facts(mcOwnership="own_mc"),
+                "memory": {"answered": ["mcOwnership"], "follow_up": "assistant", "last_blocker": "reviewing_terms"},
+            },
+            {"intent": "mc", "answer_topics": ["dispatch_fee", "onboarding", "guarantee"], "action": "none"},
+        )
+        self.assertEqual(validated["answer_topics"], [])
+        self.assertEqual(validated["next_question_id"], "equipment")
+        self.assertNotIn(
+            "agreement, not a new qualify",
+            memory.episodic_line({"last_blocker": "reviewing_terms"}, "I have my own MC") or "",
+        )
+
+    def test_facebook_ad_does_not_replace_box_truck(self):
+        from app import rules
+
+        items = rules.extract_facts("I have seen your post on facebook you seem to have loads for a 40 feet hotshot")
+        self.assertFalse(any(i["key"] == "equipment" for i in items))
+        proposal = rules.propose(
+            "I have seen your post on facebook you seem to have loads for a 40 feet hotshot",
+            facts(equipment="box_truck", mcOwnership="own_mc", operatingArea="utah"),
+        )
+        self.assertEqual(proposal["repair"], "equip_ambiguous")
+        reply, _, _ = playbook.compose(
+            "freight",
+            facts(equipment="box_truck", mcOwnership="own_mc", operatingArea="utah"),
+            [],
+            "dispatch_service",
+            False,
+            None,
+            None,
+            {"answered": ["equipment", "mcOwnership", "operatingArea"], "follow_up": "assistant"},
+            repair="equip_ambiguous",
+            user_text="I have seen your post on facebook you seem to have loads for a 40 feet hotshot",
+        )
+        self.assertIn("box truck", reply.lower())
+        self.assertIn("advertised", reply.lower())
+        self.assertNotIn("i will check", reply.lower())
+
 
 class RetrievalJourneys(unittest.TestCase):
     def tearDown(self):
@@ -356,6 +439,6 @@ class AfterHoursJourney(unittest.IsolatedAsyncioTestCase):
                     self.assertTrue(any(row.get("status") == "superseded" for row in desk.get("records") or []))
                     ready = await api.post("/v1/turn", json={"session_id": sid, "text": "I'm ready to start"})
                     self.assertIsNotNone(ready.json().get("case_id"))
-                    self.assertIn("saved locally", ready.json()["text"].lower())
+                    self.assertIn("onboarding manager", ready.json()["text"].lower())
                     self.assertNotIn("emailed", ready.json()["text"].lower())
                     self.assertNotIn("booked", ready.json()["text"].lower())

@@ -108,7 +108,7 @@ class SalesGraph(unittest.IsolatedAsyncioTestCase):
                                 self.assertTrue({"guarantee", "freight"}.issubset(keys))
                             elif number == 4:
                                 self.assertEqual(case["task"], "callback")
-                                self.assertIn("callback_requested", outputs[-1]["text"])
+                                self.assertIn("callback is noted", outputs[-1]["text"].lower())
                             elif number == 5:
                                 self.assertEqual(case["task"], "lease_agreement")
                                 self.assertEqual(stored["facts"]["fleetSize"]["value"], 1)

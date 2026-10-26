@@ -7,8 +7,10 @@ import re
 
 TOKEN = re.compile(r"[a-z0-9]+")
 LEAK = re.compile(
-    r"6\s*%|8\s*%|15\s*%|16\s*%|18\s*%|loads tomorrow|\$\s*\d|onboard in 30|reserved slot|"
-    r"silver arrow|we can provide (you with )?mc|make \$\d|two slots left",
+    r"6\s*%|7\s*%|8\s*%|15\s*%|16\s*%|18\s*%|loads tomorrow|\$\s*\d|onboard in 30|reserved slot|"
+    r"silver arrow|we can provide you with our mc|we can provide (you with )?mc|"
+    r"reasonable percentage|load options|within 5 to 10 minutes|move you to dispatch|"
+    r"we pay after|loads all over|make \$\d|two slots left",
     re.I,
 )
 
@@ -69,7 +71,7 @@ BANK = (
         "user": "I do have everything",
         "move": "acknowledge",
         "variant": "repair_repetition",
-        "reply": "I'll only use what is on this chat. I cannot see documents staff have not received.",
+        "reply": "I'll only use what you've said here. I can't see papers onboarding hasn't received.",
     },
     {
         "id": "union_otr_after_local",
@@ -152,7 +154,7 @@ BANK = (
         "user": "What you just want me to sign onto your MC authority or someone else's what is the percentage rate on that?",
         "move": "explain_objection",
         "variant": "answer_fee_need_mc",
-        "reply": "Own-MC vs lease-on first. I will not invent a special percent. Staff quote Ayyan's live schedule after that.",
+        "reply": "Own-MC vs lease-on first. Once that's on file, I can give you Ayyan's current rate.",
     },
     {
         "id": "jason_too_much",
@@ -162,7 +164,7 @@ BANK = (
         "user": "To much no thank you",
         "move": "explain_objection",
         "variant": "answer_fee",
-        "reply": "Understood. I will not match a chat discount. Staff quote the live own-MC fee only after the arrangement is on file.",
+        "reply": "Understood. Once own-MC vs lease-on is on file, I can give you the current own-MC fee.",
     },
     {
         "id": "jason_tql_own_mc",
@@ -242,7 +244,7 @@ BANK = (
         "user": "What do you charge?",
         "move": "answer",
         "variant": "answer_fee",
-        "reply": "Staff quote the live own-MC dispatch fee after the arrangement is confirmed. I will not invent a discount.",
+        "reply": "Once the arrangement is on file, I can give you the current own-MC dispatch fee.",
     },
     {
         "id": "meant_the_fee",
@@ -252,7 +254,7 @@ BANK = (
         "user": "No, I meant what do you charge?",
         "move": "answer",
         "variant": "answer_fee",
-        "reply": "You want the fee. I can quote the staff schedule after own-MC vs lease-on is on file.",
+        "reply": "You want the fee. Once we know own-MC vs lease-on, I can give you the current rate.",
     },
     {
         "id": "need_to_get_paid",
@@ -319,12 +321,12 @@ BANK = (
         "tags": ("documents", "answer"),
         "situation": "Confused about which papers to send",
         "strategy": "Name the usual list. Do not claim a packet was emailed.",
-        "pattern": "Usual own-MC items are authority sheet, W-9, COI, notice of assignment, and a voided check. Staff confirm the live list.",
+        "pattern": "Usual own-MC items are authority sheet, W-9, COI, notice of assignment, and a voided check. Onboarding confirms the live list.",
         "context": "Asked which documents are needed",
         "user": "Which papers do I send?",
         "move": "answer",
         "variant": "answer_services",
-        "reply": "Usual own-MC items: MC authority sheet, W-9, certificate of insurance, notice of assignment, voided check. Staff confirm the live list. I do not send them from chat.",
+        "reply": "For own-MC, onboarding usually asks for the MC authority sheet, W-9, certificate of insurance, notice of assignment, and a voided check. They'll confirm the list when they send the packet. I don't send them from chat.",
     },
     {
         "id": "return_after_days",
@@ -345,12 +347,12 @@ BANK = (
         "tags": ("total_fees", "commitment_concern", "answer"),
         "situation": "Asked the fee and whether they must sign now",
         "strategy": "Answer both topics. Do not add a new qualify question.",
-        "pattern": "Staff quote the live fee after arrangement is on file. Talking here is not a signature.",
+        "pattern": "Give the current fee after arrangement is on file. Talking here is not a signature.",
         "context": "Two questions in one message",
         "user": "What do you charge, and do I have to sign now?",
         "move": "answer",
         "variant": "answer_fee",
-        "reply": "Staff quote the live fee after own-MC vs lease-on is on file. Talking here is not a contract and not a signature.",
+        "reply": "Once own-MC vs lease-on is on file, I can give you the current fee. Talking here isn't a contract and isn't a signature.",
     },
     {
         "id": "otr_keep_home_time",
@@ -365,9 +367,100 @@ BANK = (
         "variant": "ack_constraints",
         "reply": "OTR is recorded. Daily home time is still on file. I will not drop that unless you withdraw it.",
     },
+    {
+        "id": "jason_dot_medical_tag",
+        "source": "jason_chats",
+        "tags": ("blocker", "legal", "acknowledge"),
+        "situation": "DOT, medical card, and tag still outstanding",
+        "strategy": "Record the legal blockers. Do not treat the truck as ready.",
+        "pattern": "Those items are still outstanding. I will not treat that as legal yet.",
+        "context": "Still getting the truck legal",
+        "user": "I gotta get my truck DOT inspected today. I gotta get my medical card and I gotta get a tag for the truck.",
+        "move": "acknowledge",
+        "variant": "ack_constraints",
+        "reply": "DOT, medical card, and tag are still outstanding. Reach out when those are done — I will not treat that as legal yet.",
+    },
+    {
+        "id": "jason_empty_after_noon",
+        "source": "jason_chats",
+        "tags": ("availability", "box_truck", "acknowledge"),
+        "situation": "Box truck empty after noon",
+        "strategy": "Acknowledge availability. Do not confirm a live load.",
+        "pattern": "Availability is recorded. I cannot confirm a live load from chat.",
+        "context": "Driver said the box would be empty after 12",
+        "user": "Yes. After 12 today. the box truck",
+        "move": "acknowledge",
+        "variant": "ack_constraints",
+        "reply": "Box truck after 12 is recorded. I cannot confirm a live load from chat.",
+    },
+    {
+        "id": "jason_coverage_stated",
+        "source": "jason_chats",
+        "tags": ("insurance", "acknowledge"),
+        "situation": "Driver states liability and cargo figures",
+        "strategy": "Record as user-stated and unverified. A number is not a COI.",
+        "pattern": "Coverage figures are user-stated. That is not a certificate.",
+        "context": "Sending packet; stated coverage amounts",
+        "user": "I'll send the packet. I have one million liability and 100k cargo.",
+        "move": "acknowledge",
+        "variant": "ack_constraints",
+        "reply": "Those coverage figures are user-stated and unverified. A number on this chat is not a COI.",
+    },
+    {
+        "id": "moses_waiting_on_you",
+        "source": "moses_banks",
+        "tags": ("dispatch", "acknowledge"),
+        "situation": "Driver says they have been waiting for a load",
+        "strategy": "Do not assign a load from chat. Dispatch owns loads.",
+        "pattern": "I cannot assign a load from chat.",
+        "context": "Asked for a load after sending a photo",
+        "user": "Yes I been waiting on u",
+        "move": "acknowledge",
+        "variant": "ack_constraints",
+        "reply": "I can't put you on a load from chat — that's dispatch. A photo or ZIP here isn't a booked load.",
+    },
+    {
+        "id": "ezequiel_three_a_mile",
+        "source": "ezequiel",
+        "tags": ("freight", "rate", "answer"),
+        "situation": "Wants a high per-mile rate",
+        "strategy": "Do not guarantee a per-mile figure. Production owns rates.",
+        "pattern": "I will not guarantee a per-mile rate from chat.",
+        "context": "Asked for about three dollars a mile",
+        "user": "looking for three dollars a mile",
+        "move": "answer",
+        "variant": "answer_services",
+        "reply": "I will not guarantee a per-mile rate from chat. Specific freight is a production call.",
+    },
+    {
+        "id": "ezequiel_need_pay",
+        "source": "ezequiel",
+        "tags": ("operations", "offer_handoff"),
+        "situation": "Asking to be paid",
+        "strategy": "Leave sales. Operations owns pay on an open case.",
+        "pattern": "That leaves sales. Operations owns pay questions.",
+        "context": "Driver asking for payment",
+        "user": "Please I need you to pay me please",
+        "move": "offer_handoff",
+        "variant": "route_operations",
+        "reply": "That leaves sales. Operations owns pay questions on an open case. I will not confirm a payment from chat.",
+    },
+    {
+        "id": "ezequiel_coi_holder",
+        "source": "ezequiel",
+        "tags": ("insurance", "acknowledge"),
+        "situation": "COI present but certificate holder still missing",
+        "strategy": "Unverified. Missing holder is an onboarding review item, not approval.",
+        "pattern": "A COI on chat is unverified and not approval.",
+        "context": "Insurance document on the thread without holder",
+        "user": "Okay Im agre",
+        "move": "acknowledge",
+        "variant": "repair_repetition",
+        "reply": "I have the COI on this chat. Onboarding still needs to look at it — missing certificate holder is on them. That isn't approval.",
+    },
 )
 
-VERSION = "ayyan_examples_v2"
+VERSION = "ayyan_examples_v4"
 LIVE_STATUSES = {"published"}
 HIDDEN_STATUSES = {"withdrawn", "rejected", "candidate", "reviewed"}
 DEFAULT_STRATEGY = {
@@ -376,7 +469,7 @@ DEFAULT_STRATEGY = {
     "clarify": "Clarify the missing arrangement before any packet.",
     "qualify": "Ask one unanswered fit question.",
     "explain_objection": "Address the concern; do not restart fit.",
-    "offer_handoff": "Offer a staff-owned next step; do not claim it is done.",
+    "offer_handoff": "Offer an onboarding next step; do not claim it is done.",
     "pause": "Respect the driver's timing; do not chase.",
 }
 

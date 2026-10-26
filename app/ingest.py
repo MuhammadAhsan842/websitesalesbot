@@ -21,7 +21,7 @@ PACKET_HINTS = (
     "certificate of liability",
 )
 IDENTITY_HINTS = ("driver license", "driver licence", "buyer's plate", "plate receipt")
-CHAT_HINTS = ("union", "ezequiel", "moses", "jason chat", "jason chats", "chats")
+CHAT_HINTS = ("union", "ezequiel", "moses", "jason chat", "jason chats", "chats", "conversation document")
 PII = re.compile(
     r"(\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}"
     r"|[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}"
@@ -55,8 +55,40 @@ def strip_pii(text: str) -> str:
     return PII.sub("[redacted]", text or "")
 
 
+DATE_TAIL = re.compile(
+    r",\s*(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),.*$",
+    re.I,
+)
+EXPORT_YOU = re.compile(r"^message from you,\s*(.*)$", re.I)
+EXPORT_THEM = re.compile(r"^message from [\d\s+\-().]+,\s*(.*)$", re.I)
+SKIP_LINE = re.compile(r"^(more_vert|person|attachments?|a)$", re.I)
+
+
+def _export_body(text: str) -> str:
+    return DATE_TAIL.sub("", text or "").strip(" ,")
+
+
 def extract_turns(text: str) -> list[dict]:
     """Best-effort speaker split for OCR/native chat dumps. Order is preserved."""
+    if re.search(r"message from you,|message from [\d\s+\-().]+,", text or "", re.I):
+        turns = []
+        for raw in re.split(r"\n+", text or ""):
+            line = (raw or "").strip()
+            if len(line) < 8 or SKIP_LINE.match(line):
+                continue
+            you = EXPORT_YOU.match(line)
+            them = EXPORT_THEM.match(line)
+            if you:
+                body = strip_pii(_export_body(you.group(1)))
+                if len(body) >= 8:
+                    turns.append({"role": "sales", "text": body[:400]})
+                continue
+            if them:
+                body = strip_pii(_export_body(them.group(1)))
+                if len(body) >= 8:
+                    turns.append({"role": "driver", "text": body[:400]})
+                continue
+        return turns[:80]
     turns = []
     for raw in re.split(r"\n+", text or ""):
         line = strip_pii(raw).strip()
@@ -117,11 +149,16 @@ def ingest_path(path: Path, reviewed_by: str = "staff") -> dict:
         raise FileNotFoundError(str(path))
     digest = sha256_file(path)
     prior = db.get_example_source_by_hash(digest)
+    if prior and prior.get("kind") != "chat":
+        return {"status": "duplicate", "source": prior, "examples": [], "kind": prior.get("kind")}
     if prior:
-        return {"status": "duplicate", "source": prior, "examples": []}
+        existing = [row for row in db.list_examples() if row.get("source_id") == prior["id"]]
+        seeded = prior.get("method") == "reviewed_seed"
+        if existing or not seeded:
+            return {"status": "duplicate", "source": prior, "examples": existing, "kind": "chat"}
     read = ocr.read_document(path)
     kind = classify(path.name, read.get("text") or "")
-    row = db.save_example_source(
+    row = prior or db.save_example_source(
         {
             "filename": path.name,
             "sha256": digest,
@@ -135,11 +172,26 @@ def ingest_path(path: Path, reviewed_by: str = "staff") -> dict:
         return {"status": "rejected_kind", "source": row, "examples": [], "kind": kind}
     turns = extract_turns(read.get("text") or "")
     created = []
-    for item in candidates_from_turns(turns, path.stem.lower().replace(" ", "_")[:40]):
+    stem = path.stem.lower().replace(" ", "_")[:40]
+    for item in candidates_from_turns(turns, stem):
         item["source_id"] = row["id"]
         created.append(db.save_example(item))
+    if prior:
+        db.execute(
+            "UPDATE example_sources SET method=?, pages=?, status='ingested' WHERE id=?",
+            (read.get("method"), (read.get("text") or "").count("\f") + 1, row["id"]),
+        )
     examples.reload_index()
-    return {"status": "ingested", "source": row, "examples": created, "kind": kind, "reviewed_by": reviewed_by}
+    return {
+        "status": "ingested",
+        "source": row,
+        "examples": created,
+        "kind": kind,
+        "turns": len(turns),
+        "method": read.get("method"),
+        "unreadable": bool(read.get("unreadable")),
+        "reviewed_by": reviewed_by,
+    }
 
 
 CHAT_SEEDS = (

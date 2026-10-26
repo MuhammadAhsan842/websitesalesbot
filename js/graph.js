@@ -127,7 +127,7 @@ function continueFromState(session) {
   const fit =
     mc === "own_mc" ? "own-MC dispatch, pending human packet review"
       : mc === "no_own_mc" ? "lease-on review, pending human eligibility"
-        : "arrangement unclear — staff must clarify before any packet";
+        : "arrangement unclear — onboarding needs own-MC vs lease-on before any packet";
   return `Potential fit: ${fact(session, "equipment") || "equipment noted"}, ${fit}. This is not approval and not a load promise.\n\n${summaryFacts(session).join("\n")}\n\nI can create the human task, you can talk here, or request a callback.`;
 }
 
@@ -196,7 +196,7 @@ function reply(session, userText) {
   if (intent === "fuel") return { text: lookupKnowledge("fuel"), chips: chipsFor(session) };
   if (intent === "service") return { text: lookupKnowledge("services"), chips: chipsFor(session) };
   if (intent === "trust") {
-    return { text: "Staff handle contracting and documents. I can explain the process; I cannot prove a load or a payday.", chips: chipsFor(session) };
+    return { text: "Our onboarding manager handles the contract and documents. I can walk you through the process; I can't prove a load or a payday from chat.", chips: chipsFor(session) };
   }
   if (intent === "hometime") {
     setFact(session, "supportNeed", "daily_home_time");
@@ -210,7 +210,7 @@ function reply(session, userText) {
   }
 
   if (intent === "status") {
-    if (!session.caseId) return { text: "No staff case is open yet.", chips: chipsFor(session) };
+    if (!session.caseId) return { text: "Onboarding hasn't opened a case on this chat yet.", chips: chipsFor(session) };
     if (session.channel !== "chat" && !session.identityConfirmedForVoice) {
       return { text: "Confirm your name or callback number before I read case status on a voice channel.", chips: ["My name is Alex Rivera"] };
     }
@@ -220,8 +220,8 @@ function reply(session, userText) {
 
   if (intent === "human") {
     session.takeover = true;
-    persistCase(session, { status: "human_takeover", nextAction: "Staff owns conversation", event: "Human takeover" });
-    return { text: "Automated follow-up is paused. Staff have the same session and facts.", chips: chipsFor(session) };
+    persistCase(session, { status: "human_takeover", nextAction: "Onboarding manager owns conversation", event: "Human takeover" });
+    return { text: "I'll pause the automated follow-up. Our onboarding manager has this same chat and what's on file.", chips: chipsFor(session) };
   }
 
   if (session.conversationState === "understand_request" && intent === "dispatch_inquiry") {
@@ -242,9 +242,9 @@ function reply(session, userText) {
     });
     session.handedOver = true;
     session.conversationState = "handed_over";
-    const extra = task === "setup_packet" ? lookupKnowledge("docsOwn") : task === "lease_agreement" ? lookupKnowledge("docsLease") : "Staff will choose the arrangement before any packet is sent.";
+    const extra = task === "setup_packet" ? lookupKnowledge("docsOwn") : task === "lease_agreement" ? lookupKnowledge("docsLease") : "Onboarding will confirm own-MC vs lease-on before any packet goes out.";
     return {
-      text: `Human-owned ${task.replace("_", " ")} is recorded. ${extra} I do not send, sign, or approve.`,
+      text: `I've asked our onboarding manager to take the ${task.replace("_", " ")} from here. ${extra} I don't send, sign, or approve from chat.`,
       chips: chipsFor(session),
     };
   }

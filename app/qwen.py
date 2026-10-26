@@ -5,10 +5,13 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+import base64
 import json
 import logging
 import os
+from pathlib import Path
 import re
+import threading
 from time import perf_counter
 from typing import Any
 
@@ -67,9 +70,31 @@ OLLAMA = CONFIG.url
 _client: httpx.AsyncClient | None = None
 ready = False
 gemma_ready = False
+vision_ready = False
 last_error: str | None = None
 last_route: dict = {"model": MODEL, "family": "qwen", "reason": "default"}
 _installed: set[str] = set()
+_look_lock = threading.Lock()
+VISION_MODEL = os.getenv("QWEN_VISION_MODEL", MODEL)
+LOOK_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "kind": {"type": "string", "enum": ["equipment_photo", "screenshot", "document", "unknown"]},
+        "description": {"type": "string"},
+        "visible_text": {"type": "string"},
+        "proposed_facts": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string"},
+                    "value": {"type": "string"},
+                    "evidence": {"type": "string"},
+                },
+            },
+        },
+    },
+}
 
 
 class InferenceBusy(RuntimeError):
@@ -136,7 +161,7 @@ class Proposal(BaseModel):
     task: str | None = Field(default=None, json_schema_extra={"enum": [*CATALOGUE, None]})
     conversation_move: str | None = Field(default=None, json_schema_extra={"enum": [*MOVES, None]})
     reply_variant_id: str | None = Field(default=None, json_schema_extra={"enum": [*VARIANTS, None]})
-    answer_topics: list[str] = Field(default_factory=list, max_length=6)
+    answer_topics: list[str] = Field(default_factory=list, max_length=2)
     next_question_id: str | None = Field(default=None, json_schema_extra={"enum": [*dict.fromkeys(FACT_KEYS), None]})
     wording: str | None = Field(default=None, max_length=240)
 
@@ -209,12 +234,14 @@ def _sanitize(raw: dict) -> dict:
     if wording:
         wording = wording.strip()[:240]
         if re.search(
-            r"\$|\d+\s*%|approved|zoho|loads tomorrow|guarantee|emailed|booked|packet sent|documents were received|case was assigned",
+            r"\$|\d+\s*%|approved|zoho|loads tomorrow|guarantee|emailed|booked|packet sent|"
+            r"documents were received|case was assigned|i will check|i'?m checking|i am checking|"
+            r"update you shortly",
             wording,
             re.I,
         ):
             wording = None
-    topics = [topic for topic in raw.get("answer_topics") or [] if topic in ANSWER_TOPICS][:6]
+    topics = [topic for topic in raw.get("answer_topics") or [] if topic in ANSWER_TOPICS][:2]
     return {
         "intent": raw.get("intent") if raw.get("intent") in INTENTS else "general",
         "facts": facts,
@@ -238,11 +265,11 @@ def parse_content(content: str) -> Proposal:
 
 SYSTEM = """Ayyan Group after-hours sales assistant. Warm, direct, brief. Respect the driver's timing. JSON only. /no_think
 Output one plan: {"intent":"...","facts":[{"key":"...","value":"...","evidence":"..."}],"answer_topics":[],"conversation_move":"answer","next_question_id":null,"action":"none","wording":"..."}. Omit empty.
-facts = new or corrected facts only, with a short evidence span copied from this message. answer_topics = every question this message asked (dispatch_fee,commitment,guarantee,home_time,services,onboarding). Keep both if they asked two.
+facts = new or corrected facts only, with a short evidence span copied from this message. answer_topics = only questions THIS message asked, at most two (dispatch_fee,commitment,guarantee,home_time,services,onboarding,freight,own_mc,docs_status). Do not add home_time, fees, onboarding, or services unless they asked.
 conversation_move: acknowledge|answer|clarify|qualify|explain_objection|offer_handoff|pause.
 next_question_id from memory catalogue, or null. Not every reply needs a question. action from permitted only, else none.
-Examples are strategy, not this driver's facts. Do not copy another truck, city, or day. Do not claim emailed, booked, assigned, or approved.
-wording: one or two short sentences as acknowledgement. Code supplies fees, document lists, and action receipts.
+Examples are strategy, not this driver's facts. Do not copy another truck, city, or day. Do not claim emailed, booked, assigned, approved, or that you are checking loads.
+wording: one short acknowledgement. Code supplies fees, document lists, and action receipts. Never say you will check, update shortly, email, or book.
 Own MC => mcOwnership own_mc. Authority is ready without own vs lease => unclear, move clarify. I meant the fee => intent fee. Need to get paid => existing_customer. Mailbox full => acknowledge. OTR does not drop a separately stated home-every-night requirement. Respect memory.answered, last_question_id, records, and follow_up."""
 
 
@@ -336,13 +363,83 @@ def status() -> dict:
         "qwen_model": MODEL,
         "gemma_model": GEMMA_MODEL,
         "gemma_ready": gemma_ready,
+        "vision_ready": vision_ready,
+        "vision_model": VISION_MODEL,
+        "vision_enabled": vision_enabled(),
         "last_route": last_route,
         "installed": sorted(_installed),
     }
 
 
+def vision_enabled() -> bool:
+    return os.getenv("QWEN_VISION", "off").strip().lower() not in {"off", "none", "0", ""} and vision_ready
+
+
+def _sanitize_look(raw: dict) -> dict:
+    description = raw.get("description") if isinstance(raw.get("description"), str) else ""
+    if re.search(r"approved|eligible|valid insurance|emailed|booked|\d+\s*%", description, re.I):
+        description = re.sub(r"approved|eligible|valid insurance|emailed|booked", "unverified", description, flags=re.I)
+    facts = []
+    for item in raw.get("proposed_facts") or []:
+        if not isinstance(item, dict):
+            continue
+        key = item.get("key")
+        if key not in FACT_KEYS:
+            continue
+        value = item.get("value")
+        if value in (None, "", "null"):
+            continue
+        facts.append({"key": key, "value": str(value)[:80], "evidence": str(item.get("evidence") or "")[:80]})
+    kind = raw.get("kind") if raw.get("kind") in {"equipment_photo", "screenshot", "document", "unknown"} else "unknown"
+    return {
+        "kind": kind,
+        "description": description.strip()[:240],
+        "visible_text": str(raw.get("visible_text") or "")[:400],
+        "proposed_facts": facts[:6],
+        "unverified": True,
+    }
+
+
+def look(path: str, kind: str = "photo") -> dict:
+    """Background vision only. Never the live chat turn. Does not approve documents."""
+    global vision_ready
+    if not vision_enabled():
+        return {}
+    image = Path(path)
+    if not image.exists():
+        return {}
+    payload = {
+        "model": VISION_MODEL,
+        "messages": [
+            {
+                "role": "system",
+                "content": "Describe the image for a dispatch fit check. JSON only. Never approve, quote fees, or claim a document is valid.",
+            },
+            {
+                "role": "user",
+                "content": f"Kind hint: {kind}. What equipment or document is visible? Proposed facts must quote visible text.",
+                "images": [base64.b64encode(image.read_bytes()).decode("ascii")],
+            },
+        ],
+        "stream": False,
+        "format": LOOK_SCHEMA,
+        "think": False,
+        "keep_alive": "10m",
+        "options": {"temperature": 0, "num_predict": 160, "num_ctx": 2048, "num_thread": CONFIG.threads},
+    }
+    with _look_lock:
+        try:
+            response = httpx.post(f"{OLLAMA}/api/chat", json=payload, timeout=60.0)
+            response.raise_for_status()
+            content = response.json().get("message", {}).get("content") or "{}"
+            return _sanitize_look(json.loads(content))
+        except (httpx.HTTPError, ValueError, TypeError, json.JSONDecodeError):
+            vision_ready = False
+            return {}
+
+
 async def refresh_installed() -> set[str]:
-    global _installed, gemma_ready
+    global _installed, gemma_ready, vision_ready
     try:
         response = await client().get(f"{OLLAMA}/api/tags")
         response.raise_for_status()
@@ -351,6 +448,16 @@ async def refresh_installed() -> set[str]:
     except (httpx.HTTPError, ValueError, TypeError):
         _installed = set(_installed)
     gemma_ready = GEMMA_MODEL in _installed or any(name.startswith("gemma4:e2b") for name in _installed)
+    vision_ready = False
+    target = VISION_MODEL if VISION_MODEL in _installed or any(name.startswith(str(VISION_MODEL).split(":")[0]) for name in _installed) else None
+    if target:
+        try:
+            shown = await client().post(f"{OLLAMA}/api/show", json={"name": VISION_MODEL})
+            shown.raise_for_status()
+            blob = json.dumps(shown.json()).lower()
+            vision_ready = "vision" in blob or "projector" in blob or "clip" in blob
+        except (httpx.HTTPError, ValueError, TypeError):
+            vision_ready = False
     return _installed
 
 

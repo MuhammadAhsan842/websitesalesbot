@@ -17,6 +17,18 @@ class ClassifyAndPii(unittest.TestCase):
         self.assertEqual(ingest.classify("NOA - 2026-09-08T143520.312(2).pdf"), "packet")
         self.assertEqual(ingest.classify("Union moving.pdf"), "chat")
         self.assertEqual(ingest.classify("Jason Chats.1.pdf"), "chat")
+        self.assertEqual(ingest.classify("conversation document.docx"), "chat")
+
+    def test_export_turns_keep_driver_then_sales(self):
+        text = (
+            "Message from 801 928 4726, I run a hotshot out of Utah, Sunday, October 18 2026, 9:43 PM.\n"
+            "more_vert\n"
+            "Message from you, Own MC or lease-on?, Sunday, October 18 2026, 9:57 PM.\n"
+        )
+        turns = ingest.extract_turns(text)
+        self.assertEqual(turns[0]["role"], "driver")
+        self.assertIn("hotshot", turns[0]["text"].lower())
+        self.assertEqual(turns[1]["role"], "sales")
 
     def test_strip_phone_email_and_dot(self):
         text = ingest.strip_pii("Call (561) 909-8184 or Unionmovingmass@gmail.com DOT 9703143")

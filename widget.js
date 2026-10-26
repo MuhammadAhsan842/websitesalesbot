@@ -28,6 +28,10 @@
     <div class="agoc-log" id="agoc-log"></div>
     <div class="agoc-chips" id="agoc-chips"></div>
     <form class="agoc-form" id="agoc-form">
+      <label class="agoc-attach" title="Add a photo. Stored unverified — not approval.">
+        <input type="file" name="photo" accept="image/*,.pdf" hidden />
+        Photo
+      </label>
       <input name="message" autocomplete="off" placeholder="Ask, or choose Talk here / Call me" />
       <button type="submit">Send</button>
     </form>
@@ -175,5 +179,25 @@
     event.preventDefault();
     send(form.message.value);
     form.message.value = "";
+  });
+  form.photo.addEventListener("change", async () => {
+    const file = form.photo.files && form.photo.files[0];
+    form.photo.value = "";
+    if (!file) return;
+    await ensureSession();
+    if (!sessionId) return;
+    addMsg("user", `Photo: ${file.name}`);
+    const pending = addMsg("bot", "Saving the photo in the background. This is not approval.", true);
+    const body = new FormData();
+    body.append("file", file);
+    try {
+      const response = await fetch(`${API}/v1/session/${sessionId}/attachment`, { method: "POST", body });
+      const data = await response.json();
+      pending.classList.remove("pending");
+      pending.textContent = data.text || "I have the photo on this chat (unverified). Onboarding still needs to look at it.";
+    } catch {
+      pending.classList.remove("pending");
+      pending.textContent = "The photo could not be saved. Try again after the API is up.";
+    }
   });
 })();

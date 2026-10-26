@@ -5,6 +5,8 @@ from __future__ import annotations
 import shutil
 import subprocess
 import tempfile
+import xml.etree.ElementTree as ET
+import zipfile
 from pathlib import Path
 
 PACKET_DIR = Path(__file__).resolve().parent.parent / "data" / "packets"
@@ -77,13 +79,29 @@ def _ocr_tsv(path: Path) -> tuple[str, float | None]:
     return " ".join(words), mean
 
 
+def _docx_text(path: Path) -> str:
+    ns = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    try:
+        with zipfile.ZipFile(path) as archive:
+            xml = archive.read("word/document.xml")
+        root = ET.fromstring(xml)
+        parts = []
+        for para in root.iter(f"{ns}p"):
+            line = "".join((node.text or "") for node in para.iter(f"{ns}t")).strip()
+            if line:
+                parts.append(line)
+        return "\n".join(parts)
+    except (OSError, KeyError, ET.ParseError, zipfile.BadZipFile):
+        return ""
+
+
 def _ocr_pdf_pages(path: Path) -> tuple[str, float | None]:
     try:
         with tempfile.TemporaryDirectory() as tmp:
             prefix = Path(tmp) / "page"
             subprocess.check_call(
                 ["pdftoppm", "-png", "-r", "200", str(path), str(prefix)],
-                timeout=40,
+                timeout=300,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
@@ -104,6 +122,15 @@ def _ocr_pdf_pages(path: Path) -> tuple[str, float | None]:
 def read_document(path: Path) -> dict:
     """Prefer born-digital PDF text. OCR images and scanned PDFs. Do not invent text."""
     suffix = path.suffix.lower()
+    if suffix == ".docx":
+        text = _docx_text(path)
+        return {
+            "text": text,
+            "method": "docx",
+            "confidence": 100.0 if text.strip() else None,
+            "ocr_used": False,
+            "unreadable": not bool(text.strip()),
+        }
     if suffix == ".pdf":
         native = _pdf_text(path)
         if len(native.strip()) >= NATIVE_MIN:
@@ -113,6 +140,14 @@ def read_document(path: Path) -> dict:
                 "confidence": 100.0,
                 "ocr_used": False,
                 "unreadable": False,
+            }
+        if not shutil.which("tesseract"):
+            return {
+                "text": native,
+                "method": "pdftotext_thin",
+                "confidence": None,
+                "ocr_used": False,
+                "unreadable": len(native.strip()) < 20,
             }
         ocr_text, conf = _ocr_pdf_pages(path)
         if ocr_text.strip():

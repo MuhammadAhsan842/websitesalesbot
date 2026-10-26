@@ -6,7 +6,7 @@ import re
 
 from app import fees, memory
 from app.knowledge import lookup
-from app.schema import ANSWER_TOPICS, CATALOGUE, FACT_KEYS, MOVES, PERMITTED_ACTIONS, QUESTIONS
+from app.schema import ANSWER_TOPICS, CATALOGUE, EQUIP_LABELS, FACT_KEYS, MOVES, PERMITTED_ACTIONS, QUESTIONS
 from app.tasks import fact_value
 
 TOPIC_KEYS = {
@@ -20,16 +20,20 @@ TOPIC_KEYS = {
     "lease": ("lease",),
     "support": ("support",),
     "email_delivery": ("email_delivery",),
-    "docs_status": ("docs_status",),
+    "docs_status": ("docs_own", "docs_lease", "docs_w9", "docs_coi", "docs_noa", "docs_packet", "docs_status"),
     "competitor": ("competitor",),
     "net_after_costs": ("concern_net",),
     "talk_here": ("talk_here",),
     "call_me": ("call_me",),
     "pause": ("concern_pause",),
+    "freight": ("freight",),
 }
 
 FALSE_SUCCESS = re.compile(
-    r"\b(emailed|e-mailed|booked|packet sent|packet was sent|documents were received|case was assigned|assigned in zoho|loads tomorrow|you're approved)\b",
+    r"\b(emailed|e-mailed|booked|packet sent|packet was sent|documents were received|"
+    r"case was assigned|assigned in zoho|loads tomorrow|you're approved|"
+    r"i will check|i'?m checking|i am checking|check(ing)? (on )?(the )?(load|availability)|"
+    r"update you shortly|i will update you)\b",
     re.I,
 )
 
@@ -72,6 +76,12 @@ def detect_topics(text: str, intent: str | None = None, concern: str | None = No
         add("home_time")
     if concern == "net_after_costs" or re.search(r"after (fuel|fees|costs)|what'?s left|net (pay|after)|take[- ]home", t):
         add("net_after_costs")
+    if intent == "freight" or re.search(
+        r"\b(have (a |any )?loads?|need (a )?loads?|looking for (a )?loads?|any loads?|"
+        r"loads? in |load availability|do we have (a )?load)\b",
+        t,
+    ):
+        add("freight")
     if intent == "service" or re.search(r"what (equipment|do you (dispatch|support|haul))", t):
         add("services")
     if intent == "talk_here":
@@ -80,6 +90,12 @@ def detect_topics(text: str, intent: str | None = None, concern: str | None = No
         add("call_me")
     if re.search(r"leo dispatch|silver arrow|\batl\b|like \d+\s*%", t):
         add("competitor")
+    if re.search(
+        r"which (papers|docs|documents)|what (papers|documents|do i (send|need))|w-?9|\bcoi\b|"
+        r"notice of assignment|\bnoa\b|setup packet|voided check",
+        t,
+    ):
+        add("docs_status")
     return topics
 
 
@@ -101,8 +117,13 @@ def validate_plan(user_text: str, session: dict, proposal: dict) -> dict:
     answered = set(mem.get("answered") or [])
     required = detect_topics(user_text, intent, concern, repair)
     proposed = [topic for topic in (proposal.get("answer_topics") or []) if topic in ANSWER_TOPICS]
-    topics = list(dict.fromkeys([*proposed, *required]))
+    # Allowed is not the same as asked. This message's topics win; do not dump the catalogue.
+    topics = list(dict.fromkeys(required)) if required else []
     fallbacks: list[str] = []
+    if required and proposed and set(proposed) - set(required):
+        fallbacks.append("extra_topics")
+    elif not required and proposed:
+        fallbacks.append("topics")
 
     next_q = proposal.get("next_question_id") or proposal.get("next_field")
     if next_q not in QUESTIONS:
@@ -134,6 +155,10 @@ def validate_plan(user_text: str, session: dict, proposal: dict) -> dict:
         topics = ["email_delivery"]
         next_q = None
         action = "none"
+    elif repair == "equip_ambiguous":
+        topics = []
+        next_q = None
+        action = "none"
     elif repair == "repetition_unverified":
         action = "none"
 
@@ -141,6 +166,19 @@ def validate_plan(user_text: str, session: dict, proposal: dict) -> dict:
     closing = {"dispatch_fee", "commitment", "guarantee", "pause", "email_delivery", "support", "net_after_costs"}
     if paused:
         pass
+    elif repair == "equip_ambiguous":
+        next_q = None
+    elif "freight" in topics:
+        if not fact_value(facts, "equipment"):
+            next_q = "equipment"
+        elif not fact_value(facts, "trailerLength"):
+            next_q = "trailerLength"
+        elif not fact_value(facts, "mcOwnership"):
+            next_q = "mcOwnership"
+        elif not (fact_value(facts, "operatingArea") or fact_value(facts, "lanes")):
+            next_q = "operatingArea"
+        else:
+            next_q = None
     elif driver_asked and (len(topics) > 1 or any(topic in closing for topic in topics)):
         if "dispatch_fee" in topics and not fact_value(facts, "mcOwnership"):
             next_q = "mcOwnership"
@@ -173,12 +211,13 @@ def validate_plan(user_text: str, session: dict, proposal: dict) -> dict:
         move = "clarify"
     elif repair == "leave_sales":
         move = "offer_handoff"
+    elif repair == "equip_ambiguous":
+        move = "clarify"
     elif not move:
         move = "answer" if driver_asked else ("qualify" if next_q else "acknowledge")
 
-    wording = proposal.get("wording") if isinstance(proposal.get("wording"), str) else None
-    if wording and FALSE_SUCCESS.search(wording):
-        wording = None
+    wording = _scrub_wording(proposal.get("wording") if isinstance(proposal.get("wording"), str) else None)
+    if proposal.get("wording") and wording != (proposal.get("wording") or "").strip():
         fallbacks.append("wording")
 
     return {
@@ -196,6 +235,29 @@ def validate_plan(user_text: str, session: dict, proposal: dict) -> dict:
         "fallbacks": fallbacks,
         "task": proposal.get("task"),
     }
+
+
+def _freight_line(facts: dict) -> str:
+    equip = fact_value(facts, "equipment")
+    label = EQUIP_LABELS.get(str(equip or ""), str(equip or "").replace("_", " "))
+    area = fact_value(facts, "operatingArea") or fact_value(facts, "lanes")
+    if equip and area:
+        return f"I can't confirm a live {area} load from chat. Dispatch looks at freight after onboarding has the papers."
+    if equip:
+        return f"I can't confirm a live load from chat for the {label}. Dispatch looks at freight after onboarding has the papers."
+    return lookup("freight")
+
+
+def _scrub_wording(text: str | None) -> str | None:
+    if not text:
+        return None
+    kept = []
+    for sentence in re.split(r"(?<=[.!?])\s+", text.strip()):
+        if FALSE_SUCCESS.search(sentence):
+            continue
+        kept.append(sentence.strip())
+    line = " ".join(part for part in kept if part).strip()
+    return line or None
 
 
 def topic_lines(topics: list[str], arrangement: str | None, bits: list[str], facts: dict) -> list[str]:
@@ -219,6 +281,14 @@ def topic_lines(topics: list[str], arrangement: str | None, bits: list[str], fac
             continue
         if topic == "net_after_costs":
             lines.append(lookup("concern_net"))
+            continue
+        if topic == "freight":
+            picked = next((bit for bit in remaining if "live load" in bit.lower() or "live freight" in bit.lower()), None)
+            if picked:
+                remaining.remove(picked)
+                lines.append(picked)
+            else:
+                lines.append(_freight_line(facts))
             continue
         keys = TOPIC_KEYS.get(topic) or ()
         picked = next((bit for bit in remaining if any(token.replace("_", " ") in bit.lower() for token in keys)), None)

@@ -30,13 +30,25 @@ def missing_core(facts: dict, memory: dict | None = None) -> list[str]:
             continue
         if key == "primaryProblem" and fact_value(facts, "supportNeed") is not None:
             continue
-        if constraint == "home_every_night" and key in {"supportNeed", "primaryProblem"}:
+        if constraint == "home_every_night" and key in {"supportNeed", "primaryProblem", "weekdaySchedule"}:
+            continue
+        if fact_value(facts, "operatingMode") == "local" and key in {"weekdaySchedule", "milesPerDay"}:
             continue
         missing.append(key)
     return missing
 
 
-UNBLOCK_ORDER = ["equipment", "mcOwnership", "operatingArea", "deadline", "fleetSize", "supportNeed", "startDate"]
+UNBLOCK_ORDER = [
+    "equipment",
+    "trailerLength",
+    "mcOwnership",
+    "insurance",
+    "operatingMode",
+    "weekdaySchedule",
+    "milesPerDay",
+    "operatingArea",
+    "startDate",
+]
 
 
 def next_ask(facts: dict, memory: dict | None = None, intent: str | None = None, repair: str | None = None) -> str | None:
@@ -63,7 +75,7 @@ def next_ask(facts: dict, memory: dict | None = None, intent: str | None = None,
     if fact_value(facts, "deadline"):
         missing = [key for key in missing if key != "startDate"]
     if fact_value(facts, "operatingMode") == "local" or mem.get("hard_constraint") == "home_every_night":
-        missing = [key for key in missing if key not in {"supportNeed", "primaryProblem"}]
+        missing = [key for key in missing if key not in {"supportNeed", "primaryProblem", "weekdaySchedule"}]
     for key in UNBLOCK_ORDER:
         if key in missing:
             return key
@@ -84,8 +96,8 @@ def recorded_line(facts: dict, memory: dict | None = None) -> str:
         if value not in (None, "", False):
             bits.append(f"{key} {value}")
     if not bits:
-        return "Nothing is recorded on this chat yet. I cannot see documents staff have not received."
-    return "On this chat I have: " + "; ".join(bits) + ". I cannot see documents staff have not received."
+        return "Nothing is recorded on this chat yet. I can't see papers onboarding hasn't received."
+    return "On this chat I have: " + "; ".join(bits) + ". I can't see papers onboarding hasn't received."
 
 
 def fit_summary(facts: dict, arrangement: str | None) -> str:
@@ -102,10 +114,10 @@ def fit_summary(facts: dict, arrangement: str | None) -> str:
     need = fact_value(facts, "supportNeed") or fact_value(facts, "primaryProblem")
     need_bit = f" Main need on file: {str(need).replace('_', ' ')}." if need else ""
     path = {
-        "dispatch_service": "That is an own-MC dispatch path: a person sends the setup packet. It is not eligibility yet.",
-        "lease_on": "That is a lease-on path: a person reviews eligibility and the agreement. Asking is not approval.",
-        "needs_clarification": "The MC arrangement is unclear, so staff must clarify before any packet.",
-    }.get(arrangement or "", "Staff still confirm the arrangement before papers move.")
+        "dispatch_service": "That's own-MC dispatch: our onboarding manager sends the setup packet. You're not eligible just from this chat.",
+        "lease_on": "That's a lease-on path: our onboarding manager reviews eligibility and the agreement. Asking isn't approval.",
+        "needs_clarification": "We still need own-MC vs lease-on before onboarding can send a packet.",
+    }.get(arrangement or "", "Onboarding still needs the arrangement before papers move.")
     unresolved = []
     if not fact_value(facts, "supportNeed"):
         unresolved.append("home time / support")
@@ -149,16 +161,16 @@ def next_step(facts: dict, memory: dict | None, arrangement: str | None) -> str:
     if mem.get("concern") == "commitment":
         return "Address the signature concern before any packet."
     if mem.get("concern") in {"total_fees", "guarantee"}:
-        return "Answer the live fee or freight question, then offer a staff packet if they are ready."
+        return "Answer the live fee or freight question, then offer an onboarding packet if they are ready."
     if mem.get("concern") == "email_delivery":
         return "Resend the last email after mailbox can receive it."
     ask = next_ask(facts, mem)
     if ask:
         return f"Ask {ask} next; skip anything already on file."
     if arrangement == "dispatch_service":
-        return "Offer a staff-owned own-MC setup packet. Bot does not send or approve."
+        return "Offer an own-MC setup packet for the onboarding manager. Bot does not send or approve."
     if arrangement == "lease_on":
-        return "Offer a staff-owned lease-on review. Bot does not approve."
+        return "Offer a lease-on review for the onboarding manager. Bot does not approve."
     return "Keep qualifying until equipment and own-MC vs lease-on are on file."
 
 
@@ -179,7 +191,7 @@ def desk_card(session: dict) -> dict:
         for key in ("equipment", "mcOwnership", "fleetSize", "operatingArea", "operatingMode", "supportNeed", "deadline", "payload")
         if fact_value(facts, key) not in (None, "", False)
     }
-    owner = "staff" if session.get("takeover") or session.get("handed_over") else "assistant"
+    owner = "onboarding" if session.get("takeover") or session.get("handed_over") else "assistant"
     step = next_step(facts, mem, arrangement)
     bits = []
     if known.get("equipment"):
@@ -251,7 +263,7 @@ def compose(
     )
     topics = list(validated.get("answer_topics") or [])
     ask = validated.get("next_question_id")
-    spoken = (validated.get("wording") or spoken or "").strip()
+    spoken = (validated.get("wording") or "").strip()
     receipt = action_confirmation(action_message, saved)
 
     if episodic:
@@ -279,6 +291,14 @@ def compose(
             parts.append(QUESTIONS[ask])
         return " ".join(_dedupe(parts)), CHIPS.get(ask) or CHIPS["default"], None
 
+    if repair == "equip_ambiguous":
+        current = fact_value(facts, "equipment")
+        label = EQUIP_LABELS.get(str(current or ""), str(current or "").replace("_", " ")) or "truck on file"
+        parts.append(
+            f"Are you asking whether that advertised load could work for your {label}, or do you also have that other truck?"
+        )
+        return " ".join(_dedupe(parts)), CHIPS.get("equipment") or CHIPS["default"], None
+
     if "pause" in topics or mem.get("follow_up") == "driver_initiates" or concern == "pause":
         if not spoken:
             parts.append(variant_text or lookup("concern_pause"))
@@ -293,6 +313,13 @@ def compose(
     for line in answers:
         if line and line not in parts and line != spoken:
             parts.append(line)
+    for bit in bits or []:
+        low = (bit or "").lower()
+        if "unverified" in low and any(
+            token in low for token in ("photo", "screenshot", "image", "outstanding", "w-9", "certificate of insurance")
+        ) and bit not in parts:
+            parts.append(bit)
+            break
 
     if not spoken and not answers:
         if intent == "service":
@@ -300,6 +327,8 @@ def compose(
             line = _equip_line(facts)
             if line:
                 parts.append(line)
+        elif intent == "freight":
+            parts.append(lookup("freight"))
         elif intent in {"dispatch_inquiry", "general", "mc", "lease", "onboard", "unknown_detail"} and fact_value(facts, "equipment"):
             line = _equip_line(facts)
             if line:
@@ -313,15 +342,15 @@ def compose(
     if saved:
         if spoken:
             if not action_message:
-                parts.append("A staff-owned request is saved locally. I do not send, sign, or approve.")
+                parts.append("I've passed this to our onboarding manager. I don't send, sign, or approve from chat.")
             return " ".join(_dedupe(parts)), CHIPS["handoff"], summary
         if arrangement == "dispatch_service":
             parts.append(lookup("docs_own"))
         elif arrangement == "lease_on":
             parts.append(lookup("docs_lease"))
         elif arrangement == "needs_clarification":
-            parts.append("Staff will choose the arrangement before any packet is sent.")
-        parts.append("I do not send, sign, or approve.")
+            parts.append("Onboarding will confirm own-MC vs lease-on before any packet goes out.")
+        parts.append("I don't send, sign, or approve from here — that's onboarding.")
         return " ".join(_dedupe(parts)), CHIPS["handoff"], summary
 
     if core_done and concern not in {"repetition"} and not bits and not spoken and not topics:

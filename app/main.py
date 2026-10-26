@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from pydantic import BaseModel
 
-from app import db, docworker, embed, entities, examples, fees, ingest, playbook, qwen, requirements, retrieve, second_pass, zoho
+from app import db, docworker, embed, entities, examples, fees, ingest, media, playbook, qwen, requirements, retrieve, second_pass, vision, zoho
 from app.graph import _chips, build_graph
 from app.knowledge import EQUIP_KEYS, lookup
 from app.schema import CHIPS, STAFF_ACTS
@@ -87,6 +87,12 @@ def health():
         "qwen_runtime": qwen.status(),
         "retrieve": retrieve.status(),
         "embed": embed.status(),
+        "image_embed": vision.status(),
+        "vision": {
+            "ready": qwen.vision_ready,
+            "enabled": qwen.vision_enabled(),
+            "model": qwen.VISION_MODEL,
+        },
         "hard_turns": n,
         "hard_turns_reviewed": reviewed,
         "peft_ready": reviewed >= 1000,
@@ -207,6 +213,18 @@ def case_detail(case_id: str):
     if not row:
         raise HTTPException(404, "unknown case")
     row["files"] = db.list_case_files(case_id)
+    seen = set()
+    attachments = []
+    sources = []
+    if row.get("session_id"):
+        sources.extend(db.list_attachments(session_id=row["session_id"]))
+    sources.extend(db.list_attachments(case_id=case_id))
+    for att in sources:
+        if att["id"] in seen:
+            continue
+        seen.add(att["id"])
+        attachments.append(media.public_row(att))
+    row["attachments"] = attachments
     row["blocking"] = db.blocking_files(case_id)
     row["entities"] = entities.resolve(case_id)
     row["packet"] = requirements.snapshot(case_id)
@@ -331,6 +349,44 @@ def post_fee(body: FeeIn):
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return row
+
+
+async def _interpret_later(attachment_id: str) -> None:
+    await asyncio.to_thread(media.interpret, attachment_id)
+
+
+@app.post("/v1/session/{session_id}/attachment")
+async def upload_attachment(session_id: str, background: BackgroundTasks, file: UploadFile = File(...)):
+    session = db.get_session(session_id)
+    if not session:
+        raise HTTPException(404, "unknown session")
+    suffix = Path(file.filename or "upload.bin").suffix or ".bin"
+    dest = ROOT / "data" / "attachments" / session_id / f"{db.uid('up')}{suffix}"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(await file.read())
+    result = await asyncio.to_thread(media.process, dest, session_id, session.get("case_id"), False)
+    att_id = result.get("id")
+    queue_vision = (
+        bool(att_id)
+        and result.get("status") != "duplicate"
+        and result.get("kind") != "screenshot"
+        and result.get("vision_status") == "pending"
+    )
+    if queue_vision:
+        background.add_task(_interpret_later, att_id)
+    db.add_message(session_id, "user", f"[attachment] {file.filename}")
+    return {
+        **result,
+        "text": lookup("photo_unverified"),
+        "queued_vision": queue_vision,
+    }
+
+
+@app.get("/v1/session/{session_id}/attachments")
+def session_attachments(session_id: str):
+    if not db.get_session(session_id):
+        raise HTTPException(404, "unknown session")
+    return {"attachments": [media.public_row(row) for row in db.list_attachments(session_id=session_id)]}
 
 
 @app.get("/v1/cases/{case_id}/files")

@@ -75,7 +75,7 @@ SCENARIOS = [
         ],
         [
             ("session record", lambda text, facts, mem: "on this chat" in text.lower()),
-            ("no staff COI claim", lambda text, facts, mem: "cannot see documents staff have not received" in text.lower()),
+            ("no onboarding COI claim", lambda text, facts, mem: "can't see papers onboarding hasn't received" in text.lower()),
         ],
     ),
     (

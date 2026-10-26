@@ -56,8 +56,6 @@ def live_quote(arrangement: str | None) -> str:
         return lookup("fee")
     label = "lease-on settlement" if arrangement == "lease_on" else "own-MC dispatch fee"
     return (
-        f"For this arrangement, the staff-approved {label} is {_fmt(row['percent'])}% of gross "
-        f"(published {str(row['created_at'])[:10]} by {row['approved_by']}). "
-        "I will not discount it in chat. A sample percent on someone else’s packet is not this quote. "
-        "Earnings are not guaranteed."
+        f"For this arrangement, the current {label} is {_fmt(row['percent'])}% of gross. "
+        "That's the rate our onboarding manager uses — I won't change it here."
     )

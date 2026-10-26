@@ -56,7 +56,12 @@ def detect_intent(text: str) -> str:
         return "fee"
     if re.search(r"(guarantee|earn|\$\d|weekly gross)", t):
         return "guarantee"
-    if re.search(r"better loads?|empty miles|keep(ing)? (me |the truck )?loaded", t):
+    if re.search(
+        r"better loads?|empty miles|keep(ing)? (me |the truck )?loaded|"
+        r"\b(have (a |any )?loads?|need (a )?loads?|looking for (a )?loads?|any loads?|"
+        r"loads? in |load availability|do we have (a )?load|facebook.{0,40}loads?)\b",
+        t,
+    ):
         return "freight"
     if "fuel card" in t:
         return "fuel"
@@ -85,11 +90,19 @@ def detect_intent(text: str) -> str:
     return "general"
 
 
+AD_LOAD = re.compile(
+    r"facebook|(i (saw|seen|have seen) your)|your post|you seem to have|advertis",
+    re.I,
+)
+OWNED_TRUCK = re.compile(r"\bmy\b.{0,32}(reefer|dry van|flatbed|box truck|hotshot|\bbox\b)", re.I)
+
+
 def extract_facts(text: str) -> list[dict]:
     t = text.lower()
     items = []
     equip = re.search(r"reefer|dry van|flatbed|box truck|hotshot|\bbox\b", t)
-    if equip:
+    advertised = bool(AD_LOAD.search(text)) and not OWNED_TRUCK.search(text)
+    if equip and not advertised:
         value = equip.group(0).replace(" ", "_")
         if value == "box":
             value = "box_truck"
@@ -124,7 +137,7 @@ def extract_facts(text: str) -> list[dict]:
         items.append({"key": "requestedArrangement", "value": "needs_clarification", "status": "user_stated"})
     area = re.search(
         r"midwest|southeast|northeast|southwest|west coast|texas|california|georgia|florida|"
-        r"dallas|houston|atlanta|chicago|irving|new jersey|\bnj\b|jersey",
+        r"dallas|houston|atlanta|chicago|irving|utah|new jersey|\bnj\b|jersey",
         t,
         re.I,
     )
@@ -144,16 +157,34 @@ def extract_facts(text: str) -> list[dict]:
         items.append({"key": "payload", "value": payload.group(1).replace(",", ""), "status": "user_stated"})
     if re.search(r"liftgate", t):
         items.append({"key": "liftgate", "value": "yes" if not re.search(r"no liftgate|without liftgate", t) else "no", "status": "user_stated"})
+    if re.search(r"need insurance|no insurance|don'?t have insurance|looking for insurance", t):
+        items.append({"key": "insurance", "value": "needs_insurance", "status": "user_stated"})
+    elif re.search(r"have (my |our )?(own )?insurance|i('m| am) insured|got insurance", t):
+        items.append({"key": "insurance", "value": "own_insurance", "status": "user_stated"})
+    if re.search(r"monday through friday|mon(day)?\s*(to|-|through)\s*fri|weekdays", t):
+        items.append({"key": "weekdaySchedule", "value": "monday_friday", "status": "user_stated"})
+    elif re.search(r"home weekends|weekends? home|flexible schedule", t):
+        items.append({"key": "weekdaySchedule", "value": "flexible", "status": "user_stated"})
+    miles = re.search(r"(\d{2,4})\s*(?:-|to)\s*(\d{2,4})(?:\s*miles)?", t) or re.search(
+        r"(\d{2,4})\s*miles (a|per) day", t
+    )
+    if miles:
+        if miles.lastindex and miles.lastindex >= 2 and (miles.group(2) or "").isdigit():
+            value = f"{miles.group(1)}-{miles.group(2)}"
+        else:
+            value = miles.group(1)
+        items.append({"key": "milesPerDay", "value": value, "status": "user_stated"})
     if re.search(r"\blocal\b|no otr|not otr|home every night", t):
         items.append({"key": "operatingMode", "value": "local", "status": "user_stated"})
     elif re.search(r"\botr\b", t):
         items.append({"key": "operatingMode", "value": "otr", "status": "user_stated"})
     if re.search(r"don'?t want to sign|won'?t sign|sign for nothing", t):
         items.append({"key": "commitmentStance", "value": "wont_sign", "status": "user_stated"})
-    day = re.search(r"\b(monday|tuesday|wednesday|thursday|friday|asap|immediately)\b", t)
-    if day:
-        items.append({"key": "deadline", "value": day.group(1), "status": "user_stated"})
-        items.append({"key": "startDate", "value": day.group(1), "status": "user_stated"})
+    if not any(item["key"] == "weekdaySchedule" for item in items):
+        day = re.search(r"\b(monday|tuesday|wednesday|thursday|friday|asap|immediately)\b", t)
+        if day:
+            items.append({"key": "deadline", "value": day.group(1), "status": "user_stated"})
+            items.append({"key": "startDate", "value": day.group(1), "status": "user_stated"})
     if re.search(r"home every night|daily home|home time", t):
         items.append({"key": "supportNeed", "value": "daily_home_time", "status": "user_stated"})
         items.append({"key": "primaryProblem", "value": "home_time", "status": "user_stated"})
@@ -192,7 +223,14 @@ def blocked_from_text(text: str) -> list[str]:
     return blocked
 
 
-def knowledge_for(intent: str, blocked: list[str], equipment: str | None, text: str = "", extracted: list | None = None) -> list[str]:
+def knowledge_for(
+    intent: str,
+    blocked: list[str],
+    equipment: str | None,
+    text: str = "",
+    extracted: list | None = None,
+    arrangement: str | None = None,
+) -> list[str]:
     keys = []
     if "guarantee" in blocked or intent == "guarantee":
         keys.append("guarantee")
@@ -208,7 +246,7 @@ def knowledge_for(intent: str, blocked: list[str], equipment: str | None, text: 
         "lease": ["lease"],
         "mc": ["own_mc"],
         "mc_new": ["mc_new"],
-        "onboard": ["onboarding", "commit"],
+        "onboard": ["onboarding"],
         "trust": ["trust"],
         "commit": ["commit"],
         "email_delivery": ["email_delivery"],
@@ -224,6 +262,11 @@ def knowledge_for(intent: str, blocked: list[str], equipment: str | None, text: 
         keys.append("competitor")
     if re.search(r"invoice|pay after|when.{0,20}paid|payment timing", t):
         keys.append("payment_timing")
+    from app import docs as docmod
+
+    for key in docmod.keys_for(text, arrangement):
+        if key not in keys:
+            keys.append(key)
     stated = {item.get("key") for item in extracted or []}
     if equipment and intent in {"service", "dispatch_inquiry"}:
         from app.knowledge import EQUIP_KEYS
@@ -266,9 +309,20 @@ def task_for(arrangement: str | None, intent: str) -> str | None:
 
 
 def propose(text: str, facts: dict, memory: dict | None = None) -> dict:
+    from app import plan as planmod
+
     intent = detect_intent(text)
     repair = detect_repair(text)
     items = extract_facts(text)
+    current_equip = facts.get("equipment", {}).get("value") if isinstance(facts.get("equipment"), dict) else None
+    mentioned = re.search(r"reefer|dry van|flatbed|box truck|hotshot|\bbox\b", text, re.I)
+    advertised = bool(AD_LOAD.search(text)) and not OWNED_TRUCK.search(text)
+    if advertised and mentioned and current_equip:
+        ad_value = mentioned.group(0).lower().replace(" ", "_")
+        if ad_value == "box":
+            ad_value = "box_truck"
+        if ad_value != current_equip:
+            repair = "equip_ambiguous"
     blocked = blocked_from_text(text)
     preview = dict(facts)
     for item in items:
@@ -300,7 +354,7 @@ def propose(text: str, facts: dict, memory: dict | None = None) -> dict:
         "knowledge_keys": (
             ["email_delivery"]
             if repair == "email_delivery"
-            else knowledge_for(intent, blocked, equip, text, items)
+            else knowledge_for(intent, blocked, equip, text, items, arrangement)
         ),
         "blocked": blocked,
         "next_field": ask,
@@ -308,5 +362,6 @@ def propose(text: str, facts: dict, memory: dict | None = None) -> dict:
         "action": action,
         "task": task_for(arrangement, intent),
         "repair": repair,
+        "answer_topics": planmod.detect_topics(text, intent, None, repair),
         "_source": "rules",
     }

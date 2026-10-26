@@ -14,7 +14,7 @@ def merge_traces(left: list, right: list) -> list:
         return [item for item in right if not item.get("_reset")]
     return (left or []) + right
 
-from app import db, examples, fees, memory, plan, playbook, qwen, requirements as reqmod, retrieve, rules, second_pass, variants, zoho
+from app import db, examples, fees, media, memory, plan, playbook, qwen, requirements as reqmod, rules, second_pass, variants, zoho
 from app.knowledge import BLOCKED_CLAIMS, REGISTER, lookup
 from app.schema import ANSWER_TOPICS, CATALOGUE, CHIPS, FACT_KEYS, INTENTS, MOVES, VARIANTS
 from app.tasks import fact_value, persist_human_task
@@ -59,6 +59,23 @@ def _trace(stage: str, **detail) -> dict:
 
 ALLOWED_ACTIONS = {"none", "create_case", "callback", "talk_here", "takeover"}
 ALLOWED_ARRANGEMENTS = {"dispatch_service", "lease_on", "needs_clarification"}
+
+CASE_SAY = {
+    "awaiting_human_action": "Onboarding has your request. They haven't sent the packet yet.",
+    "awaiting_submissions": "Onboarding sent the packet and is waiting on your papers.",
+    "under_review": "Onboarding is reviewing the files.",
+    "corrections_requested": "Onboarding asked for a correction.",
+    "approved_for_handoff": "Onboarding signed off for handoff to dispatch.",
+    "production_accepted": "Dispatch has the truck.",
+    "human_takeover": "Our onboarding manager is on this chat.",
+    "callback_requested": "A callback is noted. Nobody has dialed yet.",
+    "routed_support": "This went to operations.",
+}
+
+
+def _case_say(status: str) -> str:
+    line = CASE_SAY.get(status, "Onboarding has this chat.")
+    return line + " That's not insurance or agreement approval."
 
 
 def _evidence_ok(evidence: str | None, user_text: str) -> bool:
@@ -300,12 +317,21 @@ def node_knowledge(state: TurnState) -> dict:
         keys.append("guarantee")
     if "invented_fee" in blocked and "fee" not in keys:
         keys.append("fee")
-    if (state["session"].get("memory") or {}).get("concern") == "total_fees" and "fee" not in keys:
+    asked_fee = "dispatch_fee" in (proposal.get("answer_topics") or []) or proposal.get("intent") == "fee"
+    if (
+        asked_fee
+        and (state["session"].get("memory") or {}).get("concern") == "total_fees"
+        and "fee" not in keys
+    ):
         keys.insert(0, "fee")
     arrangement = proposal.get("arrangement") or rules.arrangement_of(state["session"]["facts"])
     hybrid = False
     hits = []
     bits = []
+    if not keys and (
+        proposal.get("intent") == "freight" or "freight" in (proposal.get("answer_topics") or [])
+    ):
+        keys = ["freight"]
     if keys:
         for key in keys:
             if key == "fee":
@@ -313,10 +339,25 @@ def node_knowledge(state: TurnState) -> dict:
             else:
                 bits.append(lookup(key))
     else:
-        hybrid = True
-        hits = retrieve.search(state.get("user_text") or "")
-        bits = [hit["text"] for hit in hits]
-        keys = [hit["key"] for hit in hits]
+        hybrid = False
+    from app import docs as docmod
+
+    user_text = state.get("user_text") or ""
+    if docmod.asked(user_text):
+        for key in docmod.keys_for(user_text, arrangement):
+            if key not in keys and key in REGISTER:
+                keys.append(key)
+                bits.append(lookup(key))
+        missing = docmod.missing_line(state["session"])
+        if missing not in bits:
+            bits.append(missing)
+    evidence = media.session_evidence(state["session"]["id"], user_text)
+    if evidence:
+        if "photo_unverified" not in keys:
+            keys.append("photo_unverified")
+        for line in evidence:
+            if line not in bits:
+                bits.append(line)
     proposal = dict(state["proposal"])
     proposal["knowledge_keys"] = keys
     return {
@@ -358,7 +399,10 @@ def node_plan(state: TurnState) -> dict:
         proposal["task"] = None
         proposal["action"] = "none"
     concern = memory.detect_concern(state.get("user_text") or "", proposal.get("intent") or "general")
-    if repair == "leave_sales" or proposal["intent"] == "existing_customer":
+    if repair == "equip_ambiguous":
+        proposal["action"] = "none"
+        proposal["task"] = None
+    elif repair == "leave_sales" or proposal["intent"] == "existing_customer":
         proposal["intent"] = "existing_customer"
         proposal["action"] = "create_case"
         proposal["task"] = "operations_support"
@@ -460,14 +504,14 @@ def node_execute(state: TurnState) -> dict:
             {
                 "saved": True,
                 "verified": False,
-                "message": "Callback recorded locally. It is not dialed and not assigned in Zoho until sync is verified.",
+                "message": "I've noted the callback for our onboarding manager. Nobody has dialed yet.",
             }
         )
         return {"session": session, "action_result": result, **_trace("execute", action="callback", case_id=session.get("case_id"))}
     if action == "takeover":
         session["takeover"] = True
-        persist_human_task(session, proposal.get("task") or "clarification", "human_takeover", "Staff owns conversation", "Human takeover")
-        result.update({"saved": True, "message": "Automated follow-up is paused. Staff have the same session and facts."})
+        persist_human_task(session, proposal.get("task") or "clarification", "human_takeover", "Onboarding manager owns conversation", "Human takeover")
+        result.update({"saved": True, "message": "I'll pause the automated follow-up. Our onboarding manager has this same chat and what's on file."})
         return {"session": session, "action_result": result, **_trace("execute", action="takeover")}
     if action == "create_case":
         task = proposal.get("task")
@@ -480,7 +524,7 @@ def node_execute(state: TurnState) -> dict:
             {
                 "saved": True,
                 "verified": False,
-                "message": f"Human-owned {task.replace('_', ' ')} is saved locally. It is not approved and not assigned in Zoho until sync is verified.",
+                "message": f"I've asked our onboarding manager to take the {task.replace('_', ' ')} from here. They haven't approved anything yet.",
             }
         )
         return {"session": session, "action_result": result, **_trace("execute", action="create_case", task=task)}
@@ -496,7 +540,7 @@ def node_execute(state: TurnState) -> dict:
                 "action_id": f"{session['id']}:decline:{session['state_version']}",
             },
         )
-        result.update({"saved": True, "verified": False, "message": lookup("commit") + " I will not keep chasing this inquiry."})
+        result.update({"saved": True, "verified": False, "message": lookup("commit") + " I won't keep chasing this inquiry."})
         return {"session": session, "action_result": result, **_trace("execute", action="decline")}
     return {"action_result": result, **_trace("execute", action="none")}
 
@@ -527,33 +571,34 @@ def node_reply(state: TurnState) -> dict:
         text = action_result.get("message") or lookup("commit")
         return {"reply_text": text, "chips": CHIPS["handoff"][:1], **_trace("reply", composed="decline")}
     if session["takeover"] and proposal.get("intent") != "status":
-        text = "A person owns this case. Automated selling is paused."
+        text = "Our onboarding manager has this chat. I'll stay out of the way."
         return {"reply_text": text, "chips": _chips(session, proposal), **_trace("reply", composed="takeover")}
     if proposal.get("intent") == "status":
         if not session.get("case_id"):
-            text = "No staff case is open yet."
+            text = "Onboarding hasn't opened a case on this chat yet."
         elif _voice_identity_required(session):
             text = "Confirm your name or callback number before I read case status on a voice channel."
         else:
             current = db.get_case(session["case_id"])
-            crm = zoho.sync_status(session_id=session["id"], case_id=session["case_id"])
-            text = f"Verified status: {current['status'] if current else 'unknown'}. That is not insurance or agreement approval."
-            if crm.get("verified"):
-                text += f" Zoho {crm['mode']} sync is verified ({(crm.get('latest') or {}).get('kind')}). Still not assigned unless staff own the desk."
-            else:
-                text += f" Zoho write is not verified yet ({(crm.get('latest') or {}).get('status') or 'none'}). Local save is not a Zoho assignment."
+            status_key = (current or {}).get("status") or "unknown"
+            text = _case_say(status_key)
             snap = reqmod.snapshot(session["case_id"])
             if snap["issued"]:
-                text += (
-                    f" Packet requirements: {snap['returned']}/{snap['issued']} returned"
-                    f"{', ' + str(snap['overdue']) + ' overdue' if snap['overdue'] else ''}."
-                    " Extracted fields are unverified. I will not read a licence or COI aloud. A COI on file is not approved."
-                )
+                outstanding = snap.get("outstanding") or []
+                text += f" Papers in: {snap['returned']}/{snap['issued']}."
+                if outstanding:
+                    text += " Still need: " + ", ".join(str(item).replace("_", " ") for item in outstanding) + "."
+                if snap.get("overdue"):
+                    text += f" {snap['overdue']} overdue."
+                text += " I won't read a licence or COI back on this chat. A COI on file isn't approved."
             else:
                 files = db.list_case_files(session["case_id"])
                 if files:
                     flagged = sum(1 for item in files if item["status"] == "flagged")
-                    text += f" Document worker read {len(files)} file(s); {flagged} still flagged for a person. A COI on file is not approved."
+                    text += f" Onboarding has {len(files)} file(s) on this case"
+                    if flagged:
+                        text += f"; {flagged} still need a look"
+                    text += ". A COI on file isn't approved."
         return {"reply_text": text, "chips": _chips(session, proposal), **_trace("reply", composed="status")}
     variant_text = variants.text_for(proposal.get("reply_variant_id"))
     text, chips, summary = playbook.compose(

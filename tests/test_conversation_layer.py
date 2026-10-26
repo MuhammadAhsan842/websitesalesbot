@@ -37,6 +37,16 @@ class ExtraFacts(unittest.TestCase):
         self.assertEqual(items["payload"], "10000")
         self.assertEqual(items["commitmentStance"], "wont_sign")
 
+    def test_qualify_follows_truck_trailer_mc_insurance(self):
+        state = facts(equipment="box_truck")
+        self.assertEqual(playbook.next_ask(state, memory.empty()), "trailerLength")
+        state["trailerLength"] = {"value": "26ft", "status": "user_stated"}
+        self.assertEqual(playbook.next_ask(state, memory.empty()), "mcOwnership")
+        state["mcOwnership"] = {"value": "own_mc", "status": "user_stated"}
+        self.assertEqual(playbook.next_ask(state, memory.empty()), "insurance")
+        items = {item["key"]: item["value"] for item in rules.extract_facts("I have my own insurance")}
+        self.assertEqual(items["insurance"], "own_insurance")
+
     def test_deadline_unblocks_mc_not_start_date(self):
         state = facts(equipment="box_truck", deadline="monday", operatingArea="nj", startDate="monday")
         self.assertEqual(playbook.next_ask(state, memory.empty()), "mcOwnership")
@@ -79,7 +89,7 @@ class RepairEdges(unittest.TestCase):
             memory.empty(),
             repair="repetition_unverified",
         )
-        self.assertIn("cannot see documents staff have not received", text.lower())
+        self.assertIn("can't see papers onboarding hasn't received", text.lower())
         self.assertNotIn("approved", text.lower())
 
 
@@ -165,7 +175,7 @@ class SessionRestore(unittest.IsolatedAsyncioTestCase):
                     self.assertNotIn("approved", body["text"].lower())
                     stored = db.get_session(sid)
                     self.assertEqual(stored["facts"]["mcOwnership"]["value"], "unclear")
-                    self.assertIn("Will you run under your own MC", body["text"])
+                    self.assertIn("own MC", body["text"])
 
                     paid = await api.post("/v1/turn", json={"session_id": sid, "text": "Forget onboarding, I need to get paid"})
                     self.assertEqual(paid.json()["traces"][-1]["stage"], "reply")
@@ -179,7 +189,7 @@ class SessionRestore(unittest.IsolatedAsyncioTestCase):
                     sid2 = opened2.json()["session_id"]
                     await api.post("/v1/turn", json={"session_id": sid2, "text": "I run one box truck in Atlanta"})
                     docs = await api.post("/v1/turn", json={"session_id": sid2, "text": "I have everything"})
-                    self.assertIn("cannot see documents staff have not received", docs.json()["text"].lower())
+                    self.assertIn("can't see papers onboarding hasn't received", docs.json()["text"].lower())
                     self.assertIsNone(docs.json().get("case_id") or db.get_session(sid2).get("case_id"))
 
                     fee = await api.post("/v1/turn", json={"session_id": sid2, "text": "No, I meant the fee"})
