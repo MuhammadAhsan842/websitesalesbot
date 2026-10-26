@@ -59,6 +59,7 @@ def empty() -> dict:
         "hard_constraint": None,
         "concern": None,
         "answered": [],
+        "explained": [],
         "blocker": None,
         "last_blocker": None,
         "last_offer": None,
@@ -131,6 +132,7 @@ def compact(memory: dict | None) -> dict:
         "hard_constraint": state.get("hard_constraint"),
         "concern": state.get("concern"),
         "answered": list(state.get("answered") or []),
+        "explained": list(state.get("explained") or []),
         "blocker": state.get("blocker"),
         "last_blocker": state.get("last_blocker"),
         "last_offer": state.get("last_offer"),
@@ -388,6 +390,7 @@ def update(session: dict, proposal: dict, user_text: str) -> dict:
     else:
         constraint = current.get("hard_constraint")
     answered = answered_keys(facts)
+    explained = list(dict.fromkeys(list(current.get("explained") or []) + list(proposal.get("explained") or [])))
     repair = proposal.get("repair")
     if concern == "pause":
         follow_up = "driver_initiates"
@@ -462,6 +465,7 @@ def update(session: dict, proposal: dict, user_text: str) -> dict:
         "hard_constraint": constraint,
         "concern": concern,
         "answered": answered,
+        "explained": explained,
         "blocker": blocker,
         "last_blocker": last_blocker,
         "last_offer": proposal.get("reply_variant_id") or current.get("last_offer"),

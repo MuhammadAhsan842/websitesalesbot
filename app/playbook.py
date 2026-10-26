@@ -6,7 +6,7 @@ import re
 
 from app.knowledge import EQUIP_KEYS, lookup
 from app.plan import allow_action_message, topic_lines, validate_plan
-from app.schema import ASK_ORDER, CHIPS, EQUIP_LABELS, FACT_KEYS, QUESTIONS
+from app.schema import ASK_ORDER, CHIPS, EQUIP_LABELS, FACT_KEYS, QUESTIONS  # EQUIP_LABELS used in fit + first-equip ack
 
 
 def fact_value(facts: dict, key: str):
@@ -96,6 +96,31 @@ def _equip_line(facts: dict) -> str | None:
     equip = fact_value(facts, "equipment")
     key = EQUIP_KEYS.get(str(equip) if equip else "")
     return lookup(key) if key else None
+
+
+def _should_explain_equipment(facts: dict, memory: dict | None, user_text: str, topics: list[str]) -> bool:
+    """Mention equipment fit on first ID, change, or a direct support question — not every turn."""
+    equip = fact_value(facts, "equipment")
+    if not equip:
+        return False
+    key = EQUIP_KEYS.get(str(equip))
+    if not key:
+        return False
+    explained = set((memory or {}).get("explained") or [])
+    if key not in explained:
+        return True
+    t = (user_text or "").lower()
+    if "services" in topics or re.search(r"support|dispatch|equipment|what (truck|do you)", t):
+        return True
+    return False
+
+
+def mark_explained(memory: dict | None, keys: list[str]) -> list[str]:
+    current = list((memory or {}).get("explained") or [])
+    for key in keys:
+        if key and key not in current:
+            current.append(key)
+    return current
 
 
 def recorded_line(facts: dict, memory: dict | None = None) -> str:
@@ -378,20 +403,49 @@ def compose(
             parts.append(bit)
             break
 
+    explained_now: list[str] = []
+    equip = fact_value(facts, "equipment")
+    equip_key = EQUIP_KEYS.get(str(equip or ""))
+    first_equip = bool(equip_key and equip_key not in set(mem.get("explained") or []))
+
     if not spoken and not answers:
-        if intent == "service":
-            parts.append(lookup("services"))
-            line = _equip_line(facts)
-            if line:
-                parts.append(line)
+        if intent == "service" or "services" in topics:
+            if _should_explain_equipment(facts, mem, user_text, topics):
+                line = _equip_line(facts)
+                if line:
+                    parts.append(line)
+                    if equip_key:
+                        explained_now.append(equip_key)
+            else:
+                parts.append(lookup("services"))
         elif intent == "freight":
             parts.append(lookup("freight"))
-        elif intent in {"dispatch_inquiry", "general", "mc", "lease", "onboard", "unknown_detail"} and fact_value(facts, "equipment"):
+        elif intent in {"dispatch_inquiry"} and _should_explain_equipment(facts, mem, user_text, topics):
             line = _equip_line(facts)
             if line:
                 parts.append(line)
+                if equip_key:
+                    explained_now.append(equip_key)
+        elif first_equip and intent in {"general", "mc", "lease", "onboard", "unknown_detail", "dispatch_inquiry"}:
+            label = EQUIP_LABELS.get(str(equip), str(equip).replace("_", " "))
+            length = fact_value(facts, "trailerLength")
+            focus = f"{length} {label}" if length else label
+            if fact_value(facts, "equipmentSupport") == "needs_confirmation":
+                parts.append(lookup(equip_key) if equip_key else f"Got it—a {focus}.")
+            else:
+                parts.append(f"Let's focus on the {focus}.")
+            if equip_key:
+                explained_now.append(equip_key)
         elif variant_text:
             parts.append(variant_text)
+    elif answers and _should_explain_equipment(facts, mem, user_text, topics) and intent in {"service", "dispatch_inquiry"}:
+        line = _equip_line(facts)
+        if line and line not in parts:
+            parts.insert(0, line)
+            if equip_key:
+                explained_now.append(equip_key)
+    if explained_now:
+        mem["explained"] = mark_explained(mem, explained_now)
 
     if receipt:
         parts.append(receipt)

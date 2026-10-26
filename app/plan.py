@@ -158,10 +158,14 @@ def detect_topics(text: str, intent: str | None = None, concern: str | None = No
             return topics
     if re.search(
         r"insurance (costs?|is )?(too much|expensive|afford)|can'?t afford insurance|owner will wait|"
-        r"need liability|need cargo|only physical",
+        r"need liability|need cargo|only physical|"
+        r"do you need .{0,40}insurance|commercial (auto )?(and|&) cargo|cargo (and|&) commercial|"
+        r"auto liability|both coverages?|commercial auto|cargo coverage",
         t,
     ):
         add("insurance")
+    if re.search(r"do you (support|dispatch|haul).{0,24}sprinter|sprinter.{0,24}(support|dispatch)", t):
+        add("services")
     if re.search(r"\d+\s*%|weekly cap|take it off the first delivery", t) and not re.search(
         r"leo dispatch|silver arrow|\batl\b", t
     ):
@@ -193,6 +197,34 @@ def _topic_permitted(topic: str, user_text: str, facts: dict) -> bool:
     return True
 
 
+def _evidence_linked_topic(topic: str, user_text: str) -> bool:
+    """Accept a model-proposed topic only when the message shows a related question or ask."""
+    t = (user_text or "").lower()
+    if topic == "insurance":
+        return bool(
+            re.search(
+                r"do you need .{0,40}insurance|commercial|cargo coverage|auto liability|"
+                r"both coverages|what (about |insurance)|insurance (required|needed)",
+                t,
+            )
+        )
+    if topic == "services":
+        return bool(re.search(r"what (equipment|do you)|support|sprinter", t))
+    if topic == "dispatch_how":
+        return bool(re.search(r"what do you (actually )?do|how (do|does).{0,20}dispatch", t))
+    if topic == "freight":
+        return bool(re.search(r"\b(have|any|need|looking for) (a |any )?loads?\b|load availability", t))
+    if topic == "dispatch_fee":
+        return bool(re.search(r"fee|percent|charge|how much", t))
+    if topic == "onboarding":
+        return bool(re.search(r"onboard|packet|how do i start|ready to start", t))
+    if topic == "own_mc":
+        return bool(re.search(r"what (is |does ).{0,20}\bmc\b|keep my (own )?mc", t))
+    if topic == "lease":
+        return bool(re.search(r"what (is |does ).{0,20}lease|how (does |do )?lease", t))
+    return False
+
+
 def _open_equipment_ambiguity(mem: dict | None) -> bool:
     return any(
         row.get("kind") == "ambiguity" and row.get("key") == "equipment" and row.get("status") == "active"
@@ -218,10 +250,17 @@ def validate_plan(user_text: str, session: dict, proposal: dict) -> dict:
     proposed = [topic for topic in (proposal.get("answer_topics") or []) if topic in ANSWER_TOPICS]
     # Allowed is not the same as asked. This message's topics win; do not dump the catalogue.
     topics = [topic for topic in dict.fromkeys(required) if _topic_permitted(topic, user_text, facts)]
+    # Model may spot a valid question whose wording the detector missed — keep only evidence-linked extras.
+    for topic in proposed:
+        if topic in topics or not _topic_permitted(topic, user_text, facts):
+            continue
+        if _evidence_linked_topic(topic, user_text):
+            topics.append(topic)
     fallbacks: list[str] = []
-    if required and proposed and set(proposed) - set(required):
+    extras = set(proposed) - set(topics) - set(required)
+    if required and proposed and extras and not any(_evidence_linked_topic(topic, user_text) for topic in extras):
         fallbacks.append("extra_topics")
-    elif not required and proposed:
+    elif not required and proposed and not topics:
         fallbacks.append("topics")
     if proposal.get("answer_topics") and "home_time" in (proposal.get("answer_topics") or []) and "home_time" not in topics:
         fallbacks.append("unsupported_home_time")
@@ -287,9 +326,14 @@ def validate_plan(user_text: str, session: dict, proposal: dict) -> dict:
             next_q = "operatingArea"
         else:
             next_q = None
-    elif driver_asked and (len(topics) > 1 or any(topic in closing for topic in topics)):
+    elif driver_asked:
+        # Direct questions beat the next qualify slot (insurance/coverage before OTR/local).
         if "dispatch_fee" in topics and not fact_value(facts, "mcOwnership"):
             next_q = "mcOwnership"
+        elif any(topic in closing for topic in topics) or "insurance" in topics or "services" in topics or "dispatch_how" in topics:
+            next_q = None
+        elif len(topics) > 1:
+            next_q = None
         else:
             next_q = None
     elif next_q is None:

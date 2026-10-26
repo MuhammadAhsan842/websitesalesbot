@@ -1,7 +1,7 @@
 """Approved sales playbook. Personality lives here; the model cannot add claims."""
 
 REGISTER = {
-    "version": "ayyan_sales_v5",
+    "version": "ayyan_sales_v6",
     "welcome": "I'm Ayyan Group's AI sales assistant. I can check if we're a fit; our onboarding manager handles the papers. What are you running?",
     "services": "We dispatch dry van, reefer, flatbed, box truck, and hotshot for owner-operators and small fleets. You approve every load. We handle brokers and paperwork.",
     "dispatch_how": "Our dispatch team helps find freight that fits your equipment and preferred lanes, handles broker communication and paperwork, and coordinates the load process. You approve each load. Talking here isn't a live load search.",
@@ -17,6 +17,9 @@ REGISTER = {
     "equip_flatbed": "Flatbed and hotshot-style decks are in scope when the truck matches. We will not pretend a box registration is a deck.",
     "equip_box_truck": "Box truck is in scope for the dispatch we actually run. Eligibility still needs a look from our onboarding manager.",
     "equip_hotshot": "Hotshot is in scope. Fit still depends on lanes and whether you run your own MC or need lease-on review.",
+    "equip_sprinter_van": "Got it—a Sprinter van. I don't have confirmed Sprinter support in our current service list. I can help request confirmation from onboarding.",
+    "equip_step_deck": "Step deck is noted. Fit still needs onboarding confirmation for the lanes and authority path.",
+    "equip_power_only": "Power-only (tractor, no trailer) is noted. Onboarding confirms whether we can support that setup for your authority path.",
     "onboarding": "Talking here isn't a contract. If you keep your own MC, our onboarding manager sends the setup packet and looks over the files. If you want to lease on, they review eligibility and the agreement. I don't approve from chat.",
     "fee": "Once we know own-MC or lease-on, I can give you the current dispatch fee. What you pay today is useful for onboarding — I just won't match another company's number here.",
     "fee_need_arrangement": "Once we know if you're keeping your own MC or leasing on, I can give you the current fee.",
@@ -60,7 +63,7 @@ REGISTER = {
     "payment_timing": "When you get paid is on the agreement. Onboarding owns that clause — I won't pick invoice-now versus pay-after-broker from someone else's packet.",
     "email_delivery": "The packet email didn't go through. Clear some space and tell me when to resend. I won't ask you to sign until that lands.",
     "photo_unverified": "I have the photo on this chat (unverified). Onboarding still needs to look at it — I can't confirm equipment, insurance, or eligibility from an image.",
-    "insurance": "Onboarding checks a COI. Typical look is $1M auto liability and $100K cargo — they confirm the live requirement. A number on this chat isn't a certificate, and I don't write a policy from here.",
+    "insurance": "Onboarding checks commercial auto liability and cargo coverage on your COI. The team confirms the applicable limits for your setup. You can upload it here for review — a COI on this chat isn't insurance approved.",
     "insurance_affordability": "Insurance cost is what's holding things up — noted. I don't sell policies from chat. Onboarding can only review a COI once coverage exists; we can pause until the owner is ready.",
     "packet_received": "You say you received the packet and plan to return it — noted. Received on your side still isn't signed or approved here until onboarding has the returned files.",
     "negotiation": "I can record the terms you proposed for onboarding to review. A number in chat isn't an agreed rate until they publish it.",
@@ -70,7 +73,7 @@ REGISTER = {
 }
 
 META = {
-    key: {"source": "ayyan_sales_v5", "customer_facing": True}
+    key: {"source": "ayyan_sales_v6", "customer_facing": True}
     for key in REGISTER
     if key != "version"
 }
@@ -81,7 +84,12 @@ EQUIP_KEYS = {
     "flatbed": "equip_flatbed",
     "box_truck": "equip_box_truck",
     "hotshot": "equip_hotshot",
+    "sprinter_van": "equip_sprinter_van",
+    "step_deck": "equip_step_deck",
+    "power_only": "equip_power_only",
 }
+
+SUPPORTED_EQUIPMENT = frozenset({"dry_van", "reefer", "flatbed", "box_truck", "hotshot"})
 
 BLOCKED_CLAIMS = ("guarantee", "invented_fee", "load_promise", "insurance_approved", "contract_complete")
 

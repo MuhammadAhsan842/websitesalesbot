@@ -92,7 +92,11 @@ def detect_intent(text: str) -> str:
         return "lease"
     if re.search(r"\bmc\b|authority", t):
         return "mc"
-    if re.search(r"(what (trucks|equipment)|do you (haul|dispatch|support)|packages or pallets)", t):
+    if re.search(
+        r"(what (trucks|equipment)|do you (haul|dispatch|support)|packages or pallets|"
+        r"do you (support|dispatch|haul).{0,20}sprinter|sprinter.{0,20}support)",
+        t,
+    ):
         return "service"
     if re.search(r"status|approved yet|dispatcher'?s name|waiting on you", t):
         return "status"
@@ -107,19 +111,43 @@ AD_LOAD = re.compile(
     r"facebook|(i (saw|seen|have seen) your)|your post|you seem to have|advertis",
     re.I,
 )
-OWNED_TRUCK = re.compile(r"\bmy\b.{0,32}(reefer|dry van|flatbed|box truck|hotshot|\bbox\b)", re.I)
-EQUIP_WORD = re.compile(r"reefer|dry van|flatbed|box truck|hotshot|\bbox\b", re.I)
+EQUIP_PATTERN = (
+    r"sprinter\s*van|spriter\s*van|sprintervan|sprinter|"
+    r"step\s*deck|power\s*only|"
+    r"reefer|dry van|flatbed|box truck|hot\s*shot|hotshot|\bbox\b"
+)
+OWNED_TRUCK = re.compile(rf"\bmy\b.{{0,40}}({EQUIP_PATTERN})", re.I)
+EQUIP_WORD = re.compile(EQUIP_PATTERN, re.I)
 OWNED_CLAIM = re.compile(
-    r"\bi (run|have|drive|got) (a |my )?(reefer|dry van|flatbed|box truck|hotshot|\bbox\b)",
+    rf"\bi (run|have|drive|got) (a |my )?({EQUIP_PATTERN})",
     re.I,
 )
+SPRINTER_ASK = re.compile(r"sprinter|spriter", re.I)
 
 
 def normalize_equip(raw: str | None) -> str | None:
     if not raw:
         return None
-    value = raw.lower().replace(" ", "_")
-    return "box_truck" if value == "box" else value
+    value = re.sub(r"\s+", " ", raw.lower().strip())
+    aliases = {
+        "box": "box_truck",
+        "box truck": "box_truck",
+        "hot shot": "hotshot",
+        "hotshot": "hotshot",
+        "dry van": "dry_van",
+        "flatbed": "flatbed",
+        "reefer": "reefer",
+        "sprinter": "sprinter_van",
+        "sprinter van": "sprinter_van",
+        "spriter van": "sprinter_van",
+        "sprintervan": "sprinter_van",
+        "step deck": "step_deck",
+        "power only": "power_only",
+    }
+    if value in aliases:
+        return aliases[value]
+    value = value.replace(" ", "_")
+    return aliases.get(value.replace("_", " "), value)
 
 
 def is_advertised_equipment(text: str) -> bool:
@@ -142,12 +170,22 @@ def owned_equipment_claim(text: str) -> bool:
 
 
 def extract_facts(text: str) -> list[dict]:
+    from app.knowledge import SUPPORTED_EQUIPMENT
+
     t = text.lower()
     items = []
     equip = EQUIP_WORD.search(t)
     advertised = is_advertised_equipment(text)
     if equip and not advertised:
-        items.append({"key": "equipment", "value": normalize_equip(equip.group(0)), "status": "user_stated"})
+        eq = normalize_equip(equip.group(0))
+        items.append({"key": "equipment", "value": eq, "status": "user_stated"})
+        if eq in SUPPORTED_EQUIPMENT:
+            items.append({"key": "equipmentSupport", "value": "in_scope", "status": "user_stated"})
+        else:
+            items.append({"key": "equipmentSupport", "value": "needs_confirmation", "status": "user_stated"})
+    elif SPRINTER_ASK.search(t) and not advertised:
+        items.append({"key": "equipment", "value": "sprinter_van", "status": "user_stated"})
+        items.append({"key": "equipmentSupport", "value": "needs_confirmation", "status": "user_stated"})
     words = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "a": 1}
     count = re.search(
         r"(\d+|one|two|three|four|five|six|a)\s+(?:box\s+|dry\s+|flatbed\s+|reefer\s+|hotshot\s+)?(trucks?|reefers?|vans?|hotshots?)",
@@ -164,7 +202,7 @@ def extract_facts(text: str) -> list[dict]:
     ):
         items.append({"key": "mcOwnership", "value": "unclear", "status": "user_stated"})
         items.append({"key": "requestedArrangement", "value": "needs_clarification", "status": "user_stated"})
-    elif re.search(r"(own mc|my own mc|have (an? )?mc|my mc (is|has|was)|mc is \d)", t) and not re.search(
+    elif re.search(r"(own mc|my own mc|have (an? )?mc|i have mc|my mc (is|has|was)|mc is \d)", t) and not re.search(
         r"new mc|pending|authority is ready|i am new|i'm new", t
     ):
         items.append({"key": "mcOwnership", "value": "own_mc", "status": "user_stated"})
@@ -172,6 +210,43 @@ def extract_facts(text: str) -> list[dict]:
     elif re.search(r"my authority", t) and not re.search(r"ready|pending|new mc", t):
         items.append({"key": "mcOwnership", "value": "own_mc", "status": "user_stated"})
         items.append({"key": "requestedArrangement", "value": "dispatch_service", "status": "user_stated"})
+    age_words = {
+        "one": 1,
+        "two": 2,
+        "three": 3,
+        "four": 4,
+        "five": 5,
+        "six": 6,
+        "seven": 7,
+        "eight": 8,
+        "nine": 9,
+        "ten": 10,
+        "eleven": 11,
+        "twelve": 12,
+    }
+    age = re.search(
+        r"(?:mc|authority).{0,32}(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)"
+        r"\s*(day|days|week|weeks|month|months|year|years)\s*old|"
+        r"(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)"
+        r"\s*(day|days|week|weeks|month|months|year|years)\s*old.{0,32}(?:mc|authority)",
+        t,
+    )
+    if age:
+        raw_num = age.group(1) or age.group(3)
+        unit = (age.group(2) or age.group(4) or "").rstrip("s")
+        num = age_words.get(str(raw_num), int(raw_num) if str(raw_num).isdigit() else None)
+        if num is not None:
+            months = num
+            if unit == "day":
+                months = max(1, num // 30) if num >= 30 else 0
+            elif unit == "week":
+                months = max(1, num // 4)
+            elif unit == "year":
+                months = num * 12
+            items.append({"key": "authorityAgeMonths", "value": months, "status": "user_stated"})
+            if not any(item["key"] == "mcOwnership" for item in items):
+                items.append({"key": "mcOwnership", "value": "own_mc", "status": "user_stated"})
+                items.append({"key": "requestedArrangement", "value": "dispatch_service", "status": "user_stated"})
     if re.search(r"(no mc|don'?t have.*mc|lease on|lease-on)", t):
         items.append({"key": "mcOwnership", "value": "no_own_mc", "status": "user_stated"})
         items.append({"key": "requestedArrangement", "value": "lease_on", "status": "user_stated"})
@@ -222,19 +297,71 @@ def extract_facts(text: str) -> list[dict]:
         )
     elif payload:
         items.append({"key": "payload", "value": payload.group(1).replace(",", ""), "status": "user_stated"})
-    if re.search(r"liftgate", t):
-        items.append({"key": "liftgate", "value": "yes" if not re.search(r"no liftgate|without liftgate", t) else "no", "status": "user_stated"})
+    # Installed equipment vs load requirements (do not collapse into one field).
+    load_liftgate = re.search(
+        r"loads? that (do not|don'?t|without).{0,20}liftgate|no liftgate (loads?|required)|"
+        r"(do not|don'?t) (want|need|take) (a |any )?liftgate (load|required)|"
+        r"without (a )?liftgate",
+        t,
+    )
+    if load_liftgate:
+        items.append({"key": "liftgateLoadPreference", "value": "not_required", "status": "user_stated"})
+    installed_liftgate = re.search(
+        r"\b(have|has|with|got|equipped with) (a |my )?liftgate\b|\bliftgate\b",
+        t,
+    )
+    if installed_liftgate and not load_liftgate:
+        if re.search(r"no liftgate|without liftgate|don'?t have (a )?liftgate", t):
+            items.append({"key": "liftgate", "value": "no", "status": "user_stated"})
+        elif re.search(r"have|has|with|got|equipped|\bliftgate\b", t):
+            # Bare "liftgate" in a truck-description list still means installed.
+            if re.search(r"no liftgate|without liftgate", t):
+                items.append({"key": "liftgate", "value": "no", "status": "user_stated"})
+            else:
+                items.append({"key": "liftgate", "value": "yes", "status": "user_stated"})
+    if re.search(r"pallet\s*jack|pallette\s*jack", t):
+        items.append({"key": "palletJack", "value": "yes", "status": "user_stated"})
+    accessory_bits = []
+    for name, pattern in (
+        ("straps", r"\bstraps?\b"),
+        ("chains", r"\bchains?\b"),
+        ("binders", r"\bbinders?\b"),
+        ("tarps", r"\btarps?\b"),
+    ):
+        if re.search(pattern, t):
+            accessory_bits.append(name)
+    if accessory_bits:
+        items.append({"key": "accessories", "value": ",".join(accessory_bits), "status": "user_stated"})
+    # Coverage types — separate from overall insurance slot.
+    asks_coverage_need = bool(
+        re.search(
+            r"do you need .{0,60}(insurance|coverage|cargo|liability)|"
+            r"(need|require) (commercial|cargo|both) .{0,20}(insurance|coverage)|"
+            r"both coverages\?",
+            t,
+        )
+    )
+    if re.search(r"no commercial auto|without commercial auto|no auto liability|don'?t have (commercial )?auto", t):
+        items.append({"key": "autoLiabilityCoverage", "value": "absent", "status": "user_stated"})
+    elif re.search(r"commercial auto|auto liability", t) and not asks_coverage_need:
+        items.append({"key": "autoLiabilityCoverage", "value": "present", "status": "user_stated"})
+    if re.search(r"no cargo (insurance|coverage)|without cargo|don'?t have cargo", t):
+        items.append({"key": "cargoCoverage", "value": "absent", "status": "user_stated"})
+    elif re.search(r"cargo (insurance|coverage)|have cargo", t) and not asks_coverage_need:
+        items.append({"key": "cargoCoverage", "value": "present", "status": "user_stated"})
     if re.search(
         r"insurance (costs?|is )?(too much|expensive|afford)|can'?t afford insurance|owner will wait",
         t,
     ):
         items.append({"key": "insurance", "value": "needs_insurance", "status": "user_stated"})
+    elif asks_coverage_need:
+        pass
     elif re.search(r"need insurance|no insurance|don'?t have insurance|looking for insurance", t):
         items.append({"key": "insurance", "value": "needs_insurance", "status": "user_stated"})
-    elif re.search(r"have (my |our )?(own )?insurance|i('m| am) insured|got insurance", t) and not re.search(
-        r"need liability|need cargo|only physical", t
-    ):
+    elif re.search(r"have (my |our )?(own )?insurance|i('m| am) insured|got insurance|\binsured\b", t):
         items.append({"key": "insurance", "value": "own_insurance", "status": "user_stated"})
+    if re.search(r"\bi use factoring\b|\bfactoring\b", t) and not re.search(r"what is factoring|explain factoring", t):
+        items.append({"key": "paymentArrangement", "value": "factoring", "status": "user_stated"})
     if re.search(r"monday through friday|mon(day)?\s*(to|-|through)\s*fri|weekdays", t):
         items.append({"key": "weekdaySchedule", "value": "monday_friday", "status": "user_stated"})
     elif re.search(r"home weekends|weekends? home|flexible schedule", t):
@@ -248,7 +375,9 @@ def extract_facts(text: str) -> list[dict]:
         else:
             value = miles.group(1)
         items.append({"key": "milesPerDay", "value": value, "status": "user_stated"})
-    if re.search(r"\blocal\b|no otr|not otr|home every night", t):
+    if re.search(r"\bregional\b|only want regional|regional work", t):
+        items.append({"key": "operatingMode", "value": "regional", "status": "user_stated"})
+    elif re.search(r"\blocal\b|no otr|not otr|home every night", t):
         items.append({"key": "operatingMode", "value": "local", "status": "user_stated"})
     elif re.search(r"\botr\b", t):
         items.append({"key": "operatingMode", "value": "otr", "status": "user_stated"})
@@ -262,7 +391,10 @@ def extract_facts(text: str) -> list[dict]:
     if re.search(r"home every night|daily home|home time", t):
         items.append({"key": "supportNeed", "value": "daily_home_time", "status": "user_stated"})
         items.append({"key": "primaryProblem", "value": "home_time", "status": "user_stated"})
-    if re.search(r"paperwork|factoring|broker calls", t):
+    if re.search(r"\bfactoring\b", t) and not re.search(r"paperwork|broker calls", t):
+        # Factoring is a payment arrangement; do not force paperwork as the primary problem.
+        pass
+    elif re.search(r"paperwork|broker calls", t):
         items.append({"key": "supportNeed", "value": "paperwork", "status": "user_stated"})
         items.append({"key": "primaryProblem", "value": "paperwork", "status": "user_stated"})
     if re.search(r"better loads?|keep(ing)? (me |the truck )?loaded|empty miles", t):
@@ -351,8 +483,16 @@ def knowledge_for(
         keys.append("accessorials")
     if re.search(r"home every night|daily home time|\bhome time\b", t):
         keys.append("home_time")
+    if re.search(
+        r"do you need .{0,40}insurance|commercial (auto )?(and|&) cargo|cargo (and|&) commercial|"
+        r"auto liability|both coverages?|need (commercial|cargo)",
+        t,
+    ):
+        keys.append("insurance")
     if re.search(r"insurance (costs?|is )?(too much|expensive|afford)|can'?t afford insurance|owner will wait", t):
         keys.append("insurance_affordability")
+    if re.search(r"sprinter|spriter", t):
+        keys.append("equip_sprinter_van")
     if re.search(r"i received (it|the packet)|received the packet|send it tomorrow", t):
         keys.append("packet_received")
     if re.search(r"\d+\s*%|weekly cap|take it off the first delivery", t):

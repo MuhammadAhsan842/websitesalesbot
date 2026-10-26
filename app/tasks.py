@@ -46,7 +46,7 @@ def persist_human_task(session: dict, task: str, status: str, next_action: str, 
     if task in {"setup_packet", "lease_agreement"}:
         from app import requirements
 
-        requirements.issue(saved["id"], task)
+        requirements.issue(saved["id"], task, facts=session.get("facts") or {})
     db.add_event(event, {"caseId": saved["id"], "task": task, "status": status})
     from app import zoho
 
