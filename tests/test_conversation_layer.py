@@ -47,6 +47,48 @@ class ExtraFacts(unittest.TestCase):
         items = {item["key"]: item["value"] for item in rules.extract_facts("I have my own insurance")}
         self.assertEqual(items["insurance"], "own_insurance")
 
+    def test_feet_is_not_a_fee_question(self):
+        self.assertNotEqual(rules.detect_intent("i have 40 feet box truck"), "fee")
+        self.assertEqual(rules.detect_intent("what do you charge"), "fee")
+        items = {item["key"]: item["value"] for item in rules.extract_facts("my mc is 5 months old")}
+        self.assertEqual(items.get("mcOwnership"), "own_mc")
+
+    def test_please_is_not_lease_and_payment_routes_support(self):
+        self.assertNotEqual(rules.detect_intent("Please can't you pay me in the morning"), "lease")
+        self.assertEqual(rules.detect_intent("Please can't you pay me in the morning"), "existing_customer")
+        self.assertEqual(rules.detect_intent("Please I need you to payme please"), "existing_customer")
+        self.assertEqual(rules.detect_intent("I want to lease on"), "lease")
+
+    def test_rejected_weight_is_not_truck_payload(self):
+        items = {item["key"]: item["value"] for item in rules.extract_facts("8,500 lb is too much for my trailer")}
+        self.assertEqual(items.get("rejectedLoadWeight"), "8500")
+        self.assertNotIn("payload", items)
+        preferred = {item["key"]: item["value"] for item in rules.extract_facts("Seven thousand to seven five hundred")}
+        # Range without lb may still parse preferred when digits present
+        pies = {item["key"]: item["value"] for item in rules.extract_facts("26 pies")}
+        self.assertEqual(pies.get("trailerLength"), "26ft")
+
+    def test_counteroffer_is_recorded_not_accepted(self):
+        items = {item["key"]: item["value"] for item in rules.extract_facts("13% with a $200 weekly cap")}
+        self.assertEqual(items.get("requestedFeePercent"), "13")
+        self.assertEqual(items.get("requestedWeeklyCap"), "200")
+        reply, _, _ = playbook.compose(
+            "fee",
+            {
+                "requestedFeePercent": {"value": "13", "status": "user_stated"},
+                "requestedWeeklyCap": {"value": "200", "status": "user_stated"},
+            },
+            [],
+            "dispatch_service",
+            False,
+            None,
+            None,
+            {"concern": "negotiation", "answered": [], "follow_up": "assistant"},
+            user_text="13% with a $200 weekly cap",
+        )
+        self.assertIn("13%", reply)
+        self.assertIn("isn't an agreed rate", reply.lower())
+
     def test_deadline_unblocks_mc_not_start_date(self):
         state = facts(equipment="box_truck", deadline="monday", operatingArea="nj", startDate="monday")
         self.assertEqual(playbook.next_ask(state, memory.empty()), "mcOwnership")

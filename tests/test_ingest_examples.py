@@ -18,6 +18,10 @@ class ClassifyAndPii(unittest.TestCase):
         self.assertEqual(ingest.classify("Union moving.pdf"), "chat")
         self.assertEqual(ingest.classify("Jason Chats.1.pdf"), "chat")
         self.assertEqual(ingest.classify("conversation document.docx"), "chat")
+        self.assertEqual(
+            ingest.classify("export.txt", "Message from you, Ready?\nMessage from 469-555-0199, Si."),
+            "chat",
+        )
 
     def test_export_turns_keep_driver_then_sales(self):
         text = (
@@ -29,6 +33,17 @@ class ClassifyAndPii(unittest.TestCase):
         self.assertEqual(turns[0]["role"], "driver")
         self.assertIn("hotshot", turns[0]["text"].lower())
         self.assertEqual(turns[1]["role"], "sales")
+
+    def test_short_driver_answers_are_kept(self):
+        text = (
+            "Message from you, Still waiting on insurance?, Sunday, October 18 2026, 9:57 PM.\n"
+            "Message from 469-555-0199, Si., Sunday, October 18 2026, 9:58 PM.\n"
+            "Message from 469-555-0199, 26 pies, Sunday, October 18 2026, 9:59 PM.\n"
+        )
+        turns = ingest.extract_turns(text)
+        bodies = [row["text"].lower() for row in turns if row["role"] == "driver"]
+        self.assertTrue(any(body.startswith("si") for body in bodies))
+        self.assertTrue(any("26 pies" in body for body in bodies))
 
     def test_strip_phone_email_and_dot(self):
         text = ingest.strip_pii("Call (561) 909-8184 or Unionmovingmass@gmail.com DOT 9703143")

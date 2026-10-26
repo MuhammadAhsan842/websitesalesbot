@@ -34,7 +34,7 @@ def _integer(name: str, default: int, minimum: int, maximum: int) -> int:
 
 @dataclass(frozen=True)
 class Settings:
-    model: str = "qwen3.5:2b"
+    model: str = "qwen3.5:0.8b"
     url: str = "http://127.0.0.1:11434"
     threads: int = 4
     context: int = 2048
@@ -49,7 +49,7 @@ class Settings:
     @classmethod
     def from_env(cls) -> Settings:
         return cls(
-            model=os.getenv("QWEN_MODEL", "qwen3.5:2b"),
+            model=os.getenv("QWEN_MODEL", "qwen3.5:0.8b"),
             url=os.getenv("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/"),
             threads=_integer("QWEN_NUM_THREAD", default_threads(), 1, 1024),
             context=_integer("QWEN_NUM_CTX", 2048, 1024, 131072),
@@ -233,13 +233,15 @@ def _sanitize(raw: dict) -> dict:
     wording = raw.get("wording") if isinstance(raw.get("wording"), str) else None
     if wording:
         wording = wording.strip()[:240]
+        from app.plan import OPERATIONAL_CLAIM
+
         if re.search(
             r"\$|\d+\s*%|approved|zoho|loads tomorrow|guarantee|emailed|booked|packet sent|"
             r"documents were received|case was assigned|i will check|i'?m checking|i am checking|"
             r"update you shortly",
             wording,
             re.I,
-        ):
+        ) or OPERATIONAL_CLAIM.search(wording):
             wording = None
     topics = [topic for topic in raw.get("answer_topics") or [] if topic in ANSWER_TOPICS][:2]
     return {
@@ -490,7 +492,18 @@ async def _infer(
     body = response.json()
     if body.get("done_reason") == "length":
         raise ValueError("model output truncated; increase QWEN_NUM_PREDICT")
-    parsed = parse_content(body.get("message", {}).get("content", ""))
+    message = body.get("message") or {}
+    content = (message.get("content") or "").strip()
+    if not content:
+        # Qwen 3.5 may put JSON in thinking when think mode slips through.
+        thinking = (message.get("thinking") or "").strip()
+        if thinking.startswith("{") or '"intent"' in thinking:
+            start = thinking.find("{")
+            end = thinking.rfind("}")
+            content = thinking[start : end + 1] if start >= 0 and end > start else thinking
+    if not content:
+        raise ValueError("model returned empty content")
+    parsed = parse_content(content)
     result = parsed.model_dump()
     for fact in result["facts"]:
         fact["status"] = "user_stated"
@@ -536,7 +549,9 @@ async def propose(
                 recent,
             )
         except (httpx.HTTPError, ValidationError, ValueError, TypeError, AttributeError) as first:
-            if choice["family"] == "gemma" and router.mode() != "gemma":
+            # Always fall over to Qwen when Gemma is down — forced gemma with a dead host
+            # was leaving every turn on rules_fallback (static canned replies).
+            if choice["family"] == "gemma" and MODEL != choice["model"]:
                 try:
                     result = await _infer(
                         MODEL, "qwen", user_text, facts, conversation_state, memory, examples, queue_ms, recent

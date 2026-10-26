@@ -14,7 +14,19 @@ ASK_ORDER = [
 
 QUAL_FIELDS = CORE_FIELDS + ["lanes", "supportNeed", "startDate", "primaryProblem", "trailerLength", "insurance", "operatingMode"]
 
-EXTRA_FIELDS = ["payload", "liftgate", "deadline", "commitmentStance", "weekdaySchedule", "milesPerDay", "fleetSize"]
+EXTRA_FIELDS = [
+    "payload",
+    "preferredPayload",
+    "rejectedLoadWeight",
+    "liftgate",
+    "deadline",
+    "commitmentStance",
+    "weekdaySchedule",
+    "milesPerDay",
+    "fleetSize",
+    "requestedFeePercent",
+    "requestedWeeklyCap",
+]
 
 FACT_KEYS = QUAL_FIELDS + ["name", "phone", "requestedArrangement"] + EXTRA_FIELDS
 
@@ -46,6 +58,12 @@ ANSWER_TOPICS = (
     "talk_here",
     "call_me",
     "pause",
+    "payment_support",
+    "insurance",
+    "negotiation",
+    "dispatch_how",
+    "load_approval",
+    "accessorials",
 )
 
 PERMITTED_ACTIONS = ("none", "create_case", "callback", "talk_here", "takeover")

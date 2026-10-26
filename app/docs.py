@@ -10,7 +10,10 @@ from app.tasks import fact_value
 ASK = re.compile(
     r"which (papers|docs|documents)|what (papers|documents|do i (send|need))|"
     r"setup packet|carrier packet|w-?9|\bcoi\b|certificate of insurance|"
-    r"notice of assignment|\bnoa\b|voided check|authority sheet",
+    r"notice of assignment|\bnoa\b|voided check|authority sheet|"
+    r"\busdot\b|\bmc authority|bill of lading|\bbol\b|rate conf|proof of delivery|\bpod\b|"
+    r"\bifta\b|\beld\b|power of attorney|factoring agreement|"
+    r"\bdetention\b|\blayover\b|\btonu\b|accessorial",
     re.I,
 )
 SENT = re.compile(r"\b(i (sent|uploaded|attached|submitted)|here('?s| is) (my |the )?(w-?9|coi|noa|packet))\b", re.I)
@@ -35,6 +38,70 @@ TEMPLATES = {
         "key": "docs_packet",
         "label": "Setup packet",
         "match": re.compile(r"setup packet|carrier packet|onboarding (process|packet)", re.I),
+    },
+    "mc_authority": {
+        "key": "docs_mc",
+        "label": "MC authority",
+        "match": re.compile(r"\bmc authority|authority sheet|motor carrier authority", re.I),
+    },
+    "usdot": {
+        "key": "docs_usdot",
+        "label": "USDOT number",
+        "match": re.compile(r"\busdot\b|dot number", re.I),
+    },
+    "bol": {
+        "key": "docs_bol",
+        "label": "Bill of lading",
+        "match": re.compile(r"bill of lading|\bbol\b", re.I),
+    },
+    "rate_con": {
+        "key": "docs_rate_con",
+        "label": "Rate confirmation",
+        "match": re.compile(r"rate conf|rate confirmation", re.I),
+    },
+    "rate_con_detail": {
+        "key": "docs_rate_con_detail",
+        "label": "Rate confirmation scope",
+        "match": re.compile(r"rate conf|rate confirmation|legal agreement for the load", re.I),
+    },
+    "pod": {
+        "key": "docs_pod",
+        "label": "Proof of delivery",
+        "match": re.compile(r"proof of delivery|\bpod\b|delivery receipt", re.I),
+    },
+    "trip_invoice": {
+        "key": "trip_docs_invoice",
+        "label": "Trip paperwork and invoicing",
+        "match": re.compile(
+            r"paperwork.*invoic|invoic.*(bol|pod|paperwork)|after delivery.*(paper|doc)|"
+            r"bol.*(pod|invoice)|pod.*(bol|invoice)",
+            re.I,
+        ),
+    },
+    "accessorials": {
+        "key": "accessorials",
+        "label": "Detention / layover / TONU",
+        "match": re.compile(r"\bdetention\b|\blayover\b|\btonu\b|accessorial", re.I),
+    },
+    "ifta": {
+        "key": "docs_ifta",
+        "label": "IFTA",
+        "match": re.compile(r"\bifta\b|fuel tax", re.I),
+    },
+    "eld": {
+        "key": "docs_eld",
+        "label": "ELD / logbook",
+        "match": re.compile(r"\beld\b|logbook|hours of service|\bhos\b", re.I),
+    },
+    "poa": {
+        "key": "docs_poa",
+        "label": "Power of attorney",
+        "match": re.compile(r"power of attorney|\bpoa\b", re.I),
+    },
+    "factoring": {
+        "key": "docs_factoring",
+        "label": "Factoring agreement",
+        "match": re.compile(r"factoring agreement|factoring (company|paperwork)", re.I),
     },
 }
 

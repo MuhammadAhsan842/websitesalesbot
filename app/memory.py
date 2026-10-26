@@ -16,17 +16,27 @@ CONCERNS = (
     "guarantee",
     "home_time",
     "email_delivery",
+    "payment_support",
+    "insurance_affordability",
+    "packet_progress",
+    "missing_equipment",
+    "negotiation",
 )
 
 CONCERN_KEYS = {
     "total_fees": ("fee", "competitor", "payment_timing"),
     "guarantee": ("guarantee", "freight"),
-    "commitment": ("commit",),
+    "commitment": ("commit", "concern_commitment"),
     "home_time": ("home_time",),
-    "net_after_costs": (),
-    "pause": (),
-    "repetition": (),
+    "net_after_costs": ("concern_net",),
+    "pause": ("concern_pause", "deferred"),
+    "repetition": ("concern_repetition",),
     "email_delivery": ("email_delivery",),
+    "payment_support": ("payment_support", "support"),
+    "insurance_affordability": ("insurance_affordability", "insurance"),
+    "packet_progress": ("packet_received", "docs_status", "docs_packet"),
+    "missing_equipment": ("missing_equipment",),
+    "negotiation": ("negotiation",),
 }
 
 MC_NORMALIZE = {
@@ -155,10 +165,34 @@ def answered_keys(facts: dict) -> list[str]:
 
 def detect_concern(text: str, intent: str) -> str | None:
     t = (text or "").lower()
-    if re.search(r"let you know|when i'?m ready|not right now|i'?ll think|maybe later|let'?s see about next week|busy this week", t):
+    if re.search(
+        r"let you know|when i'?m ready|not right now|i'?ll think|maybe later|let'?s see about next week|"
+        r"busy this week|next summer|i'?ll start again",
+        t,
+    ):
         return "pause"
     if re.search(r"mailbox|inbox (is )?full|send (it )?again|sand again", t):
         return "email_delivery"
+    if intent == "existing_customer" or re.search(
+        r"\b(pay\s*me|payme|payment|paid me|where'?s my (money|check|settlement)|waiting on you)\b",
+        t,
+    ):
+        if re.search(r"pay|payment|invoice|money|settlement|check|zelle", t):
+            return "payment_support"
+    if re.search(
+        r"i received (it|the packet)|received the packet|fill it out|send it tomorrow|i('?ll| will) (fill|send|return)",
+        t,
+    ):
+        return "packet_progress"
+    if re.search(
+        r"insurance (costs?|is )?(too much|expensive|afford)|can'?t afford insurance|owner will wait",
+        t,
+    ):
+        return "insurance_affordability"
+    if re.search(r"need a trailer|buying (a |the )?truck|pick up the truck|don'?t have (a )?trailer", t):
+        return "missing_equipment"
+    if re.search(r"\d+\s*%|weekly cap|you pay \d+|take it off the first delivery", t):
+        return "negotiation"
     if re.search(
         r"already (sent|gave|told|said|provided)|i have everything|i (just )?told you|you (already )?have (it|that|everything)|i already (did|sent)",
         t,
@@ -173,7 +207,7 @@ def detect_concern(text: str, intent: str) -> str | None:
         return "net_after_costs"
     if intent == "guarantee" or re.search(r"guarantee|weekly gross", t):
         return "guarantee"
-    if intent == "hometime" or re.search(r"home every night|daily home time", t):
+    if re.search(r"home every night|daily home time|\bhome time\b", t):
         return "home_time"
     if intent == "fee" or re.search(r"total fees?|what do you charge|how much (do you|is the)", t):
         return "total_fees"
@@ -218,18 +252,31 @@ def detect_blocker(session: dict, intent: str, concern: str | None, text: str = 
     if re.search(
         r"(got|have|received) (my )?(insurance|coi)|insurance is (ready|done|sorted|active)|coi is (ready|done)",
         t,
-    ):
+    ) and not re.search(r"too much|afford|expensive|owner will wait", t):
         return ""
+    if re.search(
+        r"insurance (costs?|is )?(too much|expensive|afford)|can'?t afford insurance|owner will wait",
+        t,
+    ):
+        return "insurance_affordability"
     if re.search(
         r"waiting on insurance|insurance delay|coi delay|getting several quotes|comparing quotes|agent hasn'?t finished",
         t,
     ):
         return "waiting_insurance"
-    if re.search(r"pick(ing)? up (my )?truck|send (the )?registration (after|tomorrow|later)|registration after", t):
+    if re.search(r"pick(ing)? up (my )?truck|send (the )?registration (after|tomorrow|later)|registration after|temp tag", t):
         return "waiting_registration"
+    if re.search(r"i received (it|the packet)|received the packet|send it tomorrow", t):
+        return "packet_return_pending"
+    if concern == "payment_support":
+        return "waiting_payment"
     if concern == "pause":
         return "waiting_driver"
     if concern == "commitment":
+        return "reviewing_terms"
+    if concern == "missing_equipment":
+        return "waiting_equipment"
+    if concern == "negotiation":
         return "reviewing_terms"
     if session.get("handed_over") and session.get("case_id"):
         return "waiting_packet"
@@ -249,7 +296,14 @@ def records_of(memory: dict | None, kind: str | None = None, status: str = "acti
     ]
 
 
-def set_record(records: list | None, kind: str, key: str, status: str, note: str | None = None) -> list[dict]:
+def set_record(
+    records: list | None,
+    kind: str,
+    key: str,
+    status: str,
+    note: str | None = None,
+    extra: dict | None = None,
+) -> list[dict]:
     rows = [dict(row) for row in (records or [])]
     found = False
     for row in rows:
@@ -261,10 +315,22 @@ def set_record(records: list | None, kind: str, key: str, status: str, note: str
             row["status"] = status
         if note:
             row["note"] = note
+        if extra:
+            row.update(extra)
         found = True
     if not found:
-        rows.append({"kind": kind, "key": key, "status": status, "note": note})
+        row = {"kind": kind, "key": key, "status": status, "note": note}
+        if extra:
+            row.update(extra)
+        rows.append(row)
     return rows
+
+
+def open_ambiguity(memory: dict | None, key: str) -> dict | None:
+    for row in records_of(memory, "ambiguity"):
+        if row.get("key") == key:
+            return row
+    return None
 
 
 def episodic_line(memory: dict | None, user_text: str = "") -> str | None:
@@ -275,11 +341,19 @@ def episodic_line(memory: dict | None, user_text: str = "") -> str | None:
             return "OTR is recorded. Daily home time is still on file — has that changed too?"
     if last == "waiting_insurance" and not re.search(r"insurance|coi", t):
         return "Last time you were waiting on insurance — is that still the hold-up?"
-    if last == "waiting_registration" and not re.search(r"registration|truck tomorrow|picked up", t):
+    if last == "insurance_affordability" and not re.search(r"insurance|afford|owner", t):
+        return "Last time insurance cost was the hold-up — has that changed?"
+    if last == "waiting_registration" and not re.search(r"registration|truck tomorrow|picked up|temp tag", t):
         return "Last time you were collecting the truck, then sending registration."
-    if last == "waiting_driver" and not re.search(r"ready|let you know|next week", t):
+    if last == "packet_return_pending" and not re.search(r"packet|sent|returned|filled", t):
+        return "Last time you had the packet and planned to return it — where does that stand?"
+    if last == "waiting_payment" and not re.search(r"pay|payment|invoice|settlement", t):
+        return "Last time this was about payment — which load or invoice should operations look at?"
+    if last == "waiting_equipment" and not re.search(r"truck|trailer|bought|picked up", t):
+        return "Last time equipment was still being sourced — what do you have on the road today?"
+    if last == "waiting_driver" and not re.search(r"ready|let you know|next week|summer", t):
         return "Welcome back. You wanted to pick this up later."
-    if last == "reviewing_terms" and re.search(r"\b(i'?m back|hey|status|still thinking|what'?s left)\b", t):
+    if last == "reviewing_terms" and re.search(r"\b(i'?m back|hey|status|still thinking|what'?s left|sign)\b", t):
         return "Last time we were still on the agreement. What would you like clarified?"
     if last == "waiting_packet" and re.search(r"\b(i'?m back|hey|status|packet|document)\b", t):
         return "Last time a packet was waiting on onboarding. That still isn't approval."
@@ -293,6 +367,14 @@ def update(session: dict, proposal: dict, user_text: str) -> dict:
     arrangement = proposal.get("arrangement")
     concern = detect_concern(user_text, intent)
     goal = detect_goal(facts, arrangement, user_text) or current.get("goal")
+    owned_now = bool(
+        re.search(
+            r"\bmy\b.{0,32}(reefer|dry van|flatbed|box truck|hotshot|\bbox\b)|"
+            r"\bi (run|have|drive|got) (a |my )?(reefer|dry van|flatbed|box truck|hotshot|\bbox\b)",
+            user_text or "",
+            re.I,
+        )
+    )
     detected_constraint = detect_constraint(facts, user_text)
     stated_home = fact_value(facts, "supportNeed") == "daily_home_time" or bool(
         re.search(r"home every night|daily home", user_text or "", re.I)
@@ -306,7 +388,7 @@ def update(session: dict, proposal: dict, user_text: str) -> dict:
     else:
         constraint = current.get("hard_constraint")
     answered = answered_keys(facts)
-    repair = proposal.get("repair") or current.get("repair")
+    repair = proposal.get("repair")
     if concern == "pause":
         follow_up = "driver_initiates"
     elif current.get("follow_up") == "driver_initiates" and concern != "pause":
@@ -315,6 +397,26 @@ def update(session: dict, proposal: dict, user_text: str) -> dict:
         follow_up = current.get("follow_up") or "assistant"
     blocker = detect_blocker(session, intent, concern, user_text)
     records = list(current.get("records") or [])
+    if repair == "equip_ambiguous":
+        open_row = open_ambiguity(current, "equipment") or {}
+        records = set_record(
+            records,
+            "ambiguity",
+            "equipment",
+            "active",
+            "Advertised equipment is not the truck on file",
+            extra={
+                "on_file": fact_value(facts, "equipment") or open_row.get("on_file"),
+                "advertised": proposal.get("advertised_equipment") or open_row.get("advertised"),
+                "advertised_length": proposal.get("advertised_length") or open_row.get("advertised_length"),
+            },
+        )
+    elif open_ambiguity(current, "equipment"):
+        if owned_now:
+            records = set_record(records, "ambiguity", "equipment", "resolved", "Driver stated their own equipment")
+            repair = None
+        else:
+            repair = "equip_ambiguous"
     if blocker == "":
         records = set_record(
             records,

@@ -21,7 +21,21 @@ PACKET_HINTS = (
     "certificate of liability",
 )
 IDENTITY_HINTS = ("driver license", "driver licence", "buyer's plate", "plate receipt")
-CHAT_HINTS = ("union", "ezequiel", "moses", "jason chat", "jason chats", "chats", "conversation document")
+CHAT_HINTS = (
+    "union",
+    "ezequiel",
+    "moses",
+    "jason chat",
+    "jason chats",
+    "chats",
+    "conversation document",
+    "message from you",
+    "speaker",
+    "leonardo",
+    "freddie",
+    "fredy",
+    "ray ",
+)
 PII = re.compile(
     r"(\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}"
     r"|[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}"
@@ -41,12 +55,19 @@ def sha256_file(path: Path) -> str:
 
 
 def classify(filename: str, text: str = "") -> str:
-    blob = f"{filename} {text[:800]}".lower()
-    if any(hint in blob for hint in PACKET_HINTS):
-        return "packet"
+    blob = f"{filename} {text[:2000]}".lower()
+    # Conversation structure beats a packet keyword that appears later in the dump.
+    if any(hint in blob for hint in CHAT_HINTS) or re.search(
+        r"message from you,|message from [\d\s+\-().]+,", blob
+    ):
+        return "chat"
     if any(hint in blob for hint in IDENTITY_HINTS):
         return "identity"
-    if any(hint in blob for hint in CHAT_HINTS):
+    if any(hint in blob for hint in PACKET_HINTS) and not re.search(r"\b(driver|sales|prospect)\b", blob[:400]):
+        return "packet"
+    if filename.lower().endswith((".txt", ".md", ".docx")) and re.search(
+        r"\b(i need|i have|loads?|insurance|packet|mc)\b", blob
+    ):
         return "chat"
     return "other"
 
@@ -70,37 +91,40 @@ def _export_body(text: str) -> str:
 
 def extract_turns(text: str) -> list[dict]:
     """Best-effort speaker split for OCR/native chat dumps. Order is preserved."""
+    # Keep short contextual answers ("Si", "35'", "26 pies") — they carry meaning.
+    min_len = 1
+    max_turns = 240
     if re.search(r"message from you,|message from [\d\s+\-().]+,", text or "", re.I):
         turns = []
         for raw in re.split(r"\n+", text or ""):
             line = (raw or "").strip()
-            if len(line) < 8 or SKIP_LINE.match(line):
+            if len(line) < min_len or SKIP_LINE.match(line):
                 continue
             you = EXPORT_YOU.match(line)
             them = EXPORT_THEM.match(line)
             if you:
                 body = strip_pii(_export_body(you.group(1)))
-                if len(body) >= 8:
+                if len(body) >= min_len:
                     turns.append({"role": "sales", "text": body[:400]})
                 continue
             if them:
                 body = strip_pii(_export_body(them.group(1)))
-                if len(body) >= 8:
+                if len(body) >= min_len:
                     turns.append({"role": "driver", "text": body[:400]})
                 continue
-        return turns[:80]
+        return turns[:max_turns]
     turns = []
     for raw in re.split(r"\n+", text or ""):
         line = strip_pii(raw).strip()
-        if len(line) < 8:
+        if len(line) < min_len:
             continue
         if re.search(r"certificate of liability|form w-9|notice of assignment", line, re.I):
             continue
         role = "driver" if not re.search(r"^(hello|hi |got it|perfect|sir,|we |i saw)", line, re.I) else "sales"
-        if re.search(r"\b(i need|i have|i don't|im |i'm |tell him|let's see|too much|sign for)\b", line, re.I):
+        if re.search(r"\b(i need|i have|i don't|im |i'm |tell him|let's see|too much|sign for|si\.?$)\b", line, re.I):
             role = "driver"
         turns.append({"role": role, "text": line[:400]})
-    return turns[:80]
+    return turns[:max_turns]
 
 
 def _rewrite_reply(text: str) -> str | None:

@@ -60,6 +60,41 @@ class Checklist(unittest.TestCase):
                 self.assertNotIn("approved", missing.lower().replace("not approved", ""))
 
 
+class DispatchWorkflowRegister(unittest.TestCase):
+    def test_service_explanation_is_not_a_live_booking(self):
+        text = "What do you actually do for me?"
+        self.assertIn("dispatch_how", plan.detect_topics(text))
+        line = knowledge.lookup("dispatch_how")
+        self.assertIn("You approve each load", line)
+        self.assertIn("isn't a live load search", line.lower())
+        self.assertNotIn("I booked", line)
+
+    def test_approval_sequence_before_booking(self):
+        text = "Do I have to approve each load before you book?"
+        topics = plan.detect_topics(text)
+        self.assertIn("load_approval", topics)
+        line = knowledge.lookup("load_approval")
+        self.assertIn("you approve it", line.lower())
+        self.assertIn("authorized acceptance", line.lower())
+
+    def test_rate_con_is_not_entire_relationship(self):
+        keys = docs.keys_for("What is a rate confirmation?")
+        self.assertIn("docs_rate_con", keys)
+        self.assertIn("docs_rate_con_detail", keys)
+        detail = knowledge.lookup("docs_rate_con_detail")
+        self.assertIn("isn't the whole legal relationship", detail.lower())
+
+    def test_accessorials_and_invoice_paperwork(self):
+        self.assertIn("accessorials", plan.detect_topics("What is detention and TONU?"))
+        self.assertIn("accessorials", docs.keys_for("Explain layover"))
+        self.assertIn("trip_docs_invoice", docs.keys_for("How does paperwork support invoicing after delivery?"))
+
+    def test_onboarding_before_dispatch_copy(self):
+        line = knowledge.lookup("dispatch_vs_onboarding")
+        self.assertIn("Before live dispatch", line)
+        self.assertIn("authority", line.lower())
+
+
 class RegisterRetrieve(unittest.TestCase):
     def test_lexical_finds_w9_template_not_a_packet_file(self):
         from app import embed
@@ -74,3 +109,16 @@ class RegisterRetrieve(unittest.TestCase):
             hits = retrieve.search("taxpayer ID form signature TIN")
         self.assertTrue(hits)
         self.assertEqual(hits[0]["key"], "docs_w9")
+
+    def test_dispatch_how_is_retrievable(self):
+        from app import embed
+
+        with (
+            patch.object(embed, "ensure", return_value={}),
+            patch.object(embed, "embed", return_value=None),
+            patch.object(embed, "get_cached", return_value=None),
+        ):
+            retrieve.build_index()
+            hits = retrieve.search("what does the dispatch team do approve each load")
+        self.assertTrue(hits)
+        self.assertEqual(hits[0]["key"], "dispatch_how")

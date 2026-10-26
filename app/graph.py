@@ -102,25 +102,54 @@ def _clean_facts(items: list | None, user_text: str = "") -> list[dict]:
     return cleaned
 
 
-def _merge_facts(model_facts: list | None, ruled_facts: list | None, user_text: str = "") -> list[dict]:
+def _merge_facts(
+    model_facts: list | None,
+    ruled_facts: list | None,
+    user_text: str = "",
+    current_facts: dict | None = None,
+) -> list[dict]:
     by_key: dict[str, dict] = {}
+    advertised = rules.is_advertised_equipment(user_text)
+    skip_equip = advertised or not rules.owned_equipment_claim(user_text)
+    current_equip = None
+    if isinstance((current_facts or {}).get("equipment"), dict):
+        current_equip = (current_facts or {})["equipment"].get("value")
     for item in _clean_facts(ruled_facts, user_text):
+        if advertised and item["key"] in {"equipment", "trailerLength"}:
+            continue
         by_key[item["key"]] = item
     for item in _clean_facts(model_facts, user_text):
+        if item["key"] in {"equipment", "trailerLength"} and advertised:
+            continue
+        if (
+            item["key"] == "equipment"
+            and current_equip
+            and item.get("value") not in (None, current_equip)
+            and skip_equip
+        ):
+            continue
+        if item["key"] == "trailerLength" and advertised:
+            continue
         if item.get("value") not in (None, False) or item["key"] not in by_key:
             by_key[item["key"]] = item
     return list(by_key.values())
 
 
-def _from_qwen(model: dict, ruled: dict, user_text: str = "") -> dict:
+def _from_qwen(model: dict, ruled: dict, user_text: str = "", current_facts: dict | None = None) -> dict:
     intent = model.get("intent") if model.get("intent") in INTENTS else None
     ruled_intent = ruled["intent"]
-    if intent in {"existing_customer", "decline", "talk_here", "call_me", "human"} and ruled_intent not in {intent}:
+    t = (user_text or "").lower()
+    payment_turn = bool(rules.PAYMENT_ASK.search(user_text or ""))
+    # Model may correctly spot payment support when an older rule misfires (e.g. "please"⊃"lease").
+    if payment_turn and intent == "existing_customer":
+        pass
+    elif intent in {"existing_customer", "decline", "talk_here", "call_me", "human"} and ruled_intent not in {intent}:
         intent = ruled_intent
+    if payment_turn:
+        intent = "existing_customer"
     if not intent or intent == "general":
         intent = ruled_intent
-    t = (user_text or "").lower()
-    fee_turn = ruled_intent == "fee" or bool(re.search(r"what do you charge|percent|\d+\s*%|\bfee\b", t))
+    fee_turn = ruled_intent == "fee" or bool(re.search(r"what do you charge|\bpercent\b|\d+\s*%|\bfees?\b", t))
     guarantee_said = bool(re.search(r"guarantee|weekly gross|\$\s*\d", t))
     if fee_turn and not guarantee_said and intent == "guarantee":
         intent = "fee"
@@ -159,7 +188,9 @@ def _from_qwen(model: dict, ruled: dict, user_text: str = "") -> dict:
         arrangement = "needs_clarification"
     elif repair == "repetition_unverified":
         action = "none"
-    facts = _merge_facts(model.get("facts"), ruled.get("facts"), user_text)
+    facts = _merge_facts(model.get("facts"), ruled.get("facts"), user_text, current_facts)
+    if repair == "equip_ambiguous" or rules.is_advertised_equipment(user_text):
+        facts = [item for item in facts if item["key"] not in {"equipment", "trailerLength"}]
     if repair == "authority_uncertain":
         by_key = {item["key"]: item for item in facts}
         for item in _clean_facts(ruled.get("facts"), user_text):
@@ -186,6 +217,8 @@ def _from_qwen(model: dict, ruled: dict, user_text: str = "") -> dict:
         "conversation_move": move,
         "reply_variant_id": variant,
         "wording": wording,
+        "advertised_equipment": ruled.get("advertised_equipment"),
+        "advertised_length": ruled.get("advertised_length"),
         "_source": "qwen",
     }
 
@@ -235,7 +268,7 @@ async def node_propose(state: TurnState) -> dict:
                 examples=[hit["id"] for hit in hits],
             ),
         }
-    merged = _from_qwen(model, ruled, text)
+    merged = _from_qwen(model, ruled, text, session.get("facts"))
     merged["retrieved"] = hits
     if not merged.get("answer_topics"):
         merged["answer_topics"] = plan.detect_topics(text, merged.get("intent"), None, ruled.get("repair"))
@@ -272,9 +305,13 @@ def node_reduce_facts(state: TurnState) -> dict:
             }
             session["state_version"] += 1
     cancelled = False
+    text = state.get("user_text") or ""
+    skip_equip = proposal.get("repair") == "equip_ambiguous" or rules.is_advertised_equipment(text)
     for item in proposal.get("facts") or []:
         key = item.get("key")
         if key not in FACT_KEYS:
+            continue
+        if skip_equip and key in {"equipment", "trailerLength"}:
             continue
         status = item.get("status") or "user_stated"
         previous = session["facts"].get(key)
@@ -293,15 +330,6 @@ def node_reduce_facts(state: TurnState) -> dict:
             "sourceChannel": session["channel"],
             "version": session["state_version"],
             "previous": {"value": previous["value"], "status": previous["status"]} if previous else None,
-        }
-        session["state_version"] += 1
-    if proposal.get("intent") == "hometime":
-        session["facts"]["supportNeed"] = {
-            "value": "daily_home_time",
-            "status": "user_stated",
-            "sourceChannel": session["channel"],
-            "version": session["state_version"],
-            "previous": session["facts"].get("supportNeed"),
         }
         session["state_version"] += 1
     if cancelled or any(item.get("key") in FACT_KEYS for item in proposal.get("facts") or []):
@@ -377,7 +405,11 @@ def node_knowledge(state: TurnState) -> dict:
 def node_plan(state: TurnState) -> dict:
     session = state["session"]
     proposal = dict(state["proposal"])
-    repair = proposal.get("repair") or rules.detect_repair(state.get("user_text") or "")
+    text = state.get("user_text") or ""
+    mem = session.get("memory") or {}
+    repair = proposal.get("repair") or rules.detect_repair(text)
+    if memory.open_ambiguity(mem, "equipment") and not rules.owned_equipment_claim(text):
+        repair = "equip_ambiguous"
     proposal["repair"] = repair
     mc = fact_value(session["facts"], "mcOwnership")
     if repair == "authority_uncertain":

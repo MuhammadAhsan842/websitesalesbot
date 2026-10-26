@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import re
 
-QWEN_MODEL = os.getenv("QWEN_MODEL", "qwen3.5:2b")
+QWEN_MODEL = os.getenv("QWEN_MODEL", "qwen3.5:0.8b")
 GEMMA_MODEL = os.getenv("GEMMA_MODEL", "gemma4:e2b")
 
 # Gemma 4 E2B is stronger at instruction-following and strategy; Qwen 3.5 2b is calibrated for our JSON extract.

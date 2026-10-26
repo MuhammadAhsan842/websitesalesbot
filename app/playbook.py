@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from app.knowledge import EQUIP_KEYS, lookup
 from app.plan import allow_action_message, topic_lines, validate_plan
 from app.schema import ASK_ORDER, CHIPS, EQUIP_LABELS, FACT_KEYS, QUESTIONS
@@ -55,7 +57,15 @@ def next_ask(facts: dict, memory: dict | None = None, intent: str | None = None,
     mem = memory or {}
     if mem.get("follow_up") == "driver_initiates":
         return None
-    if mem.get("concern") in {"commitment", "net_after_costs", "pause"}:
+    if mem.get("concern") in {
+        "commitment",
+        "net_after_costs",
+        "pause",
+        "payment_support",
+        "insurance_affordability",
+        "packet_progress",
+        "negotiation",
+    }:
         return None
     if repair == "leave_sales" or intent == "existing_customer":
         return None
@@ -268,40 +278,81 @@ def compose(
 
     if episodic:
         parts.append(episodic)
-    if spoken:
-        parts.append(spoken)
 
-    if intent == "existing_customer" or repair == "leave_sales":
-        if not spoken:
-            parts.append(lookup("support"))
+    if intent == "existing_customer" or repair == "leave_sales" or "payment_support" in topics or concern == "payment_support":
+        parts.append(spoken or lookup("payment_support" if concern == "payment_support" or "payment_support" in topics else "support"))
         if receipt:
             parts.append(receipt)
         return " ".join(_dedupe(parts)), CHIPS["handoff"], None
 
     if repair == "email_delivery" or concern == "email_delivery" or "email_delivery" in topics:
-        if not spoken:
-            parts.append(variant_text or lookup("email_delivery"))
+        parts.append(spoken or variant_text or lookup("email_delivery"))
+        return " ".join(_dedupe(parts)), CHIPS["default"], None
+
+    if concern == "insurance_affordability" or (
+        "insurance" in topics and re.search(r"afford|too much|expensive|owner will wait", user_text or "", re.I)
+    ):
+        parts.append(spoken or lookup("insurance_affordability"))
+        return " ".join(_dedupe(parts)), CHIPS["default"], None
+
+    if concern == "packet_progress":
+        parts.append(spoken or lookup("packet_received"))
+        return " ".join(_dedupe(parts)), CHIPS["handoff"], None
+
+    if concern == "missing_equipment":
+        parts.append(spoken or lookup("missing_equipment"))
+        ask = next_ask(facts, mem, intent, repair)
+        if ask and QUESTIONS.get(ask) and not _has_question(" ".join(parts)):
+            parts.append(QUESTIONS[ask])
+        return " ".join(_dedupe(parts)), CHIPS.get(ask) or CHIPS["default"], None
+
+    if concern == "negotiation" or "negotiation" in topics:
+        percent = fact_value(facts, "requestedFeePercent")
+        cap = fact_value(facts, "requestedWeeklyCap")
+        if percent and cap:
+            parts.append(
+                f"You're proposing {percent}% with a ${cap} weekly cap. I can record that for review; it isn't an agreed rate."
+            )
+        elif percent:
+            parts.append(f"You're proposing {percent}%. I can record that for review; it isn't an agreed rate.")
+        else:
+            parts.append(spoken or lookup("negotiation"))
         return " ".join(_dedupe(parts)), CHIPS["default"], None
 
     if repair == "authority_uncertain":
-        if not spoken:
-            parts.append(lookup("mc_new"))
+        parts.append(spoken or lookup("mc_new"))
         ask = "mcOwnership"
         if not _has_question(" ".join(parts)):
             parts.append(QUESTIONS[ask])
         return " ".join(_dedupe(parts)), CHIPS.get(ask) or CHIPS["default"], None
 
     if repair == "equip_ambiguous":
-        current = fact_value(facts, "equipment")
+        row = next(
+            (
+                item
+                for item in (mem.get("records") or [])
+                if item.get("kind") == "ambiguity" and item.get("key") == "equipment" and item.get("status") == "active"
+            ),
+            {},
+        )
+        current = row.get("on_file") or fact_value(facts, "equipment")
+        advertised = row.get("advertised")
         label = EQUIP_LABELS.get(str(current or ""), str(current or "").replace("_", " ")) or "truck on file"
+        if advertised:
+            adv_label = EQUIP_LABELS.get(str(advertised), str(advertised).replace("_", " "))
+            target = f"that advertised {adv_label}"
+        else:
+            target = "that advertised load"
         parts.append(
-            f"Are you asking whether that advertised load could work for your {label}, or do you also have that other truck?"
+            f"Are you asking whether {target} could work for your {label}, or do you also have that other truck?"
         )
         return " ".join(_dedupe(parts)), CHIPS.get("equipment") or CHIPS["default"], None
 
     if "pause" in topics or mem.get("follow_up") == "driver_initiates" or concern == "pause":
-        if not spoken:
-            parts.append(variant_text or lookup("concern_pause"))
+        if re.search(r"next summer|start again|i'?ll let you know", user_text or "", re.I):
+            parts.append(spoken or lookup("deferred"))
+        else:
+            parts.append(spoken or variant_text or lookup("concern_pause"))
         return " ".join(_dedupe(parts)), [], None
 
     if concern == "repetition" or repair == "repetition_unverified":
@@ -310,9 +361,15 @@ def compose(
         parts.append(recorded_line(facts, mem))
 
     answers = topic_lines(topics, arrangement, bits, facts)
-    for line in answers:
-        if line and line not in parts and line != spoken:
-            parts.append(line)
+    ack = spoken if spoken and "?" not in spoken and spoken.count(".") <= 1 else None
+    if answers:
+        if ack:
+            parts.append(ack)
+        for line in answers:
+            if line and line not in parts and line != spoken:
+                parts.append(line)
+    elif spoken:
+        parts.append(spoken)
     for bit in bits or []:
         low = (bit or "").lower()
         if "unverified" in low and any(

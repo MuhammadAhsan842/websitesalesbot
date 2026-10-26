@@ -102,6 +102,39 @@ class PlanContract(unittest.TestCase):
         )
         self.assertIsNone(merged.get("wording"))
 
+    def test_what_do_you_do_explains_dispatch_not_booking(self):
+        text = "What do you actually do for me?"
+        self.assertEqual(plan.detect_topics(text), ["dispatch_how"])
+        validated = plan.validate_plan(
+            text,
+            {"facts": {}, "memory": {"answered": [], "follow_up": "assistant"}},
+            {
+                "intent": "service",
+                "answer_topics": ["dispatch_how"],
+                "wording": "I booked it and payment is processing.",
+                "action": "none",
+            },
+        )
+        self.assertEqual(validated["answer_topics"], ["dispatch_how"])
+        self.assertIsNone(validated["wording"])
+        reply, _, _ = playbook.compose(
+            "service",
+            {},
+            [],
+            None,
+            False,
+            None,
+            "equipment",
+            {"answered": [], "follow_up": "assistant"},
+            wording="I booked it and payment is processing.",
+            plan=validated,
+            user_text=text,
+        )
+        low = reply.lower()
+        self.assertIn("approve each load", low)
+        self.assertNotIn("i booked", low)
+        self.assertNotIn("payment is processing", low)
+
     def test_load_question_is_freight_only(self):
         text = "do we have load in utah?"
         self.assertEqual(plan.detect_topics(text, "freight"), ["freight"])
@@ -163,7 +196,7 @@ class PlanContract(unittest.TestCase):
         from app import rules
 
         items = rules.extract_facts("I have seen your post on facebook you seem to have loads for a 40 feet hotshot")
-        self.assertFalse(any(i["key"] == "equipment" for i in items))
+        self.assertFalse(any(i["key"] in {"equipment", "trailerLength"} for i in items))
         proposal = rules.propose(
             "I have seen your post on facebook you seem to have loads for a 40 feet hotshot",
             facts(equipment="box_truck", mcOwnership="own_mc", operatingArea="utah"),
@@ -183,7 +216,133 @@ class PlanContract(unittest.TestCase):
         )
         self.assertIn("box truck", reply.lower())
         self.assertIn("advertised", reply.lower())
+        self.assertNotIn("your hotshot", reply.lower())
         self.assertNotIn("i will check", reply.lower())
+
+    def test_model_cannot_attribute_advertised_hotshot(self):
+        text = "I have seen your post on facebook you seem to have loads for a 40 feet hotshot"
+        merged = graph._merge_facts(
+            [
+                {"key": "equipment", "value": "hotshot", "status": "user_stated"},
+                {"key": "trailerLength", "value": "40ft", "status": "user_stated"},
+            ],
+            [],
+            text,
+            facts(equipment="box_truck", trailerLength="26ft"),
+        )
+        self.assertFalse(any(item["key"] in {"equipment", "trailerLength"} for item in merged))
+        merged = graph._from_qwen(
+            {
+                "intent": "freight",
+                "facts": [{"key": "equipment", "value": "hotshot"}, {"key": "trailerLength", "value": "40ft"}],
+                "wording": "Checking that hotshot.",
+                "action": "none",
+            },
+            {
+                "intent": "freight",
+                "knowledge_keys": ["freight"],
+                "blocked": [],
+                "facts": [],
+                "repair": "equip_ambiguous",
+            },
+            text,
+            facts(equipment="box_truck", trailerLength="26ft"),
+        )
+        self.assertFalse(any(item["key"] in {"equipment", "trailerLength"} for item in merged["facts"]))
+        self.assertEqual(merged["repair"], "equip_ambiguous")
+
+    def test_operational_claims_need_execution(self):
+        text = "do we have load in utah?"
+        validated = plan.validate_plan(
+            text,
+            {"facts": facts(equipment="box_truck"), "memory": {"answered": ["equipment"], "follow_up": "assistant"}},
+            {
+                "intent": "freight",
+                "answer_topics": ["freight"],
+                "wording": "Let me check available loads for you. Your packet has been sent.",
+                "action": "none",
+            },
+        )
+        self.assertIsNone(validated["wording"])
+        reply, _, _ = playbook.compose(
+            "freight",
+            facts(equipment="box_truck"),
+            [],
+            None,
+            False,
+            None,
+            None,
+            {"answered": ["equipment"], "follow_up": "assistant"},
+            wording="Let me check available loads for you. Your packet has been sent.",
+            plan=validated,
+            user_text=text,
+        )
+        low = reply.lower()
+        self.assertNotIn("packet", low)
+        self.assertNotIn("let me check", low)
+        self.assertNotIn("has been sent", low)
+        self.assertTrue("live load" in low or "load from chat" in low)
+
+    def test_wording_cannot_contradict_own_mc(self):
+        text = "What do you charge?"
+        validated = plan.validate_plan(
+            text,
+            {
+                "facts": facts(mcOwnership="own_mc", equipment="box_truck"),
+                "memory": {"answered": ["mcOwnership", "equipment"], "follow_up": "assistant"},
+            },
+            {
+                "intent": "fee",
+                "answer_topics": ["dispatch_fee"],
+                "wording": "Once we know whether you have your own MC or want to lease on, I can give you the fee.",
+                "action": "none",
+            },
+        )
+        self.assertTrue(not validated["wording"] or "once we know" not in validated["wording"].lower())
+        reply, _, _ = playbook.compose(
+            "fee",
+            facts(mcOwnership="own_mc", equipment="box_truck"),
+            ["For this arrangement, the current own-MC dispatch fee is 8% of gross."],
+            "dispatch_service",
+            False,
+            None,
+            None,
+            {"answered": ["mcOwnership", "equipment"], "follow_up": "assistant", "concern": "total_fees"},
+            wording="Once we know whether you have your own MC or want to lease on, I can give you the fee.",
+            plan=validated,
+            user_text=text,
+        )
+        self.assertNotIn("once we know", reply.lower())
+        self.assertIn("8%", reply)
+
+    def test_hometime_intent_does_not_invent_constraint(self):
+        text = "do we have load in utah?"
+        self.assertEqual(plan.detect_topics(text, "hometime"), ["freight"])
+        validated = plan.validate_plan(
+            text,
+            {"facts": {}, "memory": {"answered": [], "follow_up": "assistant"}},
+            {
+                "intent": "hometime",
+                "answer_topics": ["home_time", "freight"],
+                "action": "none",
+            },
+        )
+        self.assertEqual(validated["answer_topics"], ["freight"])
+        self.assertNotIn("home_time", validated["answer_topics"])
+        reply, _, _ = playbook.compose(
+            "hometime",
+            {},
+            [],
+            None,
+            False,
+            None,
+            "equipment",
+            {"answered": [], "follow_up": "assistant"},
+            plan=validated,
+            user_text=text,
+        )
+        self.assertNotIn("daily home time", reply.lower())
+        self.assertNotIn("hard constraint", reply.lower())
 
 
 class RetrievalJourneys(unittest.TestCase):
@@ -442,3 +601,68 @@ class AfterHoursJourney(unittest.IsolatedAsyncioTestCase):
                     self.assertIn("onboarding manager", ready.json()["text"].lower())
                     self.assertNotIn("emailed", ready.json()["text"].lower())
                     self.assertNotIn("booked", ready.json()["text"].lower())
+
+
+class EquipmentAmbiguityGraph(unittest.IsolatedAsyncioTestCase):
+    async def test_facebook_ad_does_not_create_packet(self):
+        ad = "I have seen your post on facebook you seem to have loads for a 40 feet hotshot"
+
+        def handler(request):
+            payload = json.loads(request.content)
+            user = json.loads(payload["messages"][1]["content"])
+            text = user["text"]
+            body = {"intent": "general", "action": "none"}
+            if "box truck" in text.lower():
+                body = {
+                    "intent": "dispatch_inquiry",
+                    "facts": [
+                        {"key": "equipment", "value": "box_truck"},
+                        {"key": "trailerLength", "value": "26ft"},
+                        {"key": "mcOwnership", "value": "own_mc"},
+                        {"key": "operatingArea", "value": "utah"},
+                    ],
+                }
+            elif "facebook" in text.lower():
+                body = {
+                    "intent": "freight",
+                    "facts": [
+                        {"key": "equipment", "value": "hotshot"},
+                        {"key": "trailerLength", "value": "40ft"},
+                    ],
+                    "wording": "Let me check available loads for you. Your packet has been sent.",
+                    "action": "create_case",
+                    "task": "setup_packet",
+                }
+            elif "ready to start" in text.lower():
+                body = {"intent": "onboard", "action": "create_case", "task": "setup_packet"}
+            return httpx.Response(200, json={"message": {"content": json.dumps(body)}})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as model_client:
+            with (
+                tempfile.TemporaryDirectory() as temporary,
+                patch.object(db, "DB_PATH", Path(temporary) / "test.db"),
+                patch.object(zoho, "access_token", return_value=None),
+                patch.object(retrieve, "search", return_value=[]),
+                patch.object(qwen, "_client", model_client),
+                patch.object(qwen, "_gate", qwen.Admission(qwen.CONFIG)),
+                patch.object(main.app.state, "graph", build_graph(InMemorySaver()), create=True),
+            ):
+                db.init()
+                async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://test") as api:
+                    sid = (await api.post("/v1/session", json={})).json()["session_id"]
+                    await api.post(
+                        "/v1/turn",
+                        json={"session_id": sid, "text": "I run a 26 ft box truck with my own MC in Utah"},
+                    )
+                    ad_reply = await api.post("/v1/turn", json={"session_id": sid, "text": ad})
+                    stored = db.get_session(sid)
+                    self.assertEqual(stored["facts"]["equipment"]["value"], "box_truck")
+                    self.assertEqual(stored["facts"]["trailerLength"]["value"], "26ft")
+                    self.assertIn("box truck", ad_reply.json()["text"].lower())
+                    self.assertNotIn("your hotshot", ad_reply.json()["text"].lower())
+                    self.assertNotIn("packet has been sent", ad_reply.json()["text"].lower())
+                    self.assertIsNone(ad_reply.json().get("case_id"))
+                    ready = await api.post("/v1/turn", json={"session_id": sid, "text": "I'm ready to start"})
+                    self.assertIsNone(ready.json().get("case_id"))
+                    self.assertEqual(db.get_session(sid)["facts"]["equipment"]["value"], "box_truck")
+                    self.assertEqual(db.get_session(sid)["facts"]["trailerLength"]["value"], "26ft")

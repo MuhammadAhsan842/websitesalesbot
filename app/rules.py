@@ -27,6 +27,13 @@ def detect_repair(text: str) -> str | None:
     return None
 
 
+PAYMENT_ASK = re.compile(
+    r"\b(pay\s*me|payme|payment|paid me|where'?s my (money|check|settlement|paycheck)|"
+    r"when (do|will) (i|we) get paid|invoice now|zelle|quick\s*pay)\b",
+    re.I,
+)
+
+
 def detect_intent(text: str) -> str:
     t = text.lower()
     repair = detect_repair(text)
@@ -36,9 +43,12 @@ def detect_intent(text: str) -> str:
         return "fee"
     if repair == "authority_uncertain":
         return "mc_new"
+    # Payment complaints are operations — never match substring "lease" inside "please".
+    if PAYMENT_ASK.search(text or ""):
+        return "existing_customer"
     if re.search(r"(existing|already (a )?carrier|where's my load|where is my load|detention|tonu)", t):
         return "existing_customer"
-    if re.search(r"let you know|not right now|i'?ll think|maybe later", t):
+    if re.search(r"let you know|not right now|i'?ll think|maybe later|next summer", t):
         return "general"
     if re.search(r"(talk here|speak|voice|microphone)", t):
         return "talk_here"
@@ -46,13 +56,16 @@ def detect_intent(text: str) -> str:
         return "call_me"
     if re.search(r"not interested|no thanks|don't call|stop (texting|messaging)|leave me alone", t):
         return "decline"
-    if re.search(r"commit|signing up|am i binding|just (asking|looking|chatting)", t):
+    if re.search(r"sign for nothing|don'?t want to sign|am i binding|just (asking|looking|chatting)|signing up", t):
         return "commit"
     if re.search(r"when do (i|we) get paid|invoice now|pay after|payment timing", t):
         return "fee"
     if re.search(r"other dispatcher|leo dispatch|match (their|his) (rate|percent)|cheaper than (them|leo)", t):
         return "fee"
-    if re.search(r"(fee|percent|%|charge|cost|how much|expensive|too much|cheaper)", t):
+    if re.search(
+        r"\bfees?\b|\bpercent\b|%|\bcharge\b|\bcost\b|how much|expensive|too much|\bcheaper\b",
+        t,
+    ):
         return "fee"
     if re.search(r"(guarantee|earn|\$\d|weekly gross)", t):
         return "guarantee"
@@ -63,7 +76,7 @@ def detect_intent(text: str) -> str:
         t,
     ):
         return "freight"
-    if "fuel card" in t:
+    if "fuel card" in t or re.search(r"\bfuel advance\b", t):
         return "fuel"
     if re.search(r"trust|scam|legit", t):
         return "trust"
@@ -73,15 +86,15 @@ def detect_intent(text: str) -> str:
         return "human"
     if re.search(r"document|packet|onboard|ready to start|get started|i'm ready|how do i start", t):
         return "onboard"
-    if re.search(r"new mc|pending (mc|authority)|authority is new", t):
+    if re.search(r"new mc|pending (mc|authority)|authority is new|\bi('?m| am) new\b|brand new (mc|authority)", t):
         return "mc_new"
-    if "lease" in t:
+    if re.search(r"\blease(-?on)?\b", t):
         return "lease"
     if re.search(r"\bmc\b|authority", t):
         return "mc"
-    if re.search(r"(what (trucks|equipment)|do you (haul|dispatch|support))", t):
+    if re.search(r"(what (trucks|equipment)|do you (haul|dispatch|support)|packages or pallets)", t):
         return "service"
-    if re.search(r"status|approved yet", t):
+    if re.search(r"status|approved yet|dispatcher'?s name|waiting on you", t):
         return "status"
     if re.search(r"don'?t know|not sure yet|unknown|skip that", t):
         return "unknown_detail"
@@ -95,18 +108,46 @@ AD_LOAD = re.compile(
     re.I,
 )
 OWNED_TRUCK = re.compile(r"\bmy\b.{0,32}(reefer|dry van|flatbed|box truck|hotshot|\bbox\b)", re.I)
+EQUIP_WORD = re.compile(r"reefer|dry van|flatbed|box truck|hotshot|\bbox\b", re.I)
+OWNED_CLAIM = re.compile(
+    r"\bi (run|have|drive|got) (a |my )?(reefer|dry van|flatbed|box truck|hotshot|\bbox\b)",
+    re.I,
+)
+
+
+def normalize_equip(raw: str | None) -> str | None:
+    if not raw:
+        return None
+    value = raw.lower().replace(" ", "_")
+    return "box_truck" if value == "box" else value
+
+
+def is_advertised_equipment(text: str) -> bool:
+    return bool(AD_LOAD.search(text or "")) and not OWNED_TRUCK.search(text or "")
+
+
+def advertised_mention(text: str) -> tuple[str | None, str | None]:
+    if not is_advertised_equipment(text):
+        return None, None
+    mentioned = EQUIP_WORD.search(text or "")
+    length = re.search(r"(\d+)\s*(?:-)?\s*(?:ft|foot|feet)\b", (text or "").lower())
+    eq = normalize_equip(mentioned.group(0) if mentioned else None)
+    ln = f"{length.group(1)}ft" if length else None
+    return eq, ln
+
+
+def owned_equipment_claim(text: str) -> bool:
+    t = text or ""
+    return bool(OWNED_TRUCK.search(t) or OWNED_CLAIM.search(t))
 
 
 def extract_facts(text: str) -> list[dict]:
     t = text.lower()
     items = []
-    equip = re.search(r"reefer|dry van|flatbed|box truck|hotshot|\bbox\b", t)
-    advertised = bool(AD_LOAD.search(text)) and not OWNED_TRUCK.search(text)
+    equip = EQUIP_WORD.search(t)
+    advertised = is_advertised_equipment(text)
     if equip and not advertised:
-        value = equip.group(0).replace(" ", "_")
-        if value == "box":
-            value = "box_truck"
-        items.append({"key": "equipment", "value": value, "status": "user_stated"})
+        items.append({"key": "equipment", "value": normalize_equip(equip.group(0)), "status": "user_stated"})
     words = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "a": 1}
     count = re.search(
         r"(\d+|one|two|three|four|five|six|a)\s+(?:box\s+|dry\s+|flatbed\s+|reefer\s+|hotshot\s+)?(trucks?|reefers?|vans?|hotshots?)",
@@ -123,7 +164,9 @@ def extract_facts(text: str) -> list[dict]:
     ):
         items.append({"key": "mcOwnership", "value": "unclear", "status": "user_stated"})
         items.append({"key": "requestedArrangement", "value": "needs_clarification", "status": "user_stated"})
-    elif re.search(r"(own mc|my own mc|have (an? )?mc)", t) and not re.search(r"new mc|pending|authority is ready", t):
+    elif re.search(r"(own mc|my own mc|have (an? )?mc|my mc (is|has|was)|mc is \d)", t) and not re.search(
+        r"new mc|pending|authority is ready|i am new|i'm new", t
+    ):
         items.append({"key": "mcOwnership", "value": "own_mc", "status": "user_stated"})
         items.append({"key": "requestedArrangement", "value": "dispatch_service", "status": "user_stated"})
     elif re.search(r"my authority", t) and not re.search(r"ready|pending|new mc", t):
@@ -132,34 +175,65 @@ def extract_facts(text: str) -> list[dict]:
     if re.search(r"(no mc|don'?t have.*mc|lease on|lease-on)", t):
         items.append({"key": "mcOwnership", "value": "no_own_mc", "status": "user_stated"})
         items.append({"key": "requestedArrangement", "value": "lease_on", "status": "user_stated"})
-    if re.search(r"(pending|not sure|unsure|another company|new mc)", t) and re.search(r"\bmc\b|authority", t):
+    if re.search(r"\bi('?m| am) new\b|new to (this|dispatch|trucking)|brand new mc|just got (my )?mc", t) or (
+        re.search(r"(pending|not sure|unsure|another company|new mc)", t) and re.search(r"\bmc\b|authority", t)
+    ):
         items.append({"key": "mcOwnership", "value": "unclear", "status": "user_stated"})
         items.append({"key": "requestedArrangement", "value": "needs_clarification", "status": "user_stated"})
     area = re.search(
-        r"midwest|southeast|northeast|southwest|west coast|texas|california|georgia|florida|"
-        r"dallas|houston|atlanta|chicago|irving|utah|new jersey|\bnj\b|jersey",
+        r"midwest|southeast|northeast|southwest|west coast|southern states|texas|california|georgia|florida|"
+        r"dallas|houston|atlanta|chicago|irving|utah|michigan|new jersey|\bnj\b|jersey",
         t,
         re.I,
     )
     if area:
-        value = area.group(0).lower().replace("new jersey", "nj")
+        value = area.group(0).lower().replace("new jersey", "nj").replace("southern states", "southern_states")
         if value in {"jersey"}:
             value = "nj"
         items.append({"key": "operatingArea", "value": value, "status": "user_stated"})
         items.append({"key": "lanes", "value": value, "status": "user_stated"})
-    length = re.search(r"(\d+)\s*(?:-)?\s*(?:ft|foot|feet)\b", t)
-    if length:
+    # "pies" = feet in Spanish length answers (e.g. "26 pies").
+    length = re.search(r"(\d+)\s*(?:-)?\s*(?:ft|foot|feet|pies)\b", t)
+    if length and not advertised:
         items.append({"key": "trailerLength", "value": f"{length.group(1)}ft", "status": "user_stated"})
     payload = re.search(r"(?:payload|weigh(?:t|s)|haul)\s*(?:of\s*)?(\d[\d,]*)\s*(lb|lbs|pound)", t) or re.search(
         r"(\d[\d,]*)\s*(lb|lbs|pounds)\s*(?:payload)?", t
     )
-    if payload:
+    preferred = re.search(
+        r"(?:about |around |prefer(?:ring)? |want(?:ing)? |can (?:do|haul) )?(\d[\d,]*)\s*(?:-|to|–)\s*(\d[\d,]*)\s*(lb|lbs|pounds)?",
+        t,
+    )
+    rejected_load = bool(re.search(r"too much|can'?t (haul|take|do)|over (my|the)|not for my|exceed", t))
+    if preferred and preferred.group(2).isdigit():
+        items.append(
+            {
+                "key": "preferredPayload",
+                "value": f"{preferred.group(1).replace(',', '')}-{preferred.group(2).replace(',', '')}",
+                "status": "user_stated",
+            }
+        )
+    elif payload and rejected_load:
+        items.append(
+            {
+                "key": "rejectedLoadWeight",
+                "value": payload.group(1).replace(",", ""),
+                "status": "user_stated",
+            }
+        )
+    elif payload:
         items.append({"key": "payload", "value": payload.group(1).replace(",", ""), "status": "user_stated"})
     if re.search(r"liftgate", t):
         items.append({"key": "liftgate", "value": "yes" if not re.search(r"no liftgate|without liftgate", t) else "no", "status": "user_stated"})
-    if re.search(r"need insurance|no insurance|don'?t have insurance|looking for insurance", t):
+    if re.search(
+        r"insurance (costs?|is )?(too much|expensive|afford)|can'?t afford insurance|owner will wait",
+        t,
+    ):
         items.append({"key": "insurance", "value": "needs_insurance", "status": "user_stated"})
-    elif re.search(r"have (my |our )?(own )?insurance|i('m| am) insured|got insurance", t):
+    elif re.search(r"need insurance|no insurance|don'?t have insurance|looking for insurance", t):
+        items.append({"key": "insurance", "value": "needs_insurance", "status": "user_stated"})
+    elif re.search(r"have (my |our )?(own )?insurance|i('m| am) insured|got insurance", t) and not re.search(
+        r"need liability|need cargo|only physical", t
+    ):
         items.append({"key": "insurance", "value": "own_insurance", "status": "user_stated"})
     if re.search(r"monday through friday|mon(day)?\s*(to|-|through)\s*fri|weekdays", t):
         items.append({"key": "weekdaySchedule", "value": "monday_friday", "status": "user_stated"})
@@ -208,6 +282,13 @@ def extract_facts(text: str) -> list[dict]:
         items.append({"key": "name", "value": name.group(1).strip(), "status": "confirmed"})
     if re.search(r"don'?t know|not sure yet|unknown|skip that", t):
         items.append({"key": "_unknown", "value": True, "status": "unknown"})
+    # Customer counteroffer — recorded for review, never auto-accepted as the live fee.
+    offer = re.search(r"(\d+(?:\.\d+)?)\s*%", t)
+    cap = re.search(r"\$?\s*(\d[\d,]*)\s*(?:weekly|week)?\s*cap", t)
+    if offer and re.search(r"%|percent|cap|you pay|i (want|need|propose)", t):
+        items.append({"key": "requestedFeePercent", "value": offer.group(1), "status": "user_stated"})
+    if cap:
+        items.append({"key": "requestedWeeklyCap", "value": cap.group(1).replace(",", ""), "status": "user_stated"})
     return items
 
 
@@ -242,26 +323,52 @@ def knowledge_for(
         "talk_here": ["talk_here"],
         "call_me": ["call_me"],
         "existing_customer": ["support"],
-        "hometime": ["home_time"],
         "lease": ["lease"],
         "mc": ["own_mc"],
         "mc_new": ["mc_new"],
-        "onboard": ["onboarding"],
+        "onboard": ["onboarding", "dispatch_vs_onboarding"],
         "trust": ["trust"],
-        "commit": ["commit"],
+        "commit": ["concern_commitment", "commit"],
         "email_delivery": ["email_delivery"],
         "decline": ["commit"],
-        "dispatch_inquiry": ["services"],
+        "dispatch_inquiry": ["services", "dispatch_how"],
         "status": ["docs_status"],
+        "freight": ["freight", "load_evaluate", "loads_after_onboarding"],
     }
     keys.extend(mapping.get(intent, []))
     t = (text or "").lower()
-    if re.search(r"better loads?|empty miles|keep(ing)? (me |the truck )?loaded", t):
-        keys.append("freight")
+    if PAYMENT_ASK.search(text or ""):
+        keys = ["payment_support", "support", "trip_docs_invoice"]
+    if re.search(
+        r"what do you (actually )?do( for me)?|how (does |do )?(dispatch|your (service|dispatch)) work|"
+        r"what (does|do) (a |the )?dispatcher|explain dispatch",
+        t,
+    ):
+        keys.extend(["dispatch_how", "dispatch_vs_onboarding", "load_approval"])
+    if re.search(r"approve (each |every |the )?load|rate confirmation|who (signs|books)", t):
+        keys.extend(["load_approval", "docs_rate_con_detail"])
+    if re.search(r"\bdetention\b|\blayover\b|\btonu\b|accessorial", t):
+        keys.append("accessorials")
+    if re.search(r"home every night|daily home time|\bhome time\b", t):
+        keys.append("home_time")
+    if re.search(r"insurance (costs?|is )?(too much|expensive|afford)|can'?t afford insurance|owner will wait", t):
+        keys.append("insurance_affordability")
+    if re.search(r"i received (it|the packet)|received the packet|send it tomorrow", t):
+        keys.append("packet_received")
+    if re.search(r"\d+\s*%|weekly cap|take it off the first delivery", t):
+        keys.extend(["negotiation", "broker_vs_fee"])
+    if re.search(r"need a trailer|buying (a |the )?truck|don'?t have (a )?trailer", t):
+        keys.append("missing_equipment")
+    if re.search(r"next summer|i'?ll start again", t):
+        keys.append("deferred")
+    if re.search(r"sign for nothing|don'?t want to sign", t):
+        keys.append("concern_commitment")
+    if re.search(r"better loads?|empty miles|keep(ing)? (me |the truck )?loaded|deadhead", t):
+        keys.extend(["freight", "load_evaluate"])
     if re.search(r"other dispatcher|leo dispatch|competitor", t):
         keys.append("competitor")
     if re.search(r"invoice|pay after|when.{0,20}paid|payment timing", t):
-        keys.append("payment_timing")
+        keys.extend(["payment_timing", "trip_docs_invoice"])
     from app import docs as docmod
 
     for key in docmod.keys_for(text, arrangement):
@@ -311,18 +418,17 @@ def task_for(arrangement: str | None, intent: str) -> str | None:
 def propose(text: str, facts: dict, memory: dict | None = None) -> dict:
     from app import plan as planmod
 
+    from app import memory as memmod
+
     intent = detect_intent(text)
     repair = detect_repair(text)
     items = extract_facts(text)
     current_equip = facts.get("equipment", {}).get("value") if isinstance(facts.get("equipment"), dict) else None
-    mentioned = re.search(r"reefer|dry van|flatbed|box truck|hotshot|\bbox\b", text, re.I)
-    advertised = bool(AD_LOAD.search(text)) and not OWNED_TRUCK.search(text)
-    if advertised and mentioned and current_equip:
-        ad_value = mentioned.group(0).lower().replace(" ", "_")
-        if ad_value == "box":
-            ad_value = "box_truck"
-        if ad_value != current_equip:
-            repair = "equip_ambiguous"
+    ad_value, ad_length = advertised_mention(text)
+    if ad_value and current_equip and ad_value != current_equip:
+        repair = "equip_ambiguous"
+    elif memmod.open_ambiguity(memory, "equipment") and not owned_equipment_claim(text):
+        repair = "equip_ambiguous"
     blocked = blocked_from_text(text)
     preview = dict(facts)
     for item in items:
@@ -346,6 +452,9 @@ def propose(text: str, facts: dict, memory: dict | None = None) -> dict:
         action = "create_case"
     if repair == "authority_uncertain":
         action = "none"
+    if repair == "equip_ambiguous":
+        action = "none"
+        ask = None
     if repair == "repetition_unverified":
         blocked.append("insurance_approved")
     return {
@@ -362,6 +471,8 @@ def propose(text: str, facts: dict, memory: dict | None = None) -> dict:
         "action": action,
         "task": task_for(arrangement, intent),
         "repair": repair,
+        "advertised_equipment": ad_value,
+        "advertised_length": ad_length,
         "answer_topics": planmod.detect_topics(text, intent, None, repair),
         "_source": "rules",
     }

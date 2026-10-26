@@ -14,19 +14,38 @@ TOPIC_KEYS = {
     "commitment": ("commit", "concern_commitment"),
     "guarantee": ("guarantee",),
     "home_time": ("home_time",),
-    "services": ("services",),
-    "onboarding": ("onboarding",),
+    "services": ("services", "dispatch_how", "dispatch_vs_onboarding"),
+    "onboarding": ("onboarding", "dispatch_vs_onboarding"),
     "own_mc": ("own_mc",),
     "lease": ("lease",),
     "support": ("support",),
     "email_delivery": ("email_delivery",),
-    "docs_status": ("docs_own", "docs_lease", "docs_w9", "docs_coi", "docs_noa", "docs_packet", "docs_status"),
+    "docs_status": (
+        "docs_own",
+        "docs_lease",
+        "docs_w9",
+        "docs_coi",
+        "docs_noa",
+        "docs_packet",
+        "docs_status",
+        "docs_rate_con",
+        "docs_rate_con_detail",
+        "docs_bol",
+        "docs_pod",
+        "trip_docs_invoice",
+    ),
     "competitor": ("competitor",),
     "net_after_costs": ("concern_net",),
     "talk_here": ("talk_here",),
     "call_me": ("call_me",),
-    "pause": ("concern_pause",),
-    "freight": ("freight",),
+    "pause": ("concern_pause", "deferred"),
+    "freight": ("freight", "load_evaluate", "loads_after_onboarding"),
+    "payment_support": ("payment_support", "support", "trip_docs_invoice"),
+    "insurance": ("insurance", "insurance_affordability"),
+    "negotiation": ("negotiation", "broker_vs_fee"),
+    "dispatch_how": ("dispatch_how", "dispatch_vs_onboarding", "services"),
+    "load_approval": ("load_approval", "docs_rate_con_detail"),
+    "accessorials": ("accessorials",),
 }
 
 FALSE_SUCCESS = re.compile(
@@ -36,6 +55,31 @@ FALSE_SUCCESS = re.compile(
     r"update you shortly|i will update you)\b",
     re.I,
 )
+
+# Workflow claims belong to execute(), not to a draft. Phrase lists are a backstop.
+OPERATIONAL_CLAIM = re.compile(
+    r"(?:"
+    r"\b(?:let me|let us|i(?:'ll| will| am|'m)|we(?:'ll| will))\b.{0,60}\b(?:check|look(?:\s+up)?|search|find|pull|send|email|book|assign|create)\b|"
+    r"\b(?:checking|looking up|searching|sending|emailing)\b.{0,40}\b(?:load|availability|packet|document|email|freight)\b|"
+    r"\b(?:packet|documents?|papers?|email|setup)\b.{0,40}\b(?:sent|emailed|received|filed|delivered)\b|"
+    r"\b(?:sent|emailed|received|filed|delivered)\b.{0,40}\b(?:packet|documents?|papers?|email)\b|"
+    r"\b(?:case|ticket|deal)\b.{0,30}\b(?:created|opened|assigned|logged)\b|"
+    r"\b(?:booked|dispatched|found (?:a |the )?load|have (?:a |the )?load for you|available loads for you)\b|"
+    r"\bi (?:booked|changed|updated|processed)\b|"
+    r"\b(?:appointment (?:is |was )?(?:changed|updated)|payment is processing|payment (?:has been|was) (?:sent|processed))\b|"
+    r"\byou(?:'re| are) (?:approved|eligible|set up|onboarded)\b"
+    r")",
+    re.I,
+)
+
+MC_UNKNOWN_TALK = re.compile(
+    r"once we know.{0,80}(?:own mc|lease)|whether you (?:have|keep|want).{0,40}(?:own mc|lease)|"
+    r"do you currently have your own mc|if you(?:'re| are) keeping your own mc or leasing|"
+    r"once we know if you(?:'re| are) keeping your own mc",
+    re.I,
+)
+
+HOME_TIME_ASKED = re.compile(r"home every night|daily home time|\bhome time\b", re.I)
 
 PACKET_SLOTS = ("equipment", "mcOwnership", "operatingArea")
 
@@ -61,7 +105,7 @@ def detect_topics(text: str, intent: str | None = None, concern: str | None = No
         add("pause")
         return topics
     if intent == "fee" or concern == "total_fees" or re.search(
-        r"what do you charge|how much (do you|is the)|percent|\bfee\b|total fees?",
+        r"what do you charge|how much (do you|is the)|\bpercent\b|\bfees?\b|total fees?",
         t,
     ):
         add("dispatch_fee")
@@ -72,7 +116,7 @@ def detect_topics(text: str, intent: str | None = None, concern: str | None = No
         add("commitment")
     if intent == "guarantee" or concern == "guarantee" or re.search(r"guarantee|weekly gross", t):
         add("guarantee")
-    if intent == "hometime" or concern == "home_time" or re.search(r"home every night|daily home time", t):
+    if HOME_TIME_ASKED.search(t):
         add("home_time")
     if concern == "net_after_costs" or re.search(r"after (fuel|fees|costs)|what'?s left|net (pay|after)|take[- ]home", t):
         add("net_after_costs")
@@ -82,20 +126,57 @@ def detect_topics(text: str, intent: str | None = None, concern: str | None = No
         t,
     ):
         add("freight")
-    if intent == "service" or re.search(r"what (equipment|do you (dispatch|support|haul))", t):
+    if re.search(
+        r"what do you (actually )?do( for me)?|how (does |do )?(dispatch|your (service|dispatch)) work|"
+        r"what (does|do) (a |the )?dispatcher|explain dispatch|how (do )?you (find|book|get) loads?",
+        t,
+    ):
+        add("dispatch_how")
+    elif intent == "service" or re.search(r"what (equipment|do you (dispatch|support|haul))", t):
         add("services")
+    if re.search(
+        r"approve (each |every |the )?load|load approval|do i (have to |need to )?approve|"
+        r"who (signs|books)|sign(s|ing)? the rate (con|confirmation)|rate confirmation|"
+        r"before (you |they )?book",
+        t,
+    ):
+        add("load_approval")
+    if re.search(r"\bdetention\b|\blayover\b|\btonu\b|accessorial", t):
+        add("accessorials")
+    if re.search(r"\b(bol|b\.?o\.?l\.?|bill of lading|pod|proof of delivery)\b", t):
+        add("docs_status")
     if intent == "talk_here":
         add("talk_here")
     if intent == "call_me":
         add("call_me")
+    if intent == "existing_customer" or re.search(
+        r"\b(pay\s*me|payme|payment|paid me|where'?s my (money|check|settlement)|waiting on you)\b",
+        t,
+    ):
+        if re.search(r"pay|payment|invoice|money|settlement|check|zelle", t):
+            add("payment_support")
+            return topics
+    if re.search(
+        r"insurance (costs?|is )?(too much|expensive|afford)|can'?t afford insurance|owner will wait|"
+        r"need liability|need cargo|only physical",
+        t,
+    ):
+        add("insurance")
+    if re.search(r"\d+\s*%|weekly cap|take it off the first delivery", t) and not re.search(
+        r"leo dispatch|silver arrow|\batl\b", t
+    ):
+        add("negotiation")
     if re.search(r"leo dispatch|silver arrow|\batl\b|like \d+\s*%", t):
         add("competitor")
     if re.search(
         r"which (papers|docs|documents)|what (papers|documents|do i (send|need))|w-?9|\bcoi\b|"
-        r"notice of assignment|\bnoa\b|setup packet|voided check",
+        r"notice of assignment|\bnoa\b|setup packet|voided check|usdot|\bmc authority|bill of lading|"
+        r"\bbol\b|rate conf|proof of delivery|\bpod\b|\bifta\b|\beld\b|power of attorney",
         t,
     ):
         add("docs_status")
+    if re.search(r"i received (it|the packet)|received the packet|send it tomorrow", t):
+        add("onboarding")
     return topics
 
 
@@ -103,6 +184,20 @@ def _slot_filled(facts: dict, key: str, answered: set[str]) -> bool:
     if key in answered:
         return True
     return fact_value(facts, key) not in (None, "", False)
+
+
+def _topic_permitted(topic: str, user_text: str, facts: dict) -> bool:
+    """Intent labels do not create driver facts. Home-time copy requires a home-time ask."""
+    if topic == "home_time":
+        return bool(HOME_TIME_ASKED.search(user_text or ""))
+    return True
+
+
+def _open_equipment_ambiguity(mem: dict | None) -> bool:
+    return any(
+        row.get("kind") == "ambiguity" and row.get("key") == "equipment" and row.get("status") == "active"
+        for row in ((mem or {}).get("records") or [])
+    )
 
 
 def validate_plan(user_text: str, session: dict, proposal: dict) -> dict:
@@ -115,15 +210,21 @@ def validate_plan(user_text: str, session: dict, proposal: dict) -> dict:
     repair = proposal.get("repair")
     concern = mem.get("concern") or memory.detect_concern(user_text, intent)
     answered = set(mem.get("answered") or [])
-    required = detect_topics(user_text, intent, concern, repair)
+    required = [
+        topic
+        for topic in detect_topics(user_text, intent, concern, repair)
+        if _topic_permitted(topic, user_text, facts)
+    ]
     proposed = [topic for topic in (proposal.get("answer_topics") or []) if topic in ANSWER_TOPICS]
     # Allowed is not the same as asked. This message's topics win; do not dump the catalogue.
-    topics = list(dict.fromkeys(required)) if required else []
+    topics = [topic for topic in dict.fromkeys(required) if _topic_permitted(topic, user_text, facts)]
     fallbacks: list[str] = []
     if required and proposed and set(proposed) - set(required):
         fallbacks.append("extra_topics")
     elif not required and proposed:
         fallbacks.append("topics")
+    if proposal.get("answer_topics") and "home_time" in (proposal.get("answer_topics") or []) and "home_time" not in topics:
+        fallbacks.append("unsupported_home_time")
 
     next_q = proposal.get("next_question_id") or proposal.get("next_field")
     if next_q not in QUESTIONS:
@@ -159,6 +260,13 @@ def validate_plan(user_text: str, session: dict, proposal: dict) -> dict:
         topics = []
         next_q = None
         action = "none"
+        fallbacks.append("equip_ambiguous")
+    elif _open_equipment_ambiguity(mem) and (action == "create_case" or intent == "onboard"):
+        topics = []
+        next_q = None
+        action = "none"
+        repair = "equip_ambiguous"
+        fallbacks.append("equip_ambiguous")
     elif repair == "repetition_unverified":
         action = "none"
 
@@ -195,6 +303,9 @@ def validate_plan(user_text: str, session: dict, proposal: dict) -> dict:
         if task not in CATALOGUE:
             action = "none"
             fallbacks.append("unspecified_task")
+        elif repair == "equip_ambiguous" or _open_equipment_ambiguity(mem):
+            action = "none"
+            fallbacks.append("equip_ambiguous")
         elif task in {"setup_packet", "lease_agreement"} and any(not fact_value(facts, key) for key in PACKET_SLOTS):
             action = "none"
             fallbacks.append("underspecified_packet")
@@ -216,7 +327,12 @@ def validate_plan(user_text: str, session: dict, proposal: dict) -> dict:
     elif not move:
         move = "answer" if driver_asked else ("qualify" if next_q else "acknowledge")
 
-    wording = _scrub_wording(proposal.get("wording") if isinstance(proposal.get("wording"), str) else None)
+    wording = _scrub_wording(
+        proposal.get("wording") if isinstance(proposal.get("wording"), str) else None,
+        facts,
+        answered,
+        saved=False,
+    )
     if proposal.get("wording") and wording != (proposal.get("wording") or "").strip():
         fallbacks.append("wording")
 
@@ -248,14 +364,33 @@ def _freight_line(facts: dict) -> str:
     return lookup("freight")
 
 
-def _scrub_wording(text: str | None) -> str | None:
+def _scrub_wording(
+    text: str | None,
+    facts: dict | None = None,
+    answered: set[str] | None = None,
+    saved: bool = False,
+) -> str | None:
     if not text:
         return None
+    facts = facts or {}
+    answered = answered or set()
     kept = []
     for sentence in re.split(r"(?<=[.!?])\s+", text.strip()):
-        if FALSE_SUCCESS.search(sentence):
+        bit = sentence.strip()
+        if not bit:
             continue
-        kept.append(sentence.strip())
+        if not saved and (FALSE_SUCCESS.search(bit) or OPERATIONAL_CLAIM.search(bit)):
+            continue
+        if fact_value(facts, "mcOwnership") in {"own_mc", "no_own_mc"} and MC_UNKNOWN_TALK.search(bit):
+            continue
+        skip_question = False
+        for key, question in QUESTIONS.items():
+            if _slot_filled(facts, key, answered) and question.lower().rstrip("?") in bit.lower():
+                skip_question = True
+                break
+        if skip_question:
+            continue
+        kept.append(bit)
     line = " ".join(part for part in kept if part).strip()
     return line or None
 
@@ -290,6 +425,11 @@ def topic_lines(topics: list[str], arrangement: str | None, bits: list[str], fac
             else:
                 lines.append(_freight_line(facts))
             continue
+        if topic == "home_time":
+            if fact_value(facts, "supportNeed") != "daily_home_time":
+                continue
+            lines.append(lookup("home_time"))
+            continue
         keys = TOPIC_KEYS.get(topic) or ()
         picked = next((bit for bit in remaining if any(token.replace("_", " ") in bit.lower() for token in keys)), None)
         if picked:
@@ -303,6 +443,6 @@ def topic_lines(topics: list[str], arrangement: str | None, bits: list[str], fac
 def allow_action_message(message: str | None, saved: bool) -> bool:
     if not message:
         return False
-    if FALSE_SUCCESS.search(message) and not saved:
+    if not saved and (FALSE_SUCCESS.search(message) or OPERATIONAL_CLAIM.search(message)):
         return False
     return True
