@@ -57,13 +57,32 @@ class ApproveGate(unittest.TestCase):
                 db.init()
                 case = _case()
                 requirements.issue(case["id"], "setup_packet", facts={})
+                file_ids = {}
                 for doc_type, _ in requirements.catalog_for("setup_packet", {}):
-                    requirements.receive(case["id"], doc_type, f"file_{doc_type}", "received")
+                    row = db.add_case_file(
+                        case["id"],
+                        {
+                            "doc_type": doc_type,
+                            "filename": f"{doc_type}.pdf",
+                            "flags": [],
+                            "extracted": {},
+                            "status": "received",
+                        },
+                        f"/tmp/{doc_type}.pdf",
+                    )
+                    file_ids[doc_type] = row["id"]
+                    requirements.receive(case["id"], doc_type, row["id"], "received")
                 db.acknowledge_case_files(case["id"])
                 ready, _ = requirements.ready_for_handoff(case["id"])
                 self.assertFalse(ready)
                 for doc_type, _ in requirements.catalog_for("setup_packet", {}):
-                    requirements.decide(case["id"], doc_type, "approve", reviewer="Staff desk", file_id=f"file_{doc_type}")
+                    requirements.decide(
+                        case["id"],
+                        doc_type,
+                        "approve",
+                        reviewer="Staff desk",
+                        file_id=file_ids[doc_type],
+                    )
                 ready, blockers = requirements.ready_for_handoff(case["id"])
                 self.assertTrue(ready)
                 self.assertEqual(blockers, [])

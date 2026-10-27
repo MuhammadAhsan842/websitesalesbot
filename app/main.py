@@ -392,7 +392,13 @@ async def upload_attachment(session_id: str, background: BackgroundTasks, file: 
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_bytes(await file.read())
     case = _ensure_onboarding_case(session)
+    # Persist case linkage before any reload; a DB reload must not wipe case_id.
+    session["case_id"] = case["id"]
+    db.save_session(session)
     session = db.get_session(session_id) or session
+    if not session.get("case_id"):
+        session["case_id"] = case["id"]
+        db.save_session(session)
     result = await asyncio.to_thread(media.process, dest, session_id, case.get("id"), False)
     att_id = result.get("id")
     attachment = result.get("attachment") or (db.get_attachment(att_id) if att_id else None)
@@ -415,6 +421,7 @@ async def upload_attachment(session_id: str, background: BackgroundTasks, file: 
     if queue_vision:
         background.add_task(_interpret_later, att_id)
     db.add_message(session_id, "user", f"[attachment] {file.filename}")
+    session["case_id"] = case["id"]
     db.save_session(session)
     receipt = lookup("docs_review_pending") if case_file else lookup("photo_unverified")
     return {

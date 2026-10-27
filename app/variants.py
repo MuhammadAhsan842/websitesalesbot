@@ -14,7 +14,7 @@ VARIANT_KEYS = {
     "repair_repetition": "concern_repetition",
     "pause": "concern_pause",
     "clarify_mc": "mc_new",
-    "qualify_next": "welcome",
+    "qualify_next": None,  # Never replay the sales greeting mid-conversation.
     "offer_handoff": "next_invite",
     "route_operations": "support",
     "ack_constraints": "home_time",
@@ -26,7 +26,9 @@ def text_for(variant_id: str | None) -> str | None:
     if variant_id not in VARIANTS:
         return None
     key = VARIANT_KEYS.get(variant_id)
-    return lookup(key) if key else None
+    if not key:
+        return None
+    return lookup(key)
 
 
 def default_move(intent: str | None, repair: str | None, concern: str | None, next_field: str | None) -> str:

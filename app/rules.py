@@ -391,10 +391,15 @@ def extract_facts(text: str) -> list[dict]:
         items.append({"key": "weekdaySchedule", "value": "monday_friday", "status": "user_stated"})
     elif re.search(r"home weekends|weekends? home|flexible schedule", t):
         items.append({"key": "weekdaySchedule", "value": "flexible", "status": "user_stated"})
-    miles = re.search(r"(\d{2,4})\s*(?:-|to)\s*(\d{2,4})(?:\s*miles)?", t) or re.search(
+    miles = re.search(r"(\d{2,4})\s*(?:-|to)\s*(\d{2,4})\s*miles(?:\s+(a|per)\s+day)?", t) or re.search(
         r"(\d{2,4})\s*miles (a|per) day", t
     )
-    if miles:
+    # Do not treat bare "7000 to 7500" as mileage when it is a weight/payload range.
+    weightish = bool(
+        re.search(r"\b(lb|lbs|pounds?|payload|too (much|heavy)|weight)\b", t)
+        or any(item.get("key") in {"preferredPayload", "rejectedLoadWeight", "payload"} for item in items)
+    )
+    if miles and not weightish:
         if miles.lastindex and miles.lastindex >= 2 and (miles.group(2) or "").isdigit():
             value = f"{miles.group(1)}-{miles.group(2)}"
         else:
@@ -408,7 +413,10 @@ def extract_facts(text: str) -> list[dict]:
         items.append({"key": "operatingMode", "value": "otr", "status": "user_stated"})
     if re.search(r"don'?t want to sign|won'?t sign|sign for nothing", t):
         items.append({"key": "commitmentStance", "value": "wont_sign", "status": "user_stated"})
-    if not any(item["key"] == "weekdaySchedule" for item in items):
+    expired_hist = bool(
+        re.search(r"not anymore|that was for last |was for (last )?(friday|monday|week|tuesday|wednesday|thursday)", t)
+    )
+    if not expired_hist and not any(item["key"] == "weekdaySchedule" for item in items):
         day = re.search(r"\b(monday|tuesday|wednesday|thursday|friday|asap|immediately)\b", t)
         if day:
             items.append({"key": "deadline", "value": day.group(1), "status": "user_stated"})

@@ -160,10 +160,10 @@ def detect_topics(text: str, intent: str | None = None, concern: str | None = No
     if re.search(r"\bdetention\b|\blayover\b|\btonu\b|accessorial", t):
         add("accessorials")
     if re.search(
-        r"\b(payload|lift\s*gate|pallet\s*jack|how long (is|are)|53\s*ft|48\s*ft|26\s*ft|"
-        r"day\s*cab|sleeper|accessories|straps|tarps|binders)\b",
+        r"\b(payload|lift\s*gate|pallet\s*jack|how long (is|are)|day\s*cab|sleeper|"
+        r"accessories|straps|tarps|binders|equipment (size|spec|specs))\b",
         t,
-    ):
+    ) and not re.fullmatch(r"\s*\d+\s*(?:-)?\s*(?:ft|foot|feet|pies)\s*", t):
         add("equip_specs")
     if re.search(
         r"\b(what (is|does) (a |the )?(broker|shipper|dispatcher|motor carrier)|"
@@ -333,20 +333,33 @@ def validate_plan(user_text: str, session: dict, proposal: dict) -> dict:
         next_q = None
         fallbacks.append("repeat_question")
 
-    paused = (
-        mem.get("follow_up") == "driver_initiates"
-        or concern in {"pause", "expired_demand", "existing_dispatcher", "privacy_boundary"}
-        or "pause" in topics
-        or "expired_demand" in topics
-        or "existing_dispatcher" in topics
-        or "privacy_boundary" in topics
+    reactivating = bool(
+        re.search(
+            r"situation changed|i'?m ready to start|ready to start|can we (talk|discuss).{0,20}dispatch|"
+            r"considering switching|want to (try|start) again",
+            user_text or "",
+            re.I,
+        )
     )
-    if concern == "existing_dispatcher" and re.search(
-        r"unhappy|not (happy|working)|switch|considering switching",
-        user_text or "",
-        re.I,
-    ):
-        paused = False
+    paused = False
+    if not reactivating:
+        paused = (
+            mem.get("follow_up") == "driver_initiates"
+            or concern in {"pause", "expired_demand", "existing_dispatcher", "privacy_boundary"}
+            or "pause" in topics
+            or "expired_demand" in topics
+            or "existing_dispatcher" in topics
+            or "privacy_boundary" in topics
+        )
+        if concern == "existing_dispatcher" and re.search(
+            r"unhappy|not (happy|working)|switch|considering switching",
+            user_text or "",
+            re.I,
+        ):
+            paused = False
+    if reactivating:
+        topics = [t for t in topics if t not in {"pause", "expired_demand", "privacy_boundary"}]
+        concern = None
     action = proposal.get("action") if proposal.get("action") in PERMITTED_ACTIONS else "none"
     if action != (proposal.get("action") or "none"):
         fallbacks.append("action")

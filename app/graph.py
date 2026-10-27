@@ -33,8 +33,10 @@ class TurnState(TypedDict, total=False):
 
 LEAK_MONEY = re.compile(r"\$\s*\d+", re.I)
 LEAK_CLAIM = re.compile(
-    r"we guarantee|guaranteed \$?\d|you are approved|you're approved|insurance is approved|coi is valid|"
-    r"consistent loads|high[- ]paying loads|weekly gross|make \$\d|earn \$\d",
+    r"(?<![A-Za-z'])we guarantee|(?<![A-Za-z'])guaranteed \$?\d|you are approved|you're approved|"
+    r"insurance is approved|coi is valid|consistent loads|high[- ]paying loads|"
+    r"(?:help you |you (?:can |will )?|we'll |we will )?(?:make|earn) \$\d|"
+    r"weekly gross of \$?\d|aim(?:ing)? (?:for|at) \$?\d",
     re.I,
 )
 LEAK_DEBRIS = re.compile(r"(?:^|\s)\d+\)\s*hey!?|(?:^|\s)TODO:|\[insert|\{\{|placeholder", re.I)
@@ -44,8 +46,11 @@ PERCENT = re.compile(r"(\d+(?:\.\d+)?)\s*%")
 def _leaks(text: str) -> bool:
     if LEAK_MONEY.search(text) or LEAK_CLAIM.search(text) or LEAK_DEBRIS.search(text or ""):
         return True
-    allowed = fees.approved_percents()
-    for match in PERCENT.finditer(text):
+    try:
+        allowed = fees.approved_percents()
+    except Exception:
+        allowed = set()
+    for match in PERCENT.finditer(text or ""):
         token = match.group(1)
         if token in allowed:
             continue
@@ -237,9 +242,12 @@ async def node_propose(state: TurnState) -> dict:
     ]
     hits = examples.search(text, tags=tags, limit=3)
     # Retrieve approved copy before generation so the model can write a grounded full reply.
+    arrangement = rules.arrangement_of(session.get("facts") or {})
     approved = []
     for key in (ruled.get("knowledge_keys") or [])[:8]:
-        if key in REGISTER:
+        if key == "fee":
+            approved.append({"key": key, "text": fees.live_quote(arrangement)[:220]})
+        elif key in REGISTER:
             approved.append({"key": key, "text": lookup(key)[:220]})
     recent = []
     try:
@@ -338,6 +346,20 @@ def node_reduce_facts(state: TurnState) -> dict:
             "sourceChannel": session["channel"],
             "version": session["state_version"],
             "previous": {"value": previous["value"], "status": previous["status"]} if previous else None,
+        }
+        session["state_version"] += 1
+    # Recompute support from the fully updated vehicle (cross-turn length fixes short-box).
+    eq = fact_value(session["facts"], "equipment")
+    length = fact_value(session["facts"], "trailerLength")
+    support = rules._support_for(eq, length if isinstance(length, str) else None)
+    if support and fact_value(session["facts"], "equipmentSupport") != support:
+        prev = session["facts"].get("equipmentSupport")
+        session["facts"]["equipmentSupport"] = {
+            "value": support,
+            "status": "corrected" if prev and prev.get("value") != support else "user_stated",
+            "sourceChannel": session["channel"],
+            "version": session["state_version"],
+            "previous": {"value": prev["value"], "status": prev["status"]} if prev else None,
         }
         session["state_version"] += 1
     if cancelled or any(item.get("key") in FACT_KEYS for item in proposal.get("facts") or []):

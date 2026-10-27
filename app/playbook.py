@@ -112,11 +112,18 @@ def _should_explain_equipment(facts: dict, memory: dict | None, user_text: str, 
     key = EQUIP_KEYS.get(str(equip))
     if not key:
         return False
+    t = (user_text or "").lower()
+    # Answering a pending length/size question is not a request for equipment specs.
+    if re.fullmatch(r"\s*\d+\s*(?:-)?\s*(?:ft|foot|feet|pies)\s*", t or "") or (
+        re.search(r"^\s*\d+\s*(?:-)?\s*(?:ft|foot|feet|pies)\b", t) and len(t) < 24
+    ):
+        return False
+    if "equip_specs" in (topics or []) and not re.search(r"payload|lift\s*gate|spec|how long|accessories", t):
+        return False
     explained = set((memory or {}).get("explained") or [])
     if key not in explained:
         return True
-    t = (user_text or "").lower()
-    if "services" in topics or re.search(r"support|dispatch|equipment|what (truck|do you)", t):
+    if "services" in topics or re.search(r"\b(support|what (truck|do you)|do you dispatch)\b", t):
         return True
     return False
 
@@ -264,6 +271,48 @@ def desk_card(session: dict) -> dict:
     }
 
 
+def _closure_safe(spoken: str) -> bool:
+    """Closure/privacy replies must not continue commercial probing."""
+    return not re.search(
+        r"\?|percent|%\s*|what (do they|does .{0,12}) charge|dispatcher charge|"
+        r"how much (can|do) you (make|earn)|weekly gross|what type of truck|own MC or lease",
+        spoken or "",
+        re.I,
+    )
+
+
+def _wording_conflicts(spoken: str, facts: dict, ask: str | None, move: str | None, topics: list[str]) -> bool:
+    """Reject model wording that re-asks answered fields or violates the selected move."""
+    low = (spoken or "").lower()
+    if not low:
+        return False
+    if fact_value(facts, "equipment") and re.search(
+        r"what type of truck|what (truck|equipment) (are you|do you)|what are you running",
+        low,
+    ):
+        return True
+    if fact_value(facts, "mcOwnership") and re.search(r"own mc or lease|keeping your own mc", low):
+        return True
+    if (move == "pause" or any(t in topics for t in ("privacy_boundary", "expired_demand", "existing_dispatcher", "pause"))) and not _closure_safe(
+        spoken
+    ):
+        return True
+    if ask is None and re.search(r"what type of truck|what are you running", low):
+        return True
+    return False
+
+
+def _is_reactivation(user_text: str) -> bool:
+    return bool(
+        re.search(
+            r"situation changed|i'?m ready to start|ready to start|can we (talk|discuss).{0,20}dispatch|"
+            r"considering switching|want to (try|start) again|let'?s (try|start) again",
+            user_text or "",
+            re.I,
+        )
+    )
+
+
 def compose(
     intent: str,
     facts: dict,
@@ -284,6 +333,10 @@ def compose(
     summary = None
     mem = memory or {}
     concern = mem.get("concern")
+    if _is_reactivation(user_text):
+        # Current inbound need wins over a previous pause/expired closure.
+        concern = None
+        mem = {**mem, "concern": None, "follow_up": "assistant"}
     core_done = not missing_core(facts, mem)
     spoken = (wording or "").strip()
     validated = plan if plan and "answer_topics" in plan else validate_plan(
@@ -305,6 +358,7 @@ def compose(
     topics = list(validated.get("answer_topics") or [])
     ask = validated.get("next_question_id")
     spoken = (validated.get("wording") or "").strip()
+    move = validated.get("conversation_move")
     receipt = action_confirmation(action_message, saved)
 
     def _covers(text: str, topic_list: list[str]) -> bool:
@@ -317,16 +371,62 @@ def compose(
             return False
         return True
 
+    # Never replay the opening greeting once qualification has started.
+    if variant_text and variant_text.strip() == lookup("welcome").strip() and (mem.get("answered") or fact_value(facts, "equipment")):
+        variant_text = None
+
     unsupported = fact_value(facts, "equipmentSupport") == "out_of_scope"
     if unsupported:
         eq = fact_value(facts, "equipment")
-        refusal = lookup(EQUIP_KEYS.get(str(eq or ""), "equip_unsupported"))
+        if eq == "box_truck":
+            refusal = lookup("equip_box_truck_short")
+        else:
+            refusal = lookup(EQUIP_KEYS.get(str(eq or ""), "equip_unsupported"))
         if not spoken or not re.search(
-            r"don'?t provide|do not provide|outside|not (in |within )?scope|don'?t dispatch|do not dispatch",
+            r"don'?t provide|do not provide|outside|not (in |within )?scope|don'?t dispatch|do not dispatch|"
+            r"only dispatch box trucks 24|24 ft or longer",
             spoken,
             re.I,
         ):
             spoken = refusal
+
+    # Boundary / closure concerns before free model wording.
+    if not _is_reactivation(user_text):
+        if concern == "privacy_boundary" or re.search(
+            r"private (business )?information|that'?s private|sensitive (business|question)|don'?t know you",
+            user_text or "",
+            re.I,
+        ):
+            parts.append(spoken if spoken and _closure_safe(spoken) else lookup("privacy_boundary"))
+            return " ".join(_dedupe(parts)), [], None
+        if concern == "expired_demand" or re.search(
+            r"not anymore|that was for last |don'?t need (it|help|dispatch) (now|anymore)|was for (last )?(friday|monday|week)",
+            user_text or "",
+            re.I,
+        ):
+            parts.append(spoken if spoken and _closure_safe(spoken) else lookup("expired_demand"))
+            return " ".join(_dedupe(parts)), [], None
+        if concern == "existing_dispatcher" or re.search(
+            r"already hired (a )?dispatcher|have (a |my )?dispatcher|working with (another |a )?dispatcher",
+            user_text or "",
+            re.I,
+        ):
+            if re.search(r"unhappy|not (happy|working)|switch|considering switching|want handled differently", user_text or "", re.I):
+                parts.append(spoken or "Sorry it's not working out. What is the main issue you're hoping to resolve?")
+                return " ".join(_dedupe(parts)), CHIPS["default"], None
+            parts.append(spoken if spoken and _closure_safe(spoken) else lookup("existing_dispatcher"))
+            return " ".join(_dedupe(parts)), [], None
+
+    if _is_reactivation(user_text) and not spoken:
+        parts.append(lookup("voluntary_return"))
+        ask = next_ask(facts, mem, intent, repair)
+        if ask and QUESTIONS.get(ask) and not _has_question(" ".join(parts)):
+            parts.append(QUESTIONS[ask])
+        return " ".join(_dedupe(parts)), CHIPS.get(ask) or CHIPS["default"], None
+
+    if spoken and _wording_conflicts(spoken, facts, ask, move, topics):
+        spoken = ""
+        validated = {**validated, "wording": None}
 
     # Model-authored path: deliver the validated full reply without concatenating register paragraphs.
     if (
@@ -381,34 +481,6 @@ def compose(
     ):
         parts.append(spoken or lookup("fuel_requirement"))
         return " ".join(_dedupe(parts)), CHIPS["default"], None
-
-    if concern == "privacy_boundary" or re.search(
-        r"private (business )?information|that'?s private|sensitive (business|question)|don'?t know you",
-        user_text or "",
-        re.I,
-    ):
-        parts.append(spoken or lookup("privacy_boundary"))
-        return " ".join(_dedupe(parts)), [], None
-
-    if concern == "expired_demand" or re.search(
-        r"not anymore|that was for last |don'?t need (it|help|dispatch) (now|anymore)|was for (last )?(friday|monday|week)",
-        user_text or "",
-        re.I,
-    ):
-        parts.append(spoken or lookup("expired_demand"))
-        return " ".join(_dedupe(parts)), [], None
-
-    if concern == "existing_dispatcher" or re.search(
-        r"already hired (a )?dispatcher|have (a |my )?dispatcher|working with (another |a )?dispatcher",
-        user_text or "",
-        re.I,
-    ):
-        # Dissatisfaction reopens exploration — otherwise close respectfully.
-        if re.search(r"unhappy|not (happy|working)|switch|considering switching|want handled differently", user_text or "", re.I):
-            parts.append(spoken or "Sorry it's not working out. What is the main issue you're hoping to resolve?")
-            return " ".join(_dedupe(parts)), CHIPS["default"], None
-        parts.append(spoken or lookup("existing_dispatcher"))
-        return " ".join(_dedupe(parts)), [], None
 
     if concern == "packet_progress":
         parts.append(spoken or lookup("packet_received"))

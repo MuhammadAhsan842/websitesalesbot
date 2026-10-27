@@ -159,6 +159,25 @@ def reopen(case_id: str, doc_type: str, reason: str) -> None:
     db.add_event("Requirement reopened", {"caseId": case_id, "docType": doc_type, "reason": reason})
 
 
+def _validate_decision_file(case_id: str, doc_type: str, file_id: str | None) -> str | None:
+    """Approve only against a real, current case file for this requirement."""
+    if not file_id:
+        return None
+    file_row = db.get_case_file(file_id)
+    if not file_row:
+        raise ValueError("file not found")
+    if file_row.get("case_id") != case_id:
+        raise ValueError("file does not belong to this case")
+    file_doc = file_row.get("doc_type")
+    if file_doc and file_doc != doc_type and file_doc not in {doc_type, "unknown", "other"}:
+        # Allow unknown OCR class only when requirement already points at this file.
+        raise ValueError("file document type does not match this requirement")
+    latest = db.latest_file(case_id, doc_type) or db.latest_file(case_id, file_doc or doc_type)
+    if latest and latest.get("id") != file_id:
+        raise ValueError("file is not the current version for this requirement")
+    return file_id
+
+
 def decide(
     case_id: str,
     doc_type: str,
@@ -176,23 +195,29 @@ def decide(
     row = db.get_requirement(case_id, doc_type)
     if not row:
         raise ValueError(f"no requirement for {doc_type}")
+    bound_file = None
     if decision == "approve":
         current_file = file_id or row.get("current_file_id")
-        if not current_file and doc_type not in {"notice_of_assignment", "voided_check"}:
-            # Allow waive path separately; approve needs a file for core docs.
-            if row.get("status") == "issued":
-                raise ValueError("cannot approve an issued requirement with no returned file")
+        optional = doc_type in {"notice_of_assignment", "voided_check"}
+        if not current_file and not optional:
+            raise ValueError("cannot approve without a returned file on this requirement")
+        if current_file:
+            bound_file = _validate_decision_file(case_id, doc_type, current_file)
         status = "approved"
     elif decision == "waive":
         status = "waived"
     elif decision == "reject":
         status = "rejected"
+        if file_id:
+            bound_file = _validate_decision_file(case_id, doc_type, file_id)
     else:
         status = "corrections"
-    updated = db.update_requirement(
-        row["id"],
-        {"status": status, "current_file_id": file_id or row.get("current_file_id")},
-    )
+        if file_id:
+            bound_file = _validate_decision_file(case_id, doc_type, file_id)
+    patch: dict = {"status": status}
+    if bound_file:
+        patch["current_file_id"] = bound_file
+    updated = db.update_requirement(row["id"], patch)
     db.add_event(
         "Requirement decision",
         {
@@ -202,7 +227,7 @@ def decide(
             "status": status,
             "reviewer": reviewer,
             "reason": reason,
-            "fileId": file_id or row.get("current_file_id"),
+            "fileId": bound_file or file_id or row.get("current_file_id"),
             "requirementId": row["id"],
         },
     )
@@ -219,11 +244,19 @@ def ready_for_handoff(case_id: str) -> tuple[bool, list[str]]:
     if not rows:
         return False, ["no_requirements_issued"]
     blockers = []
+    optional = {"notice_of_assignment", "voided_check"}
     for row in rows:
         status = row.get("status")
+        doc_type = row.get("doc_type")
         if status in TERMINAL_OK:
+            if status == "approved" and doc_type not in optional:
+                file_id = row.get("current_file_id")
+                file_row = db.get_case_file(file_id) if file_id else None
+                if not file_row or file_row.get("case_id") != case_id:
+                    blockers.append(f"{doc_type}:missing_file")
+                    continue
             continue
-        blockers.append(f"{row.get('doc_type')}:{status or 'missing'}")
+        blockers.append(f"{doc_type}:{status or 'missing'}")
     return (not blockers), blockers
 
 

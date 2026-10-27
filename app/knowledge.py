@@ -43,7 +43,7 @@ REGISTER = {
     "lease": "Our onboarding manager reviews lease-on eligibility and the agreement. Asking to lease on isn't approval.",
     "mc_new": "A new or pending MC still needs a look — it isn't an automatic yes. Tell me if you'll keep that authority or need lease-on.",
     "docs_own": "For own-MC, onboarding usually asks for the MC authority sheet, W-9, certificate of insurance, truck registration, and equipment photos. A notice of assignment applies when you use factoring; a voided check applies for quick-pay setups. They'll confirm the live list when they send the packet.",
-    "docs_review_pending": "Got it — your file is saved and waiting on onboarding review (not approved yet). While that sits, I can still help with lanes, timing, or whatever else is on your mind.",
+    "docs_review_pending": "Got it — your file is saved (unverified) and waiting on onboarding review (not approved yet). While that sits, I can still help with lanes, timing, or whatever else is on your mind.",
     "payment_methods_broker": "Brokers may pay standard (often multi-week), quick-pay (faster, with a broker deduction and usually a voided check with rate con and POD), or through factoring (NOA on file). Timing and any deduction come from that arrangement and your agreement — I won't invent a payday or percent from chat.",
     "docs_lease": "For lease-on, onboarding usually asks for licence, insurance listing the proper certificate holder, medical card, inspection, W-9, and the lease. They'll confirm the list when they review.",
     "docs_w9": "The W-9 is the taxpayer ID form. Onboarding checks the name, TIN, and signature. I can't confirm it's complete from chat, and I don't send a blank one from here.",

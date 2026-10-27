@@ -175,6 +175,13 @@ def answered_keys(facts: dict) -> list[str]:
 
 def detect_concern(text: str, intent: str) -> str | None:
     t = (text or "").lower()
+    # Voluntary return clears prior pause/expired/privacy closure for this turn.
+    if re.search(
+        r"situation changed|i'?m ready to start|ready to start|can we (talk|discuss).{0,20}dispatch|"
+        r"considering switching|want to (try|start) again",
+        t,
+    ):
+        return None
     if re.search(
         r"private (business )?information|that'?s private|too personal|sensitive (business|question)|"
         r"don'?t know you|overstepping|none of your business|why (are you|do you) ask.{0,40}(make|earn|gross)",
@@ -429,7 +436,15 @@ def update(session: dict, proposal: dict, user_text: str) -> dict:
     answered = answered_keys(facts)
     explained = list(dict.fromkeys(list(current.get("explained") or []) + list(proposal.get("explained") or [])))
     repair = proposal.get("repair")
-    if concern in {"pause", "expired_demand", "existing_dispatcher", "privacy_boundary"}:
+    if re.search(
+        r"situation changed|i'?m ready to start|ready to start|can we (talk|discuss).{0,20}dispatch|"
+        r"considering switching|want to (try|start) again",
+        user_text or "",
+        re.I,
+    ):
+        follow_up = "assistant"
+        concern = None
+    elif concern in {"pause", "expired_demand", "existing_dispatcher", "privacy_boundary"}:
         # Dissatisfied-with-dispatcher stays open for assistant follow-up.
         if concern == "existing_dispatcher" and re.search(
             r"unhappy|not (happy|working)|switch|considering switching",

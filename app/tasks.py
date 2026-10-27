@@ -43,6 +43,7 @@ def persist_human_task(session: dict, task: str, status: str, next_action: str, 
         }
     )
     session["case_id"] = saved["id"]
+    db.save_session(session)
     if task in {"setup_packet", "lease_agreement"}:
         from app import requirements
 
