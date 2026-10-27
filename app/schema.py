@@ -72,6 +72,14 @@ ANSWER_TOPICS = (
     "dispatch_how",
     "load_approval",
     "accessorials",
+    "equip_specs",
+    "freight_roles",
+    "broker_pay",
+    "lane_prefs",
+    "fuel_requirement",
+    "expired_demand",
+    "existing_dispatcher",
+    "privacy_boundary",
 )
 
 PERMITTED_ACTIONS = ("none", "create_case", "callback", "talk_here", "takeover")
@@ -177,6 +185,7 @@ EQUIP_LABELS = {
     "box_truck": "box truck",
     "hotshot": "hotshot",
     "sprinter_van": "Sprinter van",
+    "cargo_van": "cargo van",
     "step_deck": "step deck",
     "power_only": "power only",
 }

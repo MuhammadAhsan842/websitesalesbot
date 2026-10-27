@@ -34,8 +34,11 @@ SAMPLE_TYPES = {
     "coi": "coi",
 }
 
-TERMINAL_OK = frozenset({"approved", "waived", "acknowledged"})
-OPEN_STATUSES = frozenset({"issued", "received", "flagged", "reopened", "queued", "under_review", "corrections"})
+# Acknowledge / received / flagged are never enough for handoff.
+TERMINAL_OK = frozenset({"approved", "waived"})
+OPEN_STATUSES = frozenset(
+    {"issued", "received", "flagged", "reopened", "queued", "under_review", "corrections", "acknowledged"}
+)
 
 
 def _due(days: int = SLA_DAYS) -> str:
@@ -242,13 +245,20 @@ def snapshot(case_id: str) -> dict:
         if row["overdue"]:
             overdue.append(row)
     returned = [row for row in rows if row.get("status") not in {"issued", None}]
+    awaiting_review = [
+        row["doc_type"]
+        for row in rows
+        if row.get("status") in {"received", "flagged", "queued", "under_review", "acknowledged"}
+    ]
     ready, blockers = ready_for_handoff(case_id)
     return {
         "requirements": rows,
         "issued": len(rows),
         "returned": len(returned),
         "overdue": len(overdue),
-        "outstanding": [row["doc_type"] for row in rows if row.get("status") in OPEN_STATUSES],
+        # Still needed from the driver (not yet returned).
+        "outstanding": [row["doc_type"] for row in rows if row.get("status") in {"issued", "corrections", "reopened", "rejected"}],
+        "awaiting_review": awaiting_review,
         "ready_for_handoff": ready,
         "handoff_blockers": blockers,
     }

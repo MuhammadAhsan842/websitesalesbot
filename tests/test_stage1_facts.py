@@ -48,11 +48,17 @@ class FactMeanings(unittest.TestCase):
         self.assertEqual(items.get("mcOwnership"), "own_mc")
         self.assertEqual(items.get("authorityAgeMonths"), 2)
 
-    def test_sprinter_recognized_needs_confirmation(self):
-        for text in ("Spriter van.", "Sprintervan", "Do you support Sprinter?"):
+    def test_sprinter_and_cargo_van_are_out_of_scope(self):
+        for text in ("Spriter van.", "Sprintervan", "Do you support Sprinter?", "cargo van"):
             items = {item["key"]: item["value"] for item in rules.extract_facts(text)}
-            self.assertEqual(items.get("equipment"), "sprinter_van", text)
-            self.assertEqual(items.get("equipmentSupport"), "needs_confirmation", text)
+            self.assertIn(items.get("equipment"), {"sprinter_van", "cargo_van"}, text)
+            self.assertEqual(items.get("equipmentSupport"), "out_of_scope", text)
+
+    def test_short_box_is_out_of_scope(self):
+        items = {item["key"]: item["value"] for item in rules.extract_facts("I have a 22 foot box truck")}
+        self.assertEqual(items.get("equipment"), "box_truck")
+        self.assertEqual(items.get("trailerLength"), "22ft")
+        self.assertEqual(items.get("equipmentSupport"), "out_of_scope")
 
     def test_regional_operating_mode(self):
         items = {item["key"]: item["value"] for item in rules.extract_facts(
@@ -152,8 +158,33 @@ class ExplanationMemory(unittest.TestCase):
     def test_sprinter_support_copy(self):
         self.assertIn("Sprinter", EQUIP_LABELS["sprinter_van"])
         line = knowledge.lookup("equip_sprinter_van")
-        self.assertIn("confirmed sprinter support", line.lower())
-        self.assertIn("request confirmation", line.lower())
+        self.assertIn("don't provide dispatch", line.lower())
+        self.assertIn("sprinter", line.lower())
+
+    def test_model_wording_is_delivered_without_register_dump(self):
+        state = facts(equipment="box_truck", trailerLength="26ft")
+        mem = {"answered": ["equipment", "trailerLength"], "follow_up": "assistant", "explained": []}
+        wording = "Got it—a 26-foot box truck. Will you run under your own MC or lease on?"
+        reply, _, _ = playbook.compose(
+            "general",
+            state,
+            [knowledge.lookup("equip_box_truck")],
+            None,
+            False,
+            None,
+            "mcOwnership",
+            mem,
+            wording=wording,
+            user_text="26 ft",
+            plan={
+                "answer_topics": [],
+                "next_question_id": "mcOwnership",
+                "conversation_move": "qualify",
+                "wording": wording,
+            },
+        )
+        self.assertEqual(reply, wording)
+        self.assertNotIn("Box truck is in scope", reply)
 
 
 if __name__ == "__main__":

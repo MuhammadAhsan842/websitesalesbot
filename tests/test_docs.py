@@ -24,7 +24,9 @@ class Checklist(unittest.TestCase):
         keys = rules.knowledge_for("general", [], None, "Which papers do I send?")
         self.assertIn("docs_own", keys)
         self.assertIn("W-9", knowledge.lookup("docs_own"))
-        self.assertIn("notice of assignment", knowledge.lookup("docs_own").lower())
+        own = knowledge.lookup("docs_own").lower()
+        self.assertIn("factoring", own)
+        self.assertIn("notice of assignment", own)
 
     def test_named_templates_do_not_approve(self):
         self.assertEqual(docs.keys_for("I sent the W-9")[0], "docs_w9")

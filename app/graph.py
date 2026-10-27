@@ -33,14 +33,16 @@ class TurnState(TypedDict, total=False):
 
 LEAK_MONEY = re.compile(r"\$\s*\d+", re.I)
 LEAK_CLAIM = re.compile(
-    r"we guarantee|guaranteed \$?\d|you are approved|you're approved|insurance is approved|coi is valid",
+    r"we guarantee|guaranteed \$?\d|you are approved|you're approved|insurance is approved|coi is valid|"
+    r"consistent loads|high[- ]paying loads|weekly gross|make \$\d|earn \$\d",
     re.I,
 )
+LEAK_DEBRIS = re.compile(r"(?:^|\s)\d+\)\s*hey!?|(?:^|\s)TODO:|\[insert|\{\{|placeholder", re.I)
 PERCENT = re.compile(r"(\d+(?:\.\d+)?)\s*%")
 
 
 def _leaks(text: str) -> bool:
-    if LEAK_MONEY.search(text) or LEAK_CLAIM.search(text):
+    if LEAK_MONEY.search(text) or LEAK_CLAIM.search(text) or LEAK_DEBRIS.search(text or ""):
         return True
     allowed = fees.approved_percents()
     for match in PERCENT.finditer(text):
@@ -233,12 +235,17 @@ async def node_propose(state: TurnState) -> dict:
         for tag in (ruled.get("repair"), mem.get("concern"), mem.get("goal"), mem.get("last_blocker"))
         if tag
     ]
-    hits = examples.search(text, tags=tags)
+    hits = examples.search(text, tags=tags, limit=3)
+    # Retrieve approved copy before generation so the model can write a grounded full reply.
+    approved = []
+    for key in (ruled.get("knowledge_keys") or [])[:8]:
+        if key in REGISTER:
+            approved.append({"key": key, "text": lookup(key)[:220]})
     recent = []
     try:
         recent = [
-            {"role": row["role"], "text": (row.get("text") or "")[:80]}
-            for row in (db.list_messages(session["id"]) or [])[-4:]
+            {"role": row["role"], "text": (row.get("text") or "")[:220]}
+            for row in (db.list_messages(session["id"]) or [])[-6:]
         ]
     except Exception:
         recent = []
@@ -251,6 +258,7 @@ async def node_propose(state: TurnState) -> dict:
         intent=ruled.get("intent"),
         repair=ruled.get("repair"),
         recent=recent,
+        approved=approved,
     )
     if not model:
         ruled = dict(ruled)
@@ -467,15 +475,18 @@ def node_plan(state: TurnState) -> dict:
         topics=validated["answer_topics"],
     )
     proposal["knowledge_keys"] = keys
+    # Prefer model-authored wording. Variants are fallback labels only when wording is missing.
     move = validated["conversation_move"]
-    variant = proposal.get("reply_variant_id") if proposal.get("reply_variant_id") in VARIANTS else None
-    if not variant or repair in {"leave_sales", "authority_uncertain", "repetition_unverified", "email_delivery"} or concern in {
-        "pause",
-        "commitment",
-        "net_after_costs",
-        "email_delivery",
-    }:
-        variant = variants.default_variant(move, concern, proposal.get("intent"), repair)
+    variant = None
+    if not proposal.get("wording"):
+        variant = proposal.get("reply_variant_id") if proposal.get("reply_variant_id") in VARIANTS else None
+        if not variant or repair in {"leave_sales", "authority_uncertain", "repetition_unverified", "email_delivery"} or concern in {
+            "pause",
+            "commitment",
+            "net_after_costs",
+            "email_delivery",
+        }:
+            variant = variants.default_variant(move, concern, proposal.get("intent"), repair)
     proposal["reply_variant_id"] = variant
     memory.update(session, proposal, state.get("user_text") or "")
     if (session.get("memory") or {}).get("follow_up") == "driver_initiates" and proposal["action"] == "create_case":

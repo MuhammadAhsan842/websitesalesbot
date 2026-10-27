@@ -57,6 +57,8 @@ def next_ask(facts: dict, memory: dict | None = None, intent: str | None = None,
     mem = memory or {}
     if mem.get("follow_up") == "driver_initiates":
         return None
+    if fact_value(facts, "equipmentSupport") == "out_of_scope":
+        return None
     if mem.get("concern") in {
         "commitment",
         "net_after_costs",
@@ -65,6 +67,10 @@ def next_ask(facts: dict, memory: dict | None = None, intent: str | None = None,
         "insurance_affordability",
         "packet_progress",
         "negotiation",
+        "fuel_requirement",
+        "expired_demand",
+        "existing_dispatcher",
+        "privacy_boundary",
     }:
         return None
     if repair == "leave_sales" or intent == "existing_customer":
@@ -126,13 +132,13 @@ def mark_explained(memory: dict | None, keys: list[str]) -> list[str]:
 def recorded_line(facts: dict, memory: dict | None = None) -> str:
     keys = (memory or {}).get("answered") or [key for key in FACT_KEYS if fact_value(facts, key) is not None]
     bits = []
-    for key in keys:
+    for key in keys[:6]:
         value = fact_value(facts, key)
         if value not in (None, "", False):
             bits.append(f"{key} {value}")
     if not bits:
-        return "Nothing is recorded on this chat yet. I can't see papers onboarding hasn't received."
-    return "On this chat I have: " + "; ".join(bits) + ". I can't see papers onboarding hasn't received."
+        return "I don't have much on this chat yet — and I can't see papers onboarding hasn't received."
+    return "I've got " + "; ".join(bits) + " on this chat. I still can't see papers onboarding hasn't received."
 
 
 def fit_summary(facts: dict, arrangement: str | None) -> str:
@@ -141,30 +147,30 @@ def fit_summary(facts: dict, arrangement: str | None) -> str:
     plurals = {"dry van": "dry vans", "reefer": "reefers", "flatbed": "flatbeds", "box truck": "box trucks", "hotshot": "hotshots"}
     noun = plurals.get(str(equip), str(equip)) if n and n != 1 else equip
     count = f"{n} {noun}" if n else equip
-    area = fact_value(facts, "operatingArea") or fact_value(facts, "lanes") or "an area still to confirm"
+    area = fact_value(facts, "operatingArea") or fact_value(facts, "lanes") or "an area we still need to pin down"
     lanes = fact_value(facts, "lanes")
     lane_bit = f", keeping {lanes} lanes" if lanes and lanes != area else ""
     start = fact_value(facts, "startDate")
-    start_bit = f", starting {start}" if start else ""
+    start_bit = f", looking to start {start}" if start else ""
     need = fact_value(facts, "supportNeed") or fact_value(facts, "primaryProblem")
-    need_bit = f" Main need on file: {str(need).replace('_', ' ')}." if need else ""
+    need_bit = f" You care most about {str(need).replace('_', ' ')}." if need else ""
     path = {
-        "dispatch_service": "That's own-MC dispatch: our onboarding manager sends the setup packet. You're not eligible just from this chat.",
-        "lease_on": "That's a lease-on path: our onboarding manager reviews eligibility and the agreement. Asking isn't approval.",
-        "needs_clarification": "We still need own-MC vs lease-on before onboarding can send a packet.",
+        "dispatch_service": "With your own MC, onboarding sends the setup packet — chat alone isn't eligibility.",
+        "lease_on": "Lease-on means onboarding reviews fit and the agreement; asking here isn't approval.",
+        "needs_clarification": "We still need own-MC vs lease-on before a packet can go out.",
     }.get(arrangement or "", "Onboarding still needs the arrangement before papers move.")
     unresolved = []
     if not fact_value(facts, "supportNeed"):
         unresolved.append("home time / support")
     if not fact_value(facts, "startDate"):
-        unresolved.append("start date")
+        unresolved.append("start timing")
     if arrangement == "needs_clarification" or not fact_value(facts, "mcOwnership"):
         unresolved.append("MC arrangement")
     open_bits = f" Still open: {', '.join(unresolved)}." if unresolved else ""
     return (
-        f"You're looking for support for {count} operating from {area}{lane_bit}{start_bit}. "
-        f"That equipment is in the services we dispatch.{need_bit} {path}{open_bits} "
-        "This is not live freight and not approval."
+        f"So far you're looking for help with {count} out of {area}{lane_bit}{start_bit}. "
+        f"That equipment is in scope for us.{need_bit} {path}{open_bits} "
+        "No live freight from this chat, and nothing's approved yet."
     )
 
 
@@ -301,6 +307,54 @@ def compose(
     spoken = (validated.get("wording") or "").strip()
     receipt = action_confirmation(action_message, saved)
 
+    def _covers(text: str, topic_list: list[str]) -> bool:
+        low = (text or "").lower()
+        if "dispatch_fee" in topic_list and not re.search(r"\bfee\b|percent|%|\bcharge\b", low):
+            return False
+        if "insurance" in topic_list and not re.search(r"insurance|cargo|liability|\bcoi\b|coverage", low):
+            return False
+        if "commitment" in topic_list and not re.search(r"sign|commit|binding|agreement|contract", low):
+            return False
+        return True
+
+    unsupported = fact_value(facts, "equipmentSupport") == "out_of_scope"
+    if unsupported:
+        eq = fact_value(facts, "equipment")
+        refusal = lookup(EQUIP_KEYS.get(str(eq or ""), "equip_unsupported"))
+        if not spoken or not re.search(
+            r"don'?t provide|do not provide|outside|not (in |within )?scope|don'?t dispatch|do not dispatch",
+            spoken,
+            re.I,
+        ):
+            spoken = refusal
+
+    # Model-authored path: deliver the validated full reply without concatenating register paragraphs.
+    if (
+        spoken
+        and len(spoken) >= 12
+        and intent not in {"existing_customer"}
+        and repair not in {"leave_sales", "email_delivery"}
+        and (unsupported or _covers(spoken, topics))
+    ):
+        parts.append(spoken)
+        if receipt:
+            parts.append(receipt)
+        if equip_key := EQUIP_KEYS.get(str(fact_value(facts, "equipment") or "")):
+            mem["explained"] = mark_explained(mem, [equip_key])
+        chips = CHIPS.get(ask) if ask and ask not in (mem.get("answered") or []) else (
+            CHIPS["assess"] if core_done else CHIPS["default"]
+        )
+        if unsupported:
+            chips = CHIPS["default"]
+        return " ".join(_dedupe(parts)), chips, None
+    # Short human ack can ride with approved topic lines when wording alone misses coverage.
+    ack_hold = ""
+    if spoken and topics and not _covers(spoken, topics):
+        if "?" not in spoken and spoken.count(".") <= 2 and len(spoken) <= 160:
+            ack_hold = spoken
+        spoken = ""
+        validated = {**validated, "wording": None}
+
     if episodic:
         parts.append(episodic)
 
@@ -320,16 +374,50 @@ def compose(
         parts.append(spoken or lookup("insurance_affordability"))
         return " ".join(_dedupe(parts)), CHIPS["default"], None
 
+    if concern == "fuel_requirement" or re.search(
+        r"fuel advance|diesel (money|before)|can'?t start without (fuel|diesel)|need (a )?fuel (card|advance)",
+        user_text or "",
+        re.I,
+    ):
+        parts.append(spoken or lookup("fuel_requirement"))
+        return " ".join(_dedupe(parts)), CHIPS["default"], None
+
+    if concern == "privacy_boundary" or re.search(
+        r"private (business )?information|that'?s private|sensitive (business|question)|don'?t know you",
+        user_text or "",
+        re.I,
+    ):
+        parts.append(spoken or lookup("privacy_boundary"))
+        return " ".join(_dedupe(parts)), [], None
+
+    if concern == "expired_demand" or re.search(
+        r"not anymore|that was for last |don'?t need (it|help|dispatch) (now|anymore)|was for (last )?(friday|monday|week)",
+        user_text or "",
+        re.I,
+    ):
+        parts.append(spoken or lookup("expired_demand"))
+        return " ".join(_dedupe(parts)), [], None
+
+    if concern == "existing_dispatcher" or re.search(
+        r"already hired (a )?dispatcher|have (a |my )?dispatcher|working with (another |a )?dispatcher",
+        user_text or "",
+        re.I,
+    ):
+        # Dissatisfaction reopens exploration — otherwise close respectfully.
+        if re.search(r"unhappy|not (happy|working)|switch|considering switching|want handled differently", user_text or "", re.I):
+            parts.append(spoken or "Sorry it's not working out. What is the main issue you're hoping to resolve?")
+            return " ".join(_dedupe(parts)), CHIPS["default"], None
+        parts.append(spoken or lookup("existing_dispatcher"))
+        return " ".join(_dedupe(parts)), [], None
+
     if concern == "packet_progress":
         parts.append(spoken or lookup("packet_received"))
         return " ".join(_dedupe(parts)), CHIPS["handoff"], None
 
     if concern == "missing_equipment":
         parts.append(spoken or lookup("missing_equipment"))
-        ask = next_ask(facts, mem, intent, repair)
-        if ask and QUESTIONS.get(ask) and not _has_question(" ".join(parts)):
-            parts.append(QUESTIONS[ask])
-        return " ".join(_dedupe(parts)), CHIPS.get(ask) or CHIPS["default"], None
+        # MD success: don't pile qualify questions onto an equipment/affordability blocker.
+        return " ".join(_dedupe(parts)), CHIPS["default"], None
 
     if concern == "negotiation" or "negotiation" in topics:
         percent = fact_value(facts, "requestedFeePercent")
@@ -385,16 +473,18 @@ def compose(
             parts.append(variant_text or lookup("concern_repetition"))
         parts.append(recorded_line(facts, mem))
 
-    answers = topic_lines(topics, arrangement, bits, facts)
-    ack = spoken if spoken and "?" not in spoken and spoken.count(".") <= 1 else None
+    answers = topic_lines(topics, arrangement, bits, facts)[:2]
+    ack = ack_hold or (spoken if spoken and "?" not in spoken and spoken.count(".") <= 2 else None)
     if answers:
         if ack:
             parts.append(ack)
         for line in answers:
-            if line and line not in parts and line != spoken:
+            if line and line not in parts and line != spoken and line != ack:
                 parts.append(line)
     elif spoken:
         parts.append(spoken)
+    elif ack_hold:
+        parts.append(ack_hold)
     for bit in bits or []:
         low = (bit or "").lower()
         if "unverified" in low and any(
@@ -430,8 +520,8 @@ def compose(
             label = EQUIP_LABELS.get(str(equip), str(equip).replace("_", " "))
             length = fact_value(facts, "trailerLength")
             focus = f"{length} {label}" if length else label
-            if fact_value(facts, "equipmentSupport") == "needs_confirmation":
-                parts.append(lookup(equip_key) if equip_key else f"Got it—a {focus}.")
+            if fact_value(facts, "equipmentSupport") == "out_of_scope":
+                parts.append(lookup(equip_key) if equip_key else lookup("equip_unsupported"))
             else:
                 parts.append(f"Let's focus on the {focus}.")
             if equip_key:

@@ -21,6 +21,10 @@ CONCERNS = (
     "packet_progress",
     "missing_equipment",
     "negotiation",
+    "fuel_requirement",
+    "expired_demand",
+    "existing_dispatcher",
+    "privacy_boundary",
 )
 
 CONCERN_KEYS = {
@@ -37,6 +41,10 @@ CONCERN_KEYS = {
     "packet_progress": ("packet_received", "docs_status", "docs_packet"),
     "missing_equipment": ("missing_equipment",),
     "negotiation": ("negotiation",),
+    "fuel_requirement": ("fuel_requirement", "fuel"),
+    "expired_demand": ("expired_demand", "deferred", "human_progress"),
+    "existing_dispatcher": ("existing_dispatcher", "human_progress"),
+    "privacy_boundary": ("privacy_boundary", "apology_no_pitch"),
 }
 
 MC_NORMALIZE = {
@@ -168,6 +176,24 @@ def answered_keys(facts: dict) -> list[str]:
 def detect_concern(text: str, intent: str) -> str | None:
     t = (text or "").lower()
     if re.search(
+        r"private (business )?information|that'?s private|too personal|sensitive (business|question)|"
+        r"don'?t know you|overstepping|none of your business|why (are you|do you) ask.{0,40}(make|earn|gross)",
+        t,
+    ):
+        return "privacy_boundary"
+    if re.search(
+        r"already hired (a )?dispatcher|have (a |my )?dispatcher|working with (another |a )?dispatcher|"
+        r"got (a )?dispatcher|i('?m| am) with (another|a) dispatcher",
+        t,
+    ):
+        return "existing_dispatcher"
+    if re.search(
+        r"not anymore|that was for last |already sorted|don'?t need (it|help|dispatch) (now|anymore)|"
+        r"no longer need|need has passed|that (load |request )?expired|was for (last )?(friday|monday|week)",
+        t,
+    ):
+        return "expired_demand"
+    if re.search(
         r"let you know|when i'?m ready|not right now|i'?ll think|maybe later|let'?s see about next week|"
         r"busy this week|next summer|i'?ll start again",
         t,
@@ -191,6 +217,12 @@ def detect_concern(text: str, intent: str) -> str | None:
         t,
     ):
         return "insurance_affordability"
+    if re.search(
+        r"fuel advance|diesel (money|before)|can'?t start without (fuel|diesel)|need (a )?fuel (card|advance)|"
+        r"upfront (fuel|diesel|money)",
+        t,
+    ):
+        return "fuel_requirement"
     if re.search(r"need a trailer|buying (a |the )?truck|pick up the truck|don'?t have (a )?trailer", t):
         return "missing_equipment"
     if re.search(r"\d+\s*%|weekly cap|you pay \d+|take it off the first delivery", t):
@@ -261,6 +293,11 @@ def detect_blocker(session: dict, intent: str, concern: str | None, text: str = 
         t,
     ):
         return "insurance_affordability"
+    if re.search(
+        r"fuel advance|diesel (money|before)|can'?t start without (fuel|diesel)|need (a )?fuel (card|advance)",
+        t,
+    ):
+        return "fuel_requirement"
     if re.search(
         r"waiting on insurance|insurance delay|coi delay|getting several quotes|comparing quotes|agent hasn'?t finished",
         t,
@@ -392,9 +429,22 @@ def update(session: dict, proposal: dict, user_text: str) -> dict:
     answered = answered_keys(facts)
     explained = list(dict.fromkeys(list(current.get("explained") or []) + list(proposal.get("explained") or [])))
     repair = proposal.get("repair")
-    if concern == "pause":
-        follow_up = "driver_initiates"
-    elif current.get("follow_up") == "driver_initiates" and concern != "pause":
+    if concern in {"pause", "expired_demand", "existing_dispatcher", "privacy_boundary"}:
+        # Dissatisfied-with-dispatcher stays open for assistant follow-up.
+        if concern == "existing_dispatcher" and re.search(
+            r"unhappy|not (happy|working)|switch|considering switching",
+            user_text or "",
+            re.I,
+        ):
+            follow_up = "assistant"
+        else:
+            follow_up = "driver_initiates"
+    elif current.get("follow_up") == "driver_initiates" and concern not in {
+        "pause",
+        "expired_demand",
+        "existing_dispatcher",
+        "privacy_boundary",
+    }:
         follow_up = "assistant"
     else:
         follow_up = current.get("follow_up") or "assistant"

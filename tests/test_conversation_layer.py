@@ -151,9 +151,13 @@ class MovesAndWording(unittest.TestCase):
         self.assertEqual(variants.default_variant("clarify", None, "mc_new", "authority_uncertain"), "clarify_mc")
         self.assertEqual(variants.default_move("existing_customer", "leave_sales", None, None), "offer_handoff")
 
-    def test_wording_with_percent_is_dropped(self):
-        parsed = qwen.parse_content(json.dumps({"intent": "fee", "wording": "Staff quote is 8%"}))
+    def test_wording_with_bare_percent_is_dropped(self):
+        parsed = qwen.parse_content(json.dumps({"intent": "fee", "wording": "It's 8% today"}))
         self.assertIsNone(parsed.wording)
+        parsed = qwen.parse_content(
+            json.dumps({"intent": "fee", "wording": "The published own-MC dispatch fee is 8% of gross."})
+        )
+        self.assertIn("8%", parsed.wording or "")
         parsed = qwen.parse_content(json.dumps({"intent": "fee", "wording": "Own-MC path is on file"}))
         self.assertEqual(parsed.wording, "Own-MC path is on file")
 

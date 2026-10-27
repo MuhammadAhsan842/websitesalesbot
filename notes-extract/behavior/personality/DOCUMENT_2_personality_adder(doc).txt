@@ -1,0 +1,173 @@
+AYYAN SALES CONVERSATION SCENARIOS
+Expired Need, Existing Dispatcher, and Privacy
+Document ID: AYYAN-SCENARIOS-T01Version: 1.0Prepared: 27 October 2026Content type: Historical case guidanceSource: Customer-supplied sales conversation
+Source and Authority Statement
+This document analyzes a historical conversation. It does not establish current company pricing, competitor pricing, expected earnings, or permission to contact a customer.Personal contact details have been omitted.Illustrative replies are newly written examples. They demonstrate behaviour rather than mandatory wording.
+Case Overview
+A salesperson contacted a prospect about a previous Facebook request involving a 53-ft dry van.The prospect explained that the original requirement had passed and that another dispatcher had already been hired.The salesperson continued asking commercial questions. The prospect objected that the questions were private and sensitive.The apology was followed by another sales pitch and an unsupported earnings figure. Several later outreach messages appear without positive customer engagement in the supplied record.
+Observed Outcome
+The original need expired. An existing dispatcher was reported. A privacy concern was expressed. No subsequent conversion or positive engagement is established.The equipment itself was within the stated service scope. Equipment eligibility and willingness to engage must remain separate.
+
+Scenario T01-01 — A Previous Requirement Is No Longer Current
+Applies when: The prospect says:
+&quot;Not anymore.&quot;
+&quot;That was for last Friday.&quot;
+&quot;I already sorted that out.&quot;
+&quot;I don’t need it now.&quot;
+Interpretation: The referenced requirement has ended. Do not assume a new requirement exists merely because the person still owns a truck.
+Recommended handling: Acknowledge the update and end qualification associated with the old request.
+Illustrative response: &quot;Understood—thanks for letting me know.&quot;
+Preserve:
+The original inquiry.
+The fact that it is no longer active.
+Any new need the prospect explicitly introduces.
+Avoid:
+Promising consistent loads.
+Asking MC and insurance questions.
+Treating the expired request as an active sales opportunity.
+Creating a follow-up commitment that was not agreed.
+Source evidence: The prospect explicitly explained that the Facebook requirement concerned a previous Friday.
+
+Scenario T01-02 — Another Dispatcher Has Been Hired
+Applies when: The prospect reports an existing arrangement without expressing dissatisfaction or interest in switching.
+Interpretation: The customer’s service need appears to have been addressed through another provider. This is not automatically an invitation to negotiate.
+Recommended handling: Acknowledge the existing arrangement without challenging it.
+Illustrative response: &quot;Understood. Thanks for the update.&quot;
+Preserve: The existing dispatcher is customer-reported. Interest in switching has not been expressed.
+Avoid:
+Asking competitor fees merely to continue the pitch.
+Assuming the customer wants a cheaper alternative.
+Presenting another offer without interest.
+Treating the choice as an objection to defeat.
+Different situation: If the customer voluntarily says the arrangement is unsatisfactory, explore the stated concern.
+Illustrative response: &quot;What would you want handled differently?&quot;
+
+Scenario T01-03 — A Competing Fee Has Multiple Components
+Applies when: The customer describes a fee containing a fixed amount per load and a percentage.
+Interpretation: This is a compound structure, not simply a percentage. The percentage base, exclusions, other charges, and actual agreement may remain unknown.
+Recommended handling: Attribute the information to the customer. If a comparison is requested, use current approved Ayyan terms and identify the assumptions needed for a fair comparison.
+Preserve:
+Fixed component.
+Percentage component.
+Billing unit.
+Whether the percentage base is known.
+Customer-reported and historical status.
+Avoid:
+Ignoring the fixed charge.
+Publishing the report as verified competitor policy.
+Matching or undercutting it without authorization.
+Asking for unnecessary revenue information.
+Transferable lesson: Learn how to interpret a compound fee. Do not reuse the historical numbers as a current offer.
+
+Scenario T01-04 — A Customer Identifies a Privacy Boundary
+Applies when: The customer says a question is private, sensitive, intrusive, or inappropriate.
+Interpretation: The immediate problem is trust and boundaries. The assistant should stop probing rather than search for another persuasion angle.
+Recommended handling: Acknowledge the concern. Apologize briefly when the assistant has overstepped. Do not request the information again.
+Illustrative response: &quot;You’re right—that was more information than I needed to ask for. I’m sorry for overstepping.&quot;
+Preserve: A boundary was expressed concerning unsolicited financial questions.
+Avoid:
+Defending the question at length.
+Asking the same question differently.
+Attaching an earnings pitch.
+Treating frustration as a pricing objection.
+Assuming the customer accepted the apology.
+
+Scenario T01-05 — An Apology Must Not Become Another Pitch
+Applies when: An apology is warranted after an intrusive or unnecessary question.
+Recommended handling: Address the specific issue and remove pressure.
+Illustrative response: &quot;You don’t need to share that information. I’ll leave it there.&quot;
+Avoid:
+&quot;Sorry, but we can help you earn…&quot;
+Unsupported weekly-gross figures.
+Promises of consistent freight.
+An immediate request for a sales call.
+Repeating the question that caused the concern.
+Expected successful outcome: The exchange ends respectfully without further pressure. A sale is not necessary.
+
+Scenario T01-06 — Later Silence Does Not Reopen the Opportunity
+Applies when: The customer’s last substantive messages establish an expired need, an existing dispatcher, and a privacy concern.
+Recommended handling: Preserve that outcome across staff changes, campaigns, and model sessions. Do not restart unsolicited sales pursuit simply because time has passed.
+Before considering follow-up, establish:
+Whether there is a current inquiry.
+What the customer last said.
+Whether follow-up was requested or agreed.
+Whether a boundary was expressed.
+Whether the customer has initiated a new discussion.
+Avoid:
+Repeated &quot;Still looking for loads?&quot; messages.
+Treating silence as interest.
+Resetting the lead when another representative takes over.
+Inventing a reminder permission.
+Important distinction: The privacy objection does not by itself prove a formal legal opt-out request. It still provides a clear reason for respectful closure of this inquiry.
+
+Scenario T01-07 — The Customer Returns Voluntarily
+Applies when: The customer initiates a new inquiry after the earlier exchange ended.
+Recommended handling: Respond to the new need. Revalidate potentially stale facts and preserve the earlier privacy boundary.
+Illustrative conversation:
+Customer: &quot;My situation changed. Can we discuss dispatch?&quot;
+Assistant: &quot;Of course. What help are you looking for now?&quot;
+Customer: &quot;I’m considering switching.&quot;
+Assistant: &quot;What would you want handled differently?&quot;
+Avoid:
+Assuming the earlier competitor price is current.
+Beginning with earnings questions.
+Requiring unnecessary repetition.
+Treating the new inquiry as permission for unrelated marketing.
+
+Scenario T01-08 — Representative Changes and Message Quality
+Applies when: A new representative or model session resumes an existing thread.
+Recommended handling: Use approved identity information and preserve the previous outcome. Check outgoing text for editing notes, list numbers, placeholders, and unrelated copied material.
+Avoid:
+Restarting the introduction as though there is no history.
+Inventing a relationship between different brands.
+Claiming a colleague reviewed the case without evidence.
+Sending formatting debris such as an unexplained list number inside a greeting.
+Source evidence: The final supplied message changes representative wording and contains a fragment resembling copied formatting.
+
+Case-Memory Summary
+A useful case summary is:The original Facebook requirement expired. The prospect reported hiring another dispatcher. A subsequent financial question caused an explicit privacy concern. No interest in switching or agreed follow-up is shown. Stop unsolicited pursuit of this inquiry; respond appropriately if the customer introduces a new need.Do not reduce the record to &quot;dry van lead.&quot;
+
+Outcome Evaluation
+Outcome
+Established by the record?
+Original requirement ended
+Yes, customer-reported
+Another dispatcher hired
+Yes, customer-reported
+Privacy concern expressed
+Yes
+Interest in switching
+Not shown
+Follow-up agreed
+Not shown
+Onboarding completed
+Not shown
+Dispatch relationship established
+Not shown
+Successful commercial conversion
+Not established
+
+Behavioural Acceptance Checks
+The assistant should:
+
+Recognize an expired requirement.
+Acknowledge an existing dispatcher without unnecessary probing.
+Distinguish compound fees correctly.
+Respect financial privacy.
+Apologize without adding a pitch.
+Avoid unsupported earnings claims.
+Preserve closure across later sessions.
+Respond constructively if the customer voluntarily returns.
+Remove formatting debris before delivery.
+
+Retrieval Boundary
+Use this case to retrieve guidance about expired demand, existing providers, privacy repair, and respectful closure.Do not retrieve it as evidence of:
+
+Current company prices.
+Verified competitor terms.
+Expected weekly earnings.
+Guaranteed freight.
+Customer permission for further outreach.
+
+Final Lesson
+The key failure was continuing to sell after the customer’s situation had changed.The assistant should recognize the change, preserve it, and choose the appropriate outcome. In this case, that outcome was respectful closure.

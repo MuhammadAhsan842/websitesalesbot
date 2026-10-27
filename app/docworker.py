@@ -159,24 +159,40 @@ def extract_registration(text: str) -> tuple[dict, list[dict]]:
     return extracted, flags
 
 
-def classify(path: Path) -> str:
+def classify(path: Path, ocr_text: str = "") -> str:
     name = path.name.lower()
+    blob = f"{name} {(ocr_text or '').lower()}"
+    if "w-9" in blob or re.search(r"\bw9\b", blob) or "request for taxpayer" in blob:
+        return "w9"
+    if "notice of assignment" in blob or re.search(r"\bnoa\b", blob):
+        return "notice_of_assignment"
+    if "voided" in blob and "check" in blob:
+        return "voided_check"
     if "lease" in name:
         return "lease"
     if "setup" in name or "packet" in name:
         return "setup"
-    if "coi" in name or "insurance" in name:
+    if "coi" in name or "insurance" in name or "certificate of liability" in blob:
         return "coi"
     if "regist" in name or "cab" in name:
         return "registration"
+    if "licence" in name or "license" in name or "driver license" in blob:
+        return "licence"
+    if "authority" in name or "mc authority" in blob:
+        return "authority"
     if path.suffix.lower() == ".pdf":
-        return "lease" if "lease" in _pdf_text(path).lower() else "setup"
+        text = (_pdf_text(path) or ocr_text or "").lower()
+        if "lease" in text:
+            return "lease"
+        if "certificate of" in text or "liability" in text:
+            return "coi"
+        return "setup"
     return "unknown"
 
 
 def extract_path(path: Path, facts: dict | None = None, read: dict | None = None) -> dict:
-    doc_type = classify(path)
     read = read or ocr.read_document(path)
+    doc_type = classify(path, read.get("text") or "")
     text = read.get("text") or ""
     flags: list[dict] = []
     if read.get("unreadable"):
@@ -230,42 +246,20 @@ def extract_path(path: Path, facts: dict | None = None, read: dict | None = None
     }
 
 
-def ingest_sample(case_id: str) -> list[dict]:
-    case = db.get_case(case_id)
-    if not case:
-        raise FileNotFoundError("unknown case")
-    requirements.issue(case_id, case.get("task"))
-    saved = []
-    for _kind, source in SAMPLE.items():
-        if not source.exists():
-            continue
-        doc_type = classify(source)
-        prior = db.latest_file(case_id, doc_type)
-        prior_path = Path(prior["original_path"]) if prior and prior.get("original_path") else None
-        if prior_path and ocr.same_file(source, prior_path):
-            saved.append({**prior, "duplicate": True})
-            continue
-        original = ocr.store_original(case_id, source)
-        read = ocr.read_document(Path(original["original_path"]))
-        review = extract_path(source, case.get("facts") or {}, read=read)
-        review.update(
-            {
-                "original_path": original["original_path"],
-                "method": read.get("method"),
-                "ocr_confidence": read.get("confidence"),
-            }
-        )
-        review["version"] = (prior.get("version") or 0) + 1 if prior else 1
-        if prior:
-            review["diff"] = clause_diff(prior.get("extracted"), review.get("extracted"))
-            requirements.reopen(case_id, review["doc_type"], "replacement file")
-        req = requirements.receive(case_id, review["doc_type"], None, review["status"])
-        if req:
-            review["requirement_id"] = req["id"]
-        row = db.add_case_file(case_id, review, original["original_path"])
-        requirements.receive(case_id, review["doc_type"], row["id"], row["status"])
-        saved.append(row)
-    db.add_event("Document worker ran (read only)", {"caseId": case_id, "files": len(saved)})
+def _link_review(case_id: str, review: dict, original_path: str, *, sample: bool = False) -> dict:
+    case = db.get_case(case_id) or {}
+    doc_type = review.get("doc_type") or "unknown"
+    prior = db.latest_file(case_id, doc_type)
+    review["version"] = (prior.get("version") or 0) + 1 if prior else 1
+    review["original_path"] = original_path
+    if prior:
+        review["diff"] = clause_diff(prior.get("extracted"), review.get("extracted"))
+        requirements.reopen(case_id, doc_type, "replacement file")
+    req = requirements.receive(case_id, doc_type, None, review.get("status") or "received")
+    if req:
+        review["requirement_id"] = req["id"]
+    row = db.add_case_file(case_id, review, original_path)
+    requirements.receive(case_id, doc_type, row["id"], row["status"])
     docs = list(case.get("documents") or [])
     if "returned" not in docs:
         docs.append("returned")
@@ -273,7 +267,11 @@ def ingest_sample(case_id: str) -> list[dict]:
         {
             "id": case_id,
             "status": "under_review",
-            "next_action": "Human review of flagged clauses — not approval. OCR is unverified.",
+            "next_action": (
+                "Sample packet linked for demo review only — not a driver upload."
+                if sample
+                else "Human review of returned file — received is not approved. OCR is unverified."
+            ),
             "documents": docs,
             "facts": case.get("facts") or {},
             "session_id": case.get("session_id"),
@@ -283,4 +281,72 @@ def ingest_sample(case_id: str) -> list[dict]:
             "owner": case.get("owner"),
         }
     )
+    return row
+
+
+def ingest_upload(case_id: str, path: Path, attachment: dict | None = None) -> dict:
+    """Link a real chat/staff upload to the case checklist. Never approves."""
+    case = db.get_case(case_id)
+    if not case:
+        raise FileNotFoundError("unknown case")
+    path = Path(path)
+    requirements.issue(case_id, case.get("task"), facts=case.get("facts") or {})
+    ocr_text = (attachment or {}).get("ocr_text") or ""
+    read = {
+        "text": ocr_text,
+        "confidence": (attachment or {}).get("ocr_confidence"),
+        "method": "chat_upload",
+        "ocr_used": bool(ocr_text),
+    }
+    if not ocr_text and path.exists():
+        read = ocr.read_document(path)
+    review = extract_path(path, case.get("facts") or {}, read=read)
+    review["doc_type"] = classify(path, read.get("text") or "")
+    if attachment:
+        review["filename"] = attachment.get("filename") or path.name
+        review["attachment_id"] = attachment.get("id")
+    original_path = str((attachment or {}).get("path") or path)
+    row = _link_review(case_id, review, original_path, sample=False)
+    db.add_event(
+        "Chat upload linked to case",
+        {
+            "caseId": case_id,
+            "fileId": row["id"],
+            "docType": row.get("doc_type"),
+            "attachmentId": (attachment or {}).get("id"),
+        },
+    )
+    return row
+
+
+def ingest_sample(case_id: str) -> list[dict]:
+    """DEMO ONLY: hard-coded sample files. Real driver uploads must use ingest_upload."""
+    case = db.get_case(case_id)
+    if not case:
+        raise FileNotFoundError("unknown case")
+    requirements.issue(case_id, case.get("task"), facts=case.get("facts") or {})
+    saved = []
+    for _kind, source in SAMPLE.items():
+        if not source.exists():
+            continue
+        doc_type = classify(source)
+        prior = db.latest_file(case_id, doc_type)
+        prior_path = Path(prior["original_path"]) if prior and prior.get("original_path") else None
+        if prior_path and ocr.same_file(source, prior_path):
+            saved.append({**prior, "duplicate": True, "sample": True})
+            continue
+        original = ocr.store_original(case_id, source)
+        read = ocr.read_document(Path(original["original_path"]))
+        review = extract_path(source, case.get("facts") or {}, read=read)
+        review.update(
+            {
+                "original_path": original["original_path"],
+                "method": read.get("method"),
+                "ocr_confidence": read.get("confidence"),
+                "sample": True,
+            }
+        )
+        row = _link_review(case_id, review, original["original_path"], sample=True)
+        saved.append({**row, "sample": True})
+    db.add_event("Sample document worker ran (demo only)", {"caseId": case_id, "files": len(saved)})
     return saved

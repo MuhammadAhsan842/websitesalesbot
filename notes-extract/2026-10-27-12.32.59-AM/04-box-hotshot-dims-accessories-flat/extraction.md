@@ -9,7 +9,7 @@
 
 | Equipment | Length | Weight |
 |---|---|---|
-| Box truck | 24ft / 22ft | 10,000 to 12,000 lbs |
+| Box truck | 24ft / 22ft | 10,000 to 17,000 lbs |
 | Hot shot | 30ft / 40ft | " (same weight range as written) |
 
 **Box truck : accessories**  
@@ -33,7 +33,7 @@ Flat Rate
 | Concept | Candidate field | Notes |
 |---|---|---|
 | Box length | trailerLength | 22–24 ft examples |
-| Box payload range | preferredPayload / capacity | 10k–12k lbs — capacity ≠ rejected load weight |
+| Box payload range | preferredPayload / capacity | 10k–17k lbs — capacity ≠ rejected load weight |
 | Hotshot length | trailerLength | 30 / 40 ft |
 | Liftgate | equipment.liftgate | Installed accessory — not “load requires liftgate” |
 | Pallet jack | equipment.pallet_jack | |

@@ -14,9 +14,9 @@ TOPIC_KEYS = {
     "commitment": ("commit", "concern_commitment"),
     "guarantee": ("guarantee",),
     "home_time": ("home_time",),
-    "services": ("services", "dispatch_how", "dispatch_vs_onboarding"),
-    "onboarding": ("onboarding", "dispatch_vs_onboarding"),
-    "own_mc": ("own_mc",),
+    "services": ("services", "dispatch_how", "dispatch_vs_onboarding", "equip_specs"),
+    "onboarding": ("onboarding", "dispatch_vs_onboarding", "docs_checklist", "mc_age_review"),
+    "own_mc": ("own_mc", "mc_age_review"),
     "lease": ("lease",),
     "support": ("support",),
     "email_delivery": ("email_delivery",),
@@ -33,19 +33,35 @@ TOPIC_KEYS = {
         "docs_bol",
         "docs_pod",
         "trip_docs_invoice",
+        "docs_checklist",
     ),
     "competitor": ("competitor",),
     "net_after_costs": ("concern_net",),
     "talk_here": ("talk_here",),
-    "call_me": ("call_me",),
+    "call_me": ("call_me", "timezone_ops"),
     "pause": ("concern_pause", "deferred"),
     "freight": ("freight", "load_evaluate", "loads_after_onboarding"),
-    "payment_support": ("payment_support", "support", "trip_docs_invoice"),
+    "payment_support": (
+        "payment_support",
+        "support",
+        "trip_docs_invoice",
+        "payment_methods_broker",
+        "pay_to_carrier",
+        "fuel",
+    ),
     "insurance": ("insurance", "insurance_affordability"),
     "negotiation": ("negotiation", "broker_vs_fee"),
-    "dispatch_how": ("dispatch_how", "dispatch_vs_onboarding", "services"),
+    "dispatch_how": ("dispatch_how", "dispatch_vs_onboarding", "services", "freight_roles", "pay_to_carrier"),
     "load_approval": ("load_approval", "docs_rate_con_detail"),
     "accessorials": ("accessorials",),
+    "equip_specs": ("equip_specs", "services", "cab_driver_types"),
+    "freight_roles": ("freight_roles", "dispatch_how", "pay_to_carrier"),
+    "broker_pay": ("payment_methods_broker", "docs_noa", "fuel", "pay_to_carrier"),
+    "lane_prefs": ("lane_prefs", "home_time"),
+    "fuel_requirement": ("fuel_requirement", "fuel"),
+    "expired_demand": ("expired_demand", "human_progress"),
+    "existing_dispatcher": ("existing_dispatcher", "human_progress"),
+    "privacy_boundary": ("privacy_boundary", "apology_no_pitch"),
 }
 
 FALSE_SUCCESS = re.compile(
@@ -143,6 +159,43 @@ def detect_topics(text: str, intent: str | None = None, concern: str | None = No
         add("load_approval")
     if re.search(r"\bdetention\b|\blayover\b|\btonu\b|accessorial", t):
         add("accessorials")
+    if re.search(
+        r"\b(payload|lift\s*gate|pallet\s*jack|how long (is|are)|53\s*ft|48\s*ft|26\s*ft|"
+        r"day\s*cab|sleeper|accessories|straps|tarps|binders)\b",
+        t,
+    ):
+        add("equip_specs")
+    if re.search(
+        r"\b(what (is|does) (a |the )?(broker|shipper|dispatcher|motor carrier)|"
+        r"freight (ecosystem|roles)|who (pays|hires) (the )?(broker|carrier))\b",
+        t,
+    ):
+        add("freight_roles")
+    if re.search(
+        r"\b(quick\s*pay|standard pay|factoring|voided check|how (do|does) (brokers? )?pay|"
+        r"broker (pay|payment)|fuel advance)\b",
+        t,
+    ):
+        add("broker_pay")
+    if re.search(r"\b(otr|over[\s-]?the[\s-]?road|local (loads?|runs?)|miles (a|per) day)\b", t):
+        add("lane_prefs")
+    if re.search(
+        r"fuel advance|diesel (money|before)|can'?t start without (fuel|diesel)|need (a )?fuel (card|advance)",
+        t,
+    ):
+        add("fuel_requirement")
+    if re.search(
+        r"private (business )?information|that'?s private|sensitive (business|question)|don'?t know you",
+        t,
+    ):
+        add("privacy_boundary")
+    if re.search(
+        r"not anymore|that was for last |don'?t need (it|help|dispatch) (now|anymore)|was for (last )?(friday|monday|week)",
+        t,
+    ):
+        add("expired_demand")
+    if re.search(r"already hired (a )?dispatcher|have (a |my )?dispatcher|working with (another |a )?dispatcher", t):
+        add("existing_dispatcher")
     if re.search(r"\b(bol|b\.?o\.?l\.?|bill of lading|pod|proof of delivery)\b", t):
         add("docs_status")
     if intent == "talk_here":
@@ -222,6 +275,14 @@ def _evidence_linked_topic(topic: str, user_text: str) -> bool:
         return bool(re.search(r"what (is |does ).{0,20}\bmc\b|keep my (own )?mc", t))
     if topic == "lease":
         return bool(re.search(r"what (is |does ).{0,20}lease|how (does |do )?lease", t))
+    if topic == "equip_specs":
+        return bool(re.search(r"payload|lift\s*gate|ft\b|cab|accessories|equipment (size|spec)", t))
+    if topic == "freight_roles":
+        return bool(re.search(r"broker|shipper|dispatcher|motor carrier|ecosystem", t))
+    if topic == "broker_pay":
+        return bool(re.search(r"quick\s*pay|factoring|standard pay|voided check|fuel advance", t))
+    if topic == "lane_prefs":
+        return bool(re.search(r"otr|local|miles|home time", t))
     return False
 
 
@@ -272,7 +333,20 @@ def validate_plan(user_text: str, session: dict, proposal: dict) -> dict:
         next_q = None
         fallbacks.append("repeat_question")
 
-    paused = mem.get("follow_up") == "driver_initiates" or concern == "pause" or "pause" in topics
+    paused = (
+        mem.get("follow_up") == "driver_initiates"
+        or concern in {"pause", "expired_demand", "existing_dispatcher", "privacy_boundary"}
+        or "pause" in topics
+        or "expired_demand" in topics
+        or "existing_dispatcher" in topics
+        or "privacy_boundary" in topics
+    )
+    if concern == "existing_dispatcher" and re.search(
+        r"unhappy|not (happy|working)|switch|considering switching",
+        user_text or "",
+        re.I,
+    ):
+        paused = False
     action = proposal.get("action") if proposal.get("action") in PERMITTED_ACTIONS else "none"
     if action != (proposal.get("action") or "none"):
         fallbacks.append("action")
@@ -311,10 +385,15 @@ def validate_plan(user_text: str, session: dict, proposal: dict) -> dict:
 
     driver_asked = any(topic not in {"pause"} for topic in topics)
     closing = {"dispatch_fee", "commitment", "guarantee", "pause", "email_delivery", "support", "net_after_costs"}
+    unsupported = fact_value(facts, "equipmentSupport") == "out_of_scope"
     if paused:
         pass
     elif repair == "equip_ambiguous":
         next_q = None
+    elif unsupported:
+        next_q = None
+        if "services" not in topics:
+            topics = ["services"] + [topic for topic in topics if topic != "services"]
     elif "freight" in topics:
         if not fact_value(facts, "equipment"):
             next_q = "equipment"
@@ -330,10 +409,6 @@ def validate_plan(user_text: str, session: dict, proposal: dict) -> dict:
         # Direct questions beat the next qualify slot (insurance/coverage before OTR/local).
         if "dispatch_fee" in topics and not fact_value(facts, "mcOwnership"):
             next_q = "mcOwnership"
-        elif any(topic in closing for topic in topics) or "insurance" in topics or "services" in topics or "dispatch_how" in topics:
-            next_q = None
-        elif len(topics) > 1:
-            next_q = None
         else:
             next_q = None
     elif next_q is None:
@@ -362,6 +437,8 @@ def validate_plan(user_text: str, session: dict, proposal: dict) -> dict:
     move = proposal.get("conversation_move") if proposal.get("conversation_move") in MOVES else None
     if paused:
         move = "pause"
+    elif unsupported:
+        move = "answer"
     elif repair == "authority_uncertain":
         move = "clarify"
     elif repair == "leave_sales":

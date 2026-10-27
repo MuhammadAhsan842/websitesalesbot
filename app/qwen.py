@@ -53,7 +53,7 @@ class Settings:
             url=os.getenv("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/"),
             threads=_integer("QWEN_NUM_THREAD", default_threads(), 1, 1024),
             context=_integer("QWEN_NUM_CTX", 2048, 1024, 131072),
-            output=_integer("QWEN_NUM_PREDICT", 256, 64, 2048),
+            output=_integer("QWEN_NUM_PREDICT", 384, 64, 2048),
             parallel=_integer("QWEN_MAX_INFLIGHT", 1, 1, 16),
             max_waiting=_integer("QWEN_MAX_WAITING", 8, 0, 1024),
             queue_timeout=_integer("QWEN_QUEUE_TIMEOUT_SEC", 15, 1, 300),
@@ -161,9 +161,9 @@ class Proposal(BaseModel):
     task: str | None = Field(default=None, json_schema_extra={"enum": [*CATALOGUE, None]})
     conversation_move: str | None = Field(default=None, json_schema_extra={"enum": [*MOVES, None]})
     reply_variant_id: str | None = Field(default=None, json_schema_extra={"enum": [*VARIANTS, None]})
-    answer_topics: list[str] = Field(default_factory=list, max_length=2)
+    answer_topics: list[str] = Field(default_factory=list, max_length=4)
     next_question_id: str | None = Field(default=None, json_schema_extra={"enum": [*dict.fromkeys(FACT_KEYS), None]})
-    wording: str | None = Field(default=None, max_length=240)
+    wording: str | None = Field(default=None, max_length=480)
 
     @field_validator(
         "intent",
@@ -230,20 +230,24 @@ def _sanitize(raw: dict) -> dict:
     next_field = next_question or (raw.get("next_field") if raw.get("next_field") in FACT_KEYS else None)
     action = raw.get("action") or raw.get("proposed_action")
     action = action if action in _ACTIONS else "none"
-    wording = raw.get("wording") if isinstance(raw.get("wording"), str) else None
+    wording = raw.get("reply") if isinstance(raw.get("reply"), str) else raw.get("wording")
+    wording = wording if isinstance(wording, str) else None
     if wording:
-        wording = wording.strip()[:240]
+        wording = wording.strip()[:480]
         from app.plan import OPERATIONAL_CLAIM
 
+        # Drop operational falsehoods. Approved fee percents may appear when explaining live quotes.
         if re.search(
-            r"\$|\d+\s*%|approved|zoho|loads tomorrow|guarantee|emailed|booked|packet sent|"
+            r"zoho|loads tomorrow|emailed|booked|packet sent|"
             r"documents were received|case was assigned|i will check|i'?m checking|i am checking|"
-            r"update you shortly",
+            r"update you shortly|you're approved|insurance is approved",
             wording,
             re.I,
         ) or OPERATIONAL_CLAIM.search(wording):
             wording = None
-    topics = [topic for topic in raw.get("answer_topics") or [] if topic in ANSWER_TOPICS][:2]
+        elif re.search(r"\d+\s*%", wording) and not re.search(r"\bfee\b|dispatch|charge|quote", wording, re.I):
+            wording = None
+    topics = [topic for topic in raw.get("answer_topics") or [] if topic in ANSWER_TOPICS][:4]
     return {
         "intent": raw.get("intent") if raw.get("intent") in INTENTS else "general",
         "facts": facts,
@@ -256,7 +260,7 @@ def _sanitize(raw: dict) -> dict:
         "action": action or "none",
         "task": raw.get("task") if raw.get("task") in CATALOGUE else None,
         "conversation_move": raw.get("conversation_move") if raw.get("conversation_move") in MOVES else None,
-        "reply_variant_id": raw.get("reply_variant_id") if raw.get("reply_variant_id") in VARIANTS else None,
+        "reply_variant_id": None,
         "wording": wording,
     }
 
@@ -265,14 +269,28 @@ def parse_content(content: str) -> Proposal:
     return Proposal.model_validate(_sanitize(json.loads(content or "{}")))
 
 
-SYSTEM = """Ayyan Group after-hours sales assistant. Warm, direct, brief. Respect the driver's timing. JSON only. /no_think
-Output one plan: {"intent":"...","facts":[{"key":"...","value":"...","evidence":"..."}],"answer_topics":[],"conversation_move":"answer","next_question_id":null,"action":"none","wording":"..."}. Omit empty.
-facts = new or corrected facts only, with a short evidence span copied from this message. answer_topics = only questions THIS message asked, at most two (dispatch_fee,commitment,guarantee,home_time,services,onboarding,freight,own_mc,docs_status). Do not add home_time, fees, onboarding, or services unless they asked.
-conversation_move: acknowledge|answer|clarify|qualify|explain_objection|offer_handoff|pause.
-next_question_id from memory catalogue, or null. Not every reply needs a question. action from permitted only, else none.
-Examples are strategy, not this driver's facts. Do not copy another truck, city, or day. Do not claim emailed, booked, assigned, approved, or that you are checking loads.
-wording: one short acknowledgement. Code supplies fees, document lists, and action receipts. Never say you will check, update shortly, email, or book.
-Own MC => mcOwnership own_mc. Authority is ready without own vs lease => unclear, move clarify. I meant the fee => intent fee. Need to get paid => existing_customer. Mailbox full => acknowledge. OTR does not drop a separately stated home-every-night requirement. Respect memory.answered, last_question_id, records, and follow_up."""
+SYSTEM = """Ayyan Group AI sales assistant. Human, warm, clear — like a sharp ops person, not a script bot. JSON only. /no_think
+You write the COMPLETE customer reply in "wording" (also accept "reply"). Code validates; it will not append sales paragraphs when wording is valid.
+Output: {"intent":"...","facts":[{"key":"...","value":"...","evidence":"..."}],"answer_topics":[],"conversation_move":"qualify","next_question_id":"mcOwnership","action":"none","wording":"Got it—a 26-foot box truck. Will you run under your own MC or lease on?"}
+Rules:
+- facts = new/corrected only, with evidence from this message. Keep every explicit fact already on file.
+- Answer the driver's concern first, then at most one useful next question. Never re-ask known fields.
+- Sound human: acknowledge briefly, stay helpful under pressure, no paragraph dumps, no forced close.
+- Success = accurate progress (clear no, honest blocker, respected pause, clarified concern) — not pushing every driver to sign.
+- next_question_id is the question inside wording, or null. conversation_move: acknowledge|answer|clarify|qualify|explain_objection|offer_handoff|pause.
+- Use approved_info for fees/docs/support. Never invent percents, paydays, load offers, emails, or approvals.
+- Equipment: box 24ft+, hotshot, dry van, reefer, flatbed, step deck, power only. Sprinter/cargo van => we don't dispatch that; stop qualifying that vehicle. If they also name a supported truck, switch to it without replaying the greeting.
+- Stated insurance ≠ verified. Upload saved ≠ approved. Ready to start ≠ cleared to dispatch. Temporary tag needs human review.
+- Fuel advance needed before pickup is a real blocker — don't swap it for quick-pay-after-delivery or invent a program.
+- Short answers ("26 ft", "si", "yes") answer last_question_id only. "Si" after a pause is not insurance active.
+- Examples are behaviour strategy only — never copy another driver's truck, city, fee, name, or promise.
+- Need to get paid / payme => existing_customer. Mailbox full => acknowledge. Own MC => mcOwnership own_mc.
+- Keep wording to a few short natural sentences. Include the follow-up question in wording when move is qualify.
+- Expired need ("not anymore" / "that was for last…"): acknowledge and close — no load promises, no MC/insurance probing.
+- Already hired a dispatcher: acknowledge and stop unless they say they're unhappy or want to switch.
+- Privacy / "that's private": apologize briefly, stop probing, never attach an earnings pitch after an apology.
+- Never invent weekly gross, consistent freight, or match a customer-reported competitor fee. Strip formatting debris (e.g. "7)Hey!") from wording.
+- A sale is not required for success — respectful closure is a valid outcome."""
 
 
 def request_payload(
@@ -284,6 +302,7 @@ def request_payload(
     examples: list | None = None,
     model: str | None = None,
     recent: list | None = None,
+    approved: list | None = None,
 ) -> dict:
     cfg = settings or CONFIG
     current = {
@@ -298,6 +317,7 @@ def request_payload(
             "hard_constraint": memory.get("hard_constraint"),
             "concern": memory.get("concern"),
             "answered": memory.get("answered") or [],
+            "explained": memory.get("explained") or [],
             "blocker": memory.get("blocker"),
             "last_blocker": memory.get("last_blocker"),
             "last_question_id": memory.get("last_question_id"),
@@ -309,12 +329,17 @@ def request_payload(
                 if row.get("status") in {"active", "reopened"}
             ][:6],
         }
+    if approved:
+        payload["approved_info"] = approved[:8]
     if examples:
         from app.examples import prompt_examples
 
         payload["examples"] = prompt_examples(examples)
     if recent:
-        payload["recent"] = recent[:4]
+        payload["recent"] = [
+            {"role": row.get("role"), "text": (row.get("text") or "")[:220]}
+            for row in recent[:6]
+        ]
     user = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     return {
         "model": model or cfg.model,
@@ -324,9 +349,9 @@ def request_payload(
         "think": False,
         "keep_alive": cfg.keep_alive,
         "options": {
-            "temperature": 0,
+            "temperature": 0.2,
             "num_predict": cfg.output,
-            "num_ctx": cfg.context,
+            "num_ctx": max(cfg.context, 3072),
             "num_thread": cfg.threads,
             **({"num_gpu": cfg.num_gpu} if cfg.num_gpu >= 0 else {}),
         },
@@ -473,6 +498,7 @@ async def _infer(
     examples: list | None,
     queue_ms: float,
     recent: list | None = None,
+    approved: list | None = None,
 ) -> dict[str, Any]:
     global last_error, ready
     started = perf_counter()
@@ -486,6 +512,7 @@ async def _infer(
             examples=examples,
             model=model,
             recent=recent,
+            approved=approved,
         ),
     )
     response.raise_for_status()
@@ -531,6 +558,7 @@ async def propose(
     intent: str | None = None,
     repair: str | None = None,
     recent: list | None = None,
+    approved: list | None = None,
 ) -> dict[str, Any]:
     global last_error, ready, last_route
     choice = router.pick(user_text, intent, repair, memory, gemma_ready=gemma_ready)
@@ -547,6 +575,7 @@ async def propose(
                 examples,
                 queue_ms,
                 recent,
+                approved,
             )
         except (httpx.HTTPError, ValidationError, ValueError, TypeError, AttributeError) as first:
             # Always fall over to Qwen when Gemma is down — forced gemma with a dead host
@@ -554,7 +583,16 @@ async def propose(
             if choice["family"] == "gemma" and MODEL != choice["model"]:
                 try:
                     result = await _infer(
-                        MODEL, "qwen", user_text, facts, conversation_state, memory, examples, queue_ms, recent
+                        MODEL,
+                        "qwen",
+                        user_text,
+                        facts,
+                        conversation_state,
+                        memory,
+                        examples,
+                        queue_ms,
+                        recent,
+                        approved,
                     )
                     last_route = {"model": MODEL, "family": "qwen", "reason": "gemma_failover_qwen"}
                     return result

@@ -1,0 +1,153 @@
+FREIGHT DISPATCH SOP                                                                             Document ID: SOP-FD-2026
+                                                                                                      Version: 2.0 (Complete)
+CARRIER ONBOARDING & OPERATIONAL REFERENCE MANUAL                                             Scope: Dispatch & Carrier Setup
+
+
+
+  1. FREIGHT ECOSYSTEM & STAKEHOLDER ROLES
+  SHIPPER (LOAD OWNER)                                            FREIGHT BROKER
+  The entity/facility that owns the cargo and                     Licensed intermediary connecting shippers
+  requires goods transported from origin to                       with qualified carriers. Negotiates freight
+  destination. Hires freight brokers or direct                    rates and pays carriers for completed loads.
+  carriers.
+
+
+  FREIGHT DISPATCHER                                              MOTOR CARRIER (TRUCK)
+  Represents the carrier. Searches load boards,                   The licensed transport entity providing
+  negotiates rates with brokers, handles                          equipment and drivers to physically move
+  paperwork, and manages driver logistics.                        cargo between locations under FMCSA
+                                                                  compliance.
+
+
+Freight Transaction Flow & Dispatch Positioning
+
+
+                                                             DISPATCHER (Service)
+         SHIPPER       Hires Broker    BROKER                    • Negotiates Rates            CARRIER / TRUCK
+        (Load Owner)                  (Intermediary)           • Handles Carrier Docs            (Executes Load)
+
+
+
+
+  2. DISPATCHER ROLE & CORE OPERATIONAL MANDATE
+   Load Board Sourcing: Continuously monitor load boards (DAT, Truckstop) to locate suitable,
+   high-paying freight matching carrier equipment specifications.
+   Rate Negotiation: Negotiate load rates directly with brokers to maximize gross revenue per mile
+   for the carrier.
+   Document Handling: Execute Carrier-Broker agreements, Rate Confirmations (Rate-Cons), and
+   submit required onboarding packets.
+   Payment Regulation & Safeguards: Brokers issue payments strictly and exclusively into the Motor
+   Carrier (MC) owner's official bank account. Dispatchers never receive direct freight payments.
+
+  MC TARGET AUTHORITY AGE                      TARGET WEEKLY REVENUE                    TARGET WEEKLY REVENUE (OTR SEMI)
+  4 – 5 Months Min.                            (BOX/HOTSHOT)                            $6,000+ / Week
+                                               $5,000+ / Week
+
+
+
+
+Freight Dispatch & Carrier Onboarding Manual                                                                       Page 1 of 3
+  3. CARRIER QUALIFICATION & ONBOARDING CHECKLIST
+Before dispatching loads, verify and collect all required carrier compliance documentation:
+
+  MANDATORY CARRIER DOCUMENT CHECKLIST
+  1. Valid Driver's License: Commercial Driver's License (CDL) or standard driver's license
+     matching equipment requirements.
+  2. Certificate of Insurance (COI): Must list company name and address, with minimum
+     coverage:
+       Auto Liability: $750,000 to $1,000,000 coverage.
+       Cargo Insurance: $100,000 cargo coverage required.
+       Certificate Holder: Dispatch company / company address listed as holder.
+  3. Truck Registration Sheet: Official state registration for all active trucks/trailers.
+  4. Equipment Photos: Clear photos of the truck, trailer, and accessories.
+  5. Notice of Assignment (NOA): Required if carrier uses a factoring company for payment
+     processing.
+
+
+  4. EQUIPMENT SPECIFICATIONS & OPERATIONAL PARAMETERS
+ EQUIPMENT          STANDARD
+                                            WEIGHT / PAYLOAD CAPACITY        REQUIRED ACCESSORIES / NOTES
+ TYPE               LENGTH
+
+ Box Truck          24 ft / 26 ft / 28 ft   10,000 lbs – 17,000 lbs          Lift Gate, Pallet Jack
+
+ Hot Shot           30 ft / 40 ft           Varies by setup                  Binders, Straps, Tarps, Chains
+
+ Dry Van            48 ft / 53 ft           40,000 lbs – 48,000 lbs          Enclosed general freight
+
+ Reefer             48 ft / 53 ft           40,000 lbs – 48,000 lbs          Temperature-controlled (Cold / Hot)
+
+                                            40,000 lbs – 48,000 lbs (100k    Open deck transport requiring
+ Flatbed            48 ft / 53 ft
+                                            gross)                           strapping/securing
+
+                                            Matches Flatbed
+ Step Deck          48 ft / 53 ft                                            Lower deck height for taller cargo
+                                            specifications
+
+                    N/A (Tractor                                             Tractor attached in front of pre-loaded
+ Power Only                                 Variable by trailer attached
+                    Unit)                                                    trailers
+
+
+  5. DRIVER & VEHICLE CLASSIFICATION PROTOCOL
+  CAB CONFIGURATIONS                                              DRIVER OPERATIONS & ELD COMPLIANCE
+     Day Cab: Local runs without sleeping                             Solo Driver: Limited to 11 hours
+     quarters; driver returns home or uses                            maximum driving time per FMCSA Hours
+     hotels.                                                          of Service (HOS).
+     Night Cab (Sleeper Cab): Equipped with a                         Team Drivers: Alternating drivers
+     sleeping compartment for OTR long-haul                           allowing continuous transit over long
+     journeys.                                                        distances.
+                                                                      ELD Device: Electronic Logging Device
+                                                                      tracking real-time driving hours for safety
+Freight Dispatch & Carrier Onboarding Manual                                                                  Page 2 of 3
+  6. REGULATORY COMPLIANCE & LEASE-ON OPERATIONS
+  FMCSA & MC AUTHORITY DEFINITIONS                              LEASE-ON OPERATING MODEL (IF NO MC)
+  FMCSA: Federal Motor Carrier Safety                           When a carrier does not possess an active
+  Administration (governing body regulating                     MC authority, they can Lease-On under the
+  road safety).                                                 dispatch company's active MC authority.
+  MC Number: Motor Carrier number required                      Requirements: Driver's License, COI listing
+  for interstate commercial truck operations.                   company as holder ($750K–$1M Auto
+                                                                Liability), and lease agreement.
+
+
+  7. PAYMENT METHODS & FINANCIAL ARCHITECTURE
+A. Freight Broker Payment Structures (To Carrier)
+                      PROCESSING
+ PAYMENT OPTION                                DEDUCTION / FEE        DOCUMENTATION & NOTES
+                      TIMELINE
+
+ Standard Pay         24 to 28 Days            0% (Full Pay)          Standard broker payment terms
+
+ Quick Pay            3 to 4 Days              3% – 4% Deducted       Requires submission of a Voided Check
+
+ Factoring                                                            3rd-party firm; requires Notice of Assignment
+                      Within 24 Hours          5% – 6% Deducted
+ Company                                                              (NOA)
+
+                                               Direct Cash            No fuel card given; funds wired within 24–48
+ Fuel Advances        24 to 48 Hours
+                                               Advance                hrs
+
+
+B. Dispatcher Commission & Fee Structure (Charged to Carrier)
+
+  1. FLAT RATE PRICING                                          2. PERCENTAGE / COMMISSION
+     Box Truck / Hot Shot: $250 – $300 per                         Box Truck & Hot Shot: 8% to 10% per
+     week                                                          load
+     Semi Truck / Power Only: $300 – $350                          Semis & Power Only: 8% to 10% per load
+     per week                                                      Closing Strategy: Standard target
+                                                                   commission is 10%.
+
+
+  8. U.S. OPERATIONAL TIME ZONES
+Dispatch operations coordinate across four major U.S. time zones:
+
+  PACIFIC TIME (PT)            MOUNTAIN TIME (MT)              CENTRAL TIME (CT)          EASTERN TIME (ET)
+  Base Line                    +1 Hour                         +2 Hours                   +3 Hours
+
+
+
+
+Freight Dispatch & Carrier Onboarding Manual                                                                  Page 3 of 3
+

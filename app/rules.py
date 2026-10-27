@@ -113,6 +113,7 @@ AD_LOAD = re.compile(
 )
 EQUIP_PATTERN = (
     r"sprinter\s*van|spriter\s*van|sprintervan|sprinter|"
+    r"cargo\s*van|"
     r"step\s*deck|power\s*only|"
     r"reefer|dry van|flatbed|box truck|hot\s*shot|hotshot|\bbox\b"
 )
@@ -141,6 +142,7 @@ def normalize_equip(raw: str | None) -> str | None:
         "sprinter van": "sprinter_van",
         "spriter van": "sprinter_van",
         "sprintervan": "sprinter_van",
+        "cargo van": "cargo_van",
         "step deck": "step_deck",
         "power only": "power_only",
     }
@@ -169,23 +171,41 @@ def owned_equipment_claim(text: str) -> bool:
     return bool(OWNED_TRUCK.search(t) or OWNED_CLAIM.search(t))
 
 
-def extract_facts(text: str) -> list[dict]:
-    from app.knowledge import SUPPORTED_EQUIPMENT
+def _support_for(eq: str | None, length: str | None = None) -> str | None:
+    from app.knowledge import BOX_MIN_FT, SUPPORTED_EQUIPMENT, UNSUPPORTED_EQUIPMENT
 
+    if not eq:
+        return None
+    if eq in UNSUPPORTED_EQUIPMENT:
+        return "out_of_scope"
+    if eq == "box_truck" and length:
+        match = re.match(r"(\d+)", str(length))
+        if match and int(match.group(1)) < BOX_MIN_FT:
+            return "out_of_scope"
+    if eq in SUPPORTED_EQUIPMENT:
+        return "in_scope"
+    return "out_of_scope"
+
+
+def extract_facts(text: str) -> list[dict]:
     t = text.lower()
     items = []
     equip = EQUIP_WORD.search(t)
     advertised = is_advertised_equipment(text)
+    length_early = re.search(r"(\d+)\s*(?:-)?\s*(?:ft|foot|feet|pies)\b", t)
+    length_value = f"{length_early.group(1)}ft" if length_early and not advertised else None
     if equip and not advertised:
         eq = normalize_equip(equip.group(0))
         items.append({"key": "equipment", "value": eq, "status": "user_stated"})
-        if eq in SUPPORTED_EQUIPMENT:
-            items.append({"key": "equipmentSupport", "value": "in_scope", "status": "user_stated"})
-        else:
-            items.append({"key": "equipmentSupport", "value": "needs_confirmation", "status": "user_stated"})
+        support = _support_for(eq, length_value)
+        if support:
+            items.append({"key": "equipmentSupport", "value": support, "status": "user_stated"})
     elif SPRINTER_ASK.search(t) and not advertised:
         items.append({"key": "equipment", "value": "sprinter_van", "status": "user_stated"})
-        items.append({"key": "equipmentSupport", "value": "needs_confirmation", "status": "user_stated"})
+        items.append({"key": "equipmentSupport", "value": "out_of_scope", "status": "user_stated"})
+    elif re.search(r"\bcargo\s*van\b", t) and not advertised:
+        items.append({"key": "equipment", "value": "cargo_van", "status": "user_stated"})
+        items.append({"key": "equipmentSupport", "value": "out_of_scope", "status": "user_stated"})
     words = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "a": 1}
     count = re.search(
         r"(\d+|one|two|three|four|five|six|a)\s+(?:box\s+|dry\s+|flatbed\s+|reefer\s+|hotshot\s+)?(trucks?|reefers?|vans?|hotshots?)",
@@ -268,9 +288,14 @@ def extract_facts(text: str) -> list[dict]:
         items.append({"key": "operatingArea", "value": value, "status": "user_stated"})
         items.append({"key": "lanes", "value": value, "status": "user_stated"})
     # "pies" = feet in Spanish length answers (e.g. "26 pies").
-    length = re.search(r"(\d+)\s*(?:-)?\s*(?:ft|foot|feet|pies)\b", t)
-    if length and not advertised:
-        items.append({"key": "trailerLength", "value": f"{length.group(1)}ft", "status": "user_stated"})
+    if length_value:
+        items.append({"key": "trailerLength", "value": length_value, "status": "user_stated"})
+        # Re-evaluate box minimum once length is known in the same message.
+        eq_now = next((item["value"] for item in items if item["key"] == "equipment"), None)
+        if eq_now == "box_truck":
+            support = _support_for(eq_now, length_value)
+            items = [item for item in items if item["key"] != "equipmentSupport"]
+            items.append({"key": "equipmentSupport", "value": support, "status": "user_stated"})
     payload = re.search(r"(?:payload|weigh(?:t|s)|haul)\s*(?:of\s*)?(\d[\d,]*)\s*(lb|lbs|pound)", t) or re.search(
         r"(\d[\d,]*)\s*(lb|lbs|pounds)\s*(?:payload)?", t
     )
@@ -476,13 +501,56 @@ def knowledge_for(
         r"what (does|do) (a |the )?dispatcher|explain dispatch",
         t,
     ):
-        keys.extend(["dispatch_how", "dispatch_vs_onboarding", "load_approval"])
+        keys.extend(["dispatch_how", "dispatch_vs_onboarding", "load_approval", "freight_roles"])
+    if re.search(
+        r"\b(what (is|does) (a |the )?(broker|shipper|motor carrier)|freight (ecosystem|roles))\b",
+        t,
+    ):
+        keys.extend(["freight_roles", "pay_to_carrier"])
+    if re.search(
+        r"\b(payload|lift\s*gate|pallet\s*jack|53\s*ft|48\s*ft|26\s*ft|day\s*cab|sleeper|"
+        r"accessories|equipment (size|spec|length))\b",
+        t,
+    ):
+        keys.extend(["equip_specs", "cab_driver_types"])
+    if re.search(
+        r"\b(quick\s*pay|standard pay|factoring|voided check|broker (pay|payment))\b",
+        t,
+    ):
+        keys.extend(["payment_methods_broker", "pay_to_carrier"])
+    if re.search(
+        r"fuel advance|diesel (money|before)|can'?t start without (fuel|diesel)|need (a )?fuel (card|advance)|upfront (fuel|diesel)",
+        t,
+    ):
+        keys.extend(["fuel_requirement", "fuel"])
+    if re.search(
+        r"private (business )?information|that'?s private|sensitive (business|question)|don'?t know you",
+        t,
+    ):
+        keys.extend(["privacy_boundary", "apology_no_pitch"])
+    if re.search(
+        r"not anymore|that was for last |don'?t need (it|help|dispatch) (now|anymore)|was for (last )?(friday|monday|week)",
+        t,
+    ):
+        keys.append("expired_demand")
+    if re.search(r"already hired (a )?dispatcher|have (a |my )?dispatcher|working with (another |a )?dispatcher", t):
+        keys.append("existing_dispatcher")
+    if re.search(r"situation changed|considering switching|can we (talk|discuss) (about )?dispatch", t):
+        keys.append("voluntary_return")
+    if re.search(r"\b(otr|over[\s-]?the[\s-]?road|local (loads?|runs?)|miles (a|per) day)\b", t):
+        keys.append("lane_prefs")
+    if re.search(r"\bmc (age|old)|how old .{0,20}\bmc\b|authority age", t):
+        keys.append("mc_age_review")
+    if re.search(r"time\s*zone|pacific|eastern|central time|mountain time", t):
+        keys.append("timezone_ops")
     if re.search(r"approve (each |every |the )?load|rate confirmation|who (signs|books)", t):
         keys.extend(["load_approval", "docs_rate_con_detail"])
     if re.search(r"\bdetention\b|\blayover\b|\btonu\b|accessorial", t):
         keys.append("accessorials")
     if re.search(r"home every night|daily home time|\bhome time\b", t):
         keys.append("home_time")
+    if re.search(r"what (papers|documents|do i (send|need))|document checklist|onboarding docs", t):
+        keys.append("docs_checklist")
     if re.search(
         r"do you need .{0,40}insurance|commercial (auto )?(and|&) cargo|cargo (and|&) commercial|"
         r"auto liability|both coverages?|need (commercial|cargo)",
@@ -493,6 +561,8 @@ def knowledge_for(
         keys.append("insurance_affordability")
     if re.search(r"sprinter|spriter", t):
         keys.append("equip_sprinter_van")
+    if re.search(r"\bcargo\s*van\b", t):
+        keys.append("equip_cargo_van")
     if re.search(r"i received (it|the packet)|received the packet|send it tomorrow", t):
         keys.append("packet_received")
     if re.search(r"\d+\s*%|weekly cap|take it off the first delivery", t):

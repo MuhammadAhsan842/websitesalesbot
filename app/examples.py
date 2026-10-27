@@ -460,18 +460,28 @@ BANK = (
     },
 )
 
-VERSION = "ayyan_examples_v4"
+VERSION = "ayyan_examples_v6"
 LIVE_STATUSES = {"published"}
 HIDDEN_STATUSES = {"withdrawn", "rejected", "candidate", "reviewed"}
 DEFAULT_STRATEGY = {
-    "acknowledge": "Acknowledge the stated fact or blocker; do not restart qualification.",
-    "answer": "Answer the asked topic from records; do not invent fees or confirm actions.",
+    "acknowledge": "Acknowledge the stated fact or blocker in plain language; do not restart qualification.",
+    "answer": "Answer the asked topic first from approved records; then one useful next step. Do not invent fees or confirm actions.",
     "clarify": "Clarify the missing arrangement before any packet.",
-    "qualify": "Ask one unanswered fit question.",
-    "explain_objection": "Address the concern; do not restart fit.",
+    "qualify": "Ask one unanswered fit question. Never re-ask what is already on file.",
+    "explain_objection": "Address the human concern warmly before any signature or packet push.",
     "offer_handoff": "Offer an onboarding next step; do not claim it is done.",
-    "pause": "Respect the driver's timing; do not chase.",
+    "pause": "Respect the driver's timing; do not chase or tack on another qualify question.",
 }
+
+
+def _behavior_bank() -> tuple:
+    from app.behavior import REF_EXAMPLES, T01_EXAMPLES, cards_as_examples
+
+    return tuple(REF_EXAMPLES) + tuple(T01_EXAMPLES) + tuple(cards_as_examples())
+
+
+def _full_bank() -> tuple:
+    return BANK + _behavior_bank()
 
 CONTRASTS = (
     {
@@ -509,7 +519,7 @@ def _index_rows(rows: list[dict]) -> list[dict]:
     return [{**row, "tokens": _doc_tokens(row)} for row in rows if allowed(row)]
 
 
-INDEX = _index_rows(list(BANK))
+INDEX = _index_rows(list(_full_bank()))
 
 
 def _normalize(row: dict) -> dict:
@@ -539,7 +549,7 @@ def published() -> list[dict]:
         extra = db.list_examples()
     except Exception:
         extra = []
-    by_id = {row["id"]: _normalize(row) for row in BANK}
+    by_id = {row["id"]: _normalize(row) for row in _full_bank()}
     for row in extra:
         status = row.get("status") or "candidate"
         if status in HIDDEN_STATUSES:
@@ -551,17 +561,34 @@ def published() -> list[dict]:
     return [row for row in by_id.values() if allowed(row)]
 
 
+_LEAKY_DETAIL = re.compile(
+    r"\d+\s*-?\s*ft|\d+\s*foot|lift\s*gate|liftgate|e-?\s*track|pallet\s*jack|"
+    r"\b(dallas|atlanta|louisiana|texas|nj|new jersey)\b|"
+    r"\d+\s*%|\$\s*\d+|moses|ezequiel|jose|penske",
+    re.I,
+)
+
+
+def _safe_pattern(text: str, fallback: str) -> str:
+    raw = (text or "").strip() or fallback
+    if _LEAKY_DETAIL.search(raw):
+        return fallback
+    return raw[:160]
+
+
 def prompt_examples(rows: list[dict]) -> list[dict]:
     """Strategy only. Never send another driver's truck, day, or city as facts."""
     out = []
-    for row in rows[:2]:
+    for row in rows[:3]:
         strategy = row.get("strategy") or DEFAULT_STRATEGY.get(row.get("move") or "", "")
+        situation = _safe_pattern(row.get("situation") or "", strategy.split(".")[0][:120])
         out.append(
             {
                 "id": row.get("id"),
                 "strategy": strategy,
                 "move": row.get("move"),
-                "pattern": row.get("pattern") or strategy,
+                "pattern": _safe_pattern(row.get("pattern") or "", strategy.split(".")[0][:160]),
+                "situation": situation,
             }
         )
     return out

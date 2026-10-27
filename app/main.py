@@ -34,10 +34,37 @@ class StaffAct(BaseModel):
     act: str
 
 
+class RequirementDecision(BaseModel):
+    decision: str
+    reviewer: str
+    reason: str = ""
+    file_id: str | None = None
+
+
 class FeeIn(BaseModel):
     arrangement: str = "dispatch_service"
     percent: float
     approved_by: str = "Staff desk"
+
+
+def _ensure_onboarding_case(session: dict) -> dict:
+    """Create a draft onboarding case when a document arrives before handoff."""
+    if session.get("case_id"):
+        current = db.get_case(session["case_id"])
+        if current:
+            return current
+    from app.rules import arrangement_of, task_for
+    from app.tasks import persist_human_task
+
+    arrangement = arrangement_of(session.get("facts") or {})
+    task = task_for(arrangement, "onboard") or "setup_packet"
+    return persist_human_task(
+        session,
+        task,
+        "collecting_documents",
+        "Await documents for review — chat stays open",
+        "Onboarding draft opened from upload",
+    )
 
 
 @asynccontextmanager
@@ -364,8 +391,21 @@ async def upload_attachment(session_id: str, background: BackgroundTasks, file: 
     dest = ROOT / "data" / "attachments" / session_id / f"{db.uid('up')}{suffix}"
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_bytes(await file.read())
-    result = await asyncio.to_thread(media.process, dest, session_id, session.get("case_id"), False)
+    case = _ensure_onboarding_case(session)
+    session = db.get_session(session_id) or session
+    result = await asyncio.to_thread(media.process, dest, session_id, case.get("id"), False)
     att_id = result.get("id")
+    attachment = result.get("attachment") or (db.get_attachment(att_id) if att_id else None)
+    case_file = None
+    if attachment and result.get("status") != "duplicate":
+        case_file = await asyncio.to_thread(
+            docworker.ingest_upload,
+            case["id"],
+            Path(attachment.get("path") or dest),
+            attachment,
+        )
+        if att_id and case_file:
+            db.save_attachment({**attachment, "case_id": case["id"]})
     queue_vision = (
         bool(att_id)
         and result.get("status") != "duplicate"
@@ -375,10 +415,17 @@ async def upload_attachment(session_id: str, background: BackgroundTasks, file: 
     if queue_vision:
         background.add_task(_interpret_later, att_id)
     db.add_message(session_id, "user", f"[attachment] {file.filename}")
+    db.save_session(session)
+    receipt = lookup("docs_review_pending") if case_file else lookup("photo_unverified")
     return {
         **result,
-        "text": lookup("photo_unverified"),
+        "text": receipt,
         "queued_vision": queue_vision,
+        "case_id": case.get("id"),
+        "case_file_id": (case_file or {}).get("id"),
+        "doc_type": (case_file or {}).get("doc_type"),
+        "packet": requirements.snapshot(case["id"]),
+        "takeover": False,
     }
 
 
@@ -412,7 +459,26 @@ def review_packet(case_id: str):
 def ack_flags(case_id: str):
     if not db.get_case(case_id):
         raise HTTPException(404, "unknown case")
-    return db.acknowledge_case_files(case_id)
+    # Acknowledge warnings only — does not approve documents or handoff readiness.
+    return {"files": db.acknowledge_case_files(case_id), "packet": requirements.snapshot(case_id), "note": "ack_is_not_approval"}
+
+
+@app.post("/v1/cases/{case_id}/requirements/{doc_type}/decide")
+def decide_requirement(case_id: str, doc_type: str, body: RequirementDecision):
+    if not db.get_case(case_id):
+        raise HTTPException(404, "unknown case")
+    try:
+        row = requirements.decide(
+            case_id,
+            doc_type,
+            body.decision,
+            reviewer=body.reviewer,
+            reason=body.reason,
+            file_id=body.file_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"requirement": row, "packet": requirements.snapshot(case_id)}
 
 
 @app.post("/v1/cases/{case_id}/act")
@@ -424,8 +490,16 @@ def case_act(case_id: str, body: StaffAct):
         raise HTTPException(404, "unknown case")
     if body.act == "approve" and db.blocking_files(case_id):
         raise HTTPException(409, "Acknowledge flagged COI/lease issues before human approval. The worker cannot approve.")
+    if body.act == "approve":
+        ready, blockers = requirements.ready_for_handoff(case_id)
+        if not ready:
+            raise HTTPException(
+                409,
+                "All applicable requirements must be approved or waived before handoff. Outstanding: "
+                + ", ".join(blockers),
+            )
     if body.act == "packet_sent":
-        requirements.issue(case_id, current.get("task"))
+        requirements.issue(case_id, current.get("task"), facts=current.get("facts") or {})
         requirements.mark_due(case_id)
     status, next_action, document = STAFF_ACTS[body.act]
     docs = list(current.get("documents") or [])
