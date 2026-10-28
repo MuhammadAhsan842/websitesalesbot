@@ -172,40 +172,69 @@ def owned_equipment_claim(text: str) -> bool:
 
 
 def _support_for(eq: str | None, length: str | None = None) -> str | None:
-    from app.knowledge import BOX_MIN_FT, SUPPORTED_EQUIPMENT, UNSUPPORTED_EQUIPMENT
+    from app.knowledge import EQUIPMENT_LENGTHS_FT, SUPPORTED_EQUIPMENT, UNSUPPORTED_EQUIPMENT
 
     if not eq:
         return None
     if eq in UNSUPPORTED_EQUIPMENT:
         return "out_of_scope"
-    if eq == "box_truck" and length:
-        match = re.match(r"(\d+)", str(length))
-        if match and int(match.group(1)) < BOX_MIN_FT:
-            return "out_of_scope"
-    if eq in SUPPORTED_EQUIPMENT:
+    if eq not in SUPPORTED_EQUIPMENT:
+        return "out_of_scope"
+    allowed = EQUIPMENT_LENGTHS_FT.get(eq)
+    if allowed is None:
+        # power_only and any type without a trailer-length catalog entry
         return "in_scope"
-    return "out_of_scope"
+    if length:
+        match = re.match(r"(\d+)", str(length))
+        if match and int(match.group(1)) not in allowed:
+            return "out_of_scope"
+    return "in_scope"
+
+
+def _pick_equipment(text: str) -> str | None:
+    """When several types are named, prefer an in-catalog truck over cargo/Sprinter."""
+    from app.knowledge import SUPPORTED_EQUIPMENT, UNSUPPORTED_EQUIPMENT
+
+    mentions = [normalize_equip(m.group(0)) for m in EQUIP_WORD.finditer(text or "")]
+    if SPRINTER_ASK.search(text or "") and "sprinter_van" not in mentions:
+        mentions.append("sprinter_van")
+    if re.search(r"\bcargo\s*van\b", text or "", re.I) and "cargo_van" not in mentions:
+        mentions.append("cargo_van")
+    mentions = [m for m in mentions if m]
+    if not mentions:
+        return None
+    supported = [m for m in mentions if m in SUPPORTED_EQUIPMENT]
+    if supported:
+        return supported[-1]
+    unsupported = [m for m in mentions if m in UNSUPPORTED_EQUIPMENT]
+    return unsupported[-1] if unsupported else mentions[-1]
 
 
 def extract_facts(text: str) -> list[dict]:
     t = text.lower()
     items = []
-    equip = EQUIP_WORD.search(t)
     advertised = is_advertised_equipment(text)
     length_early = re.search(r"(\d+)\s*(?:-)?\s*(?:ft|foot|feet|pies)\b", t)
     length_value = f"{length_early.group(1)}ft" if length_early and not advertised else None
-    if equip and not advertised:
-        eq = normalize_equip(equip.group(0))
+    eq = None if advertised else _pick_equipment(t)
+    if eq:
         items.append({"key": "equipment", "value": eq, "status": "user_stated"})
         support = _support_for(eq, length_value)
         if support:
             items.append({"key": "equipmentSupport", "value": support, "status": "user_stated"})
-    elif SPRINTER_ASK.search(t) and not advertised:
-        items.append({"key": "equipment", "value": "sprinter_van", "status": "user_stated"})
-        items.append({"key": "equipmentSupport", "value": "out_of_scope", "status": "user_stated"})
-    elif re.search(r"\bcargo\s*van\b", t) and not advertised:
-        items.append({"key": "equipment", "value": "cargo_van", "status": "user_stated"})
-        items.append({"key": "equipmentSupport", "value": "out_of_scope", "status": "user_stated"})
+        # Keep a secondary note when the message also names an unsupported vehicle.
+        others = [
+            normalize_equip(m.group(0))
+            for m in EQUIP_WORD.finditer(t)
+            if normalize_equip(m.group(0)) and normalize_equip(m.group(0)) != eq
+        ]
+        if re.search(r"\bcargo\s*van\b", t) and eq != "cargo_van":
+            others.append("cargo_van")
+        if SPRINTER_ASK.search(t) and eq != "sprinter_van":
+            others.append("sprinter_van")
+        others = list(dict.fromkeys(others))
+        if others:
+            items.append({"key": "secondaryEquipment", "value": ",".join(others), "status": "user_stated"})
     words = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "a": 1}
     count = re.search(
         r"(\d+|one|two|three|four|five|six|a)\s+(?:box\s+|dry\s+|flatbed\s+|reefer\s+|hotshot\s+)?(trucks?|reefers?|vans?|hotshots?)",
@@ -290,12 +319,13 @@ def extract_facts(text: str) -> list[dict]:
     # "pies" = feet in Spanish length answers (e.g. "26 pies").
     if length_value:
         items.append({"key": "trailerLength", "value": length_value, "status": "user_stated"})
-        # Re-evaluate box minimum once length is known in the same message.
+        # Re-evaluate catalog lengths once size is known in the same message.
         eq_now = next((item["value"] for item in items if item["key"] == "equipment"), None)
-        if eq_now == "box_truck":
+        if eq_now:
             support = _support_for(eq_now, length_value)
-            items = [item for item in items if item["key"] != "equipmentSupport"]
-            items.append({"key": "equipmentSupport", "value": support, "status": "user_stated"})
+            if support:
+                items = [item for item in items if item["key"] != "equipmentSupport"]
+                items.append({"key": "equipmentSupport", "value": support, "status": "user_stated"})
     payload = re.search(r"(?:payload|weigh(?:t|s)|haul)\s*(?:of\s*)?(\d[\d,]*)\s*(lb|lbs|pound)", t) or re.search(
         r"(\d[\d,]*)\s*(lb|lbs|pounds)\s*(?:payload)?", t
     )
@@ -304,11 +334,30 @@ def extract_facts(text: str) -> list[dict]:
         t,
     )
     rejected_load = bool(re.search(r"too much|can'?t (haul|take|do)|over (my|the)|not for my|exceed", t))
-    if preferred and preferred.group(2).isdigit():
+
+    def _digits(raw: str | None) -> str | None:
+        if not raw:
+            return None
+        cleaned = re.sub(r"[^\d]", "", raw)
+        return cleaned or None
+
+    pref_lo = _digits(preferred.group(1)) if preferred else None
+    pref_hi = _digits(preferred.group(2)) if preferred else None
+    # Prefer weight ranges only when lbs/payload cues exist (avoid stealing mileage ranges).
+    preferred_is_weight = bool(
+        preferred
+        and pref_lo
+        and pref_hi
+        and (
+            (preferred.group(3) and re.search(r"lb|pound", preferred.group(3), re.I))
+            or re.search(r"\b(lb|lbs|pounds?|payload|weight)\b", t)
+        )
+    )
+    if preferred_is_weight:
         items.append(
             {
                 "key": "preferredPayload",
-                "value": f"{preferred.group(1).replace(',', '')}-{preferred.group(2).replace(',', '')}",
+                "value": f"{pref_lo}-{pref_hi}",
                 "status": "user_stated",
             }
         )
@@ -320,6 +369,22 @@ def extract_facts(text: str) -> list[dict]:
                 "status": "user_stated",
             }
         )
+    elif rejected_load and not payload:
+        # Unitless rejected weight: "18000 is too much" / "can't take 18,000".
+        unitless = re.search(
+            r"(\d[\d,]{2,})\s*(?:is |are )?(?:too much|too heavy|over)|"
+            r"(?:too much|can'?t (?:haul|take|do)|over)\D{0,12}(\d[\d,]{2,})",
+            t,
+        )
+        if unitless:
+            raw = unitless.group(1) or unitless.group(2)
+            items.append(
+                {
+                    "key": "rejectedLoadWeight",
+                    "value": raw.replace(",", ""),
+                    "status": "user_stated",
+                }
+            )
     elif payload:
         items.append({"key": "payload", "value": payload.group(1).replace(",", ""), "status": "user_stated"})
     # Installed equipment vs load requirements (do not collapse into one field).
@@ -391,8 +456,10 @@ def extract_facts(text: str) -> list[dict]:
         items.append({"key": "weekdaySchedule", "value": "monday_friday", "status": "user_stated"})
     elif re.search(r"home weekends|weekends? home|flexible schedule", t):
         items.append({"key": "weekdaySchedule", "value": "flexible", "status": "user_stated"})
-    miles = re.search(r"(\d{2,4})\s*(?:-|to)\s*(\d{2,4})\s*miles(?:\s+(a|per)\s+day)?", t) or re.search(
-        r"(\d{2,4})\s*miles (a|per) day", t
+    miles = (
+        re.search(r"(\d{2,4})\s*(?:-|to|–)\s*(\d{2,4})\s*miles(?:\s+(a|per)\s+day)?", t)
+        or re.search(r"(\d{2,4})\s*miles (a|per) day", t)
+        or re.search(r"(?:cover|do|run)\s+(\d{2,4})\s*(?:-|to|–)\s*(\d{2,4})\s*(?:a|per)\s+day", t)
     )
     # Do not treat bare "7000 to 7500" as mileage when it is a weight/payload range.
     weightish = bool(
@@ -400,8 +467,9 @@ def extract_facts(text: str) -> list[dict]:
         or any(item.get("key") in {"preferredPayload", "rejectedLoadWeight", "payload"} for item in items)
     )
     if miles and not weightish:
-        if miles.lastindex and miles.lastindex >= 2 and (miles.group(2) or "").isdigit():
-            value = f"{miles.group(1)}-{miles.group(2)}"
+        g2 = miles.group(2) if miles.lastindex and miles.lastindex >= 2 else None
+        if g2 and str(g2).isdigit():
+            value = f"{miles.group(1)}-{g2}"
         else:
             value = miles.group(1)
         items.append({"key": "milesPerDay", "value": value, "status": "user_stated"})
@@ -667,12 +735,25 @@ def propose(text: str, facts: dict, memory: dict | None = None) -> dict:
         action = "create_case"
         intent = "existing_customer"
     elif intent == "onboard" and arrangement and equip:
-        action = "create_case"
+        support = (
+            preview.get("equipmentSupport", {}).get("value")
+            if isinstance(preview.get("equipmentSupport"), dict)
+            else None
+        )
+        if support != "out_of_scope":
+            action = "create_case"
     if repair == "authority_uncertain":
         action = "none"
     if repair == "equip_ambiguous":
         action = "none"
         ask = None
+    support_now = (
+        preview.get("equipmentSupport", {}).get("value")
+        if isinstance(preview.get("equipmentSupport"), dict)
+        else None
+    )
+    if support_now == "out_of_scope" and action == "create_case" and intent != "existing_customer":
+        action = "none"
     if repair == "repetition_unverified":
         blocked.append("insurance_approved")
     return {

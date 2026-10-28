@@ -438,12 +438,17 @@ def validate_plan(user_text: str, session: dict, proposal: dict) -> dict:
         elif repair == "equip_ambiguous" or _open_equipment_ambiguity(mem):
             action = "none"
             fallbacks.append("equip_ambiguous")
+        elif unsupported and task in {"setup_packet", "lease_agreement", "fit_check"}:
+            # Eligibility must constrain execution, not only the spoken refusal.
+            action = "none"
+            fallbacks.append("out_of_scope_equipment")
         elif task in {"setup_packet", "lease_agreement"} and any(not fact_value(facts, key) for key in PACKET_SLOTS):
             action = "none"
             fallbacks.append("underspecified_packet")
     if action == "callback" and not fact_value(facts, "phone"):
         next_q = "phone"
-    if mem.get("follow_up") == "driver_initiates" and action == "create_case":
+    # Pause suppresses handoffs — but a voluntary return may onboard on this turn.
+    if mem.get("follow_up") == "driver_initiates" and action == "create_case" and not reactivating:
         action = "none"
         fallbacks.append("pause")
 

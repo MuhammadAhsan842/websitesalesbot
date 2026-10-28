@@ -1,13 +1,13 @@
 """Approved sales playbook. Personality lives here; the model cannot add claims."""
 
 REGISTER = {
-    "version": "ayyan_sales_v9",
+    "version": "ayyan_sales_v10",
     "welcome": "Hey — I'm Ayyan Group's AI sales assistant. I can help see if we're a fit; our onboarding manager handles the papers. What are you running?",
-    "services": "We dispatch box trucks 24 ft or longer, hotshot, dry van, reefer, flatbed, step deck, and power-only. You approve every load. We handle brokers and paperwork.",
+    "services": "We only dispatch these types: box truck 24/26/28 ft, hotshot 30/40 ft, dry van 48/53 ft, reefer 48/53 ft, flatbed 48/53 ft, step deck 48/53 ft, and power-only. You approve every load. We handle brokers and paperwork.",
     "freight_roles": "Shippers own the cargo. Brokers connect shippers with carriers and pay for completed loads. A dispatcher represents the carrier — finds matching freight, negotiates with brokers, and handles paperwork. The motor carrier runs the truck under FMCSA rules. Broker freight pay goes to the carrier's account — dispatchers don't take those payments personally.",
     "dispatch_how": "Our dispatch team helps find freight that fits your equipment and preferred lanes, handles broker communication and paperwork, and coordinates the load process. You approve each load. Talking here isn't a live load search.",
     "dispatch_vs_onboarding": "Before live dispatch, onboarding confirms fit and papers — authority, insurance, and the setup agreement. Dispatch work starts after that review. If papers aren't done, I won't pretend the truck is already in production.",
-    "equip_specs": "Sizes we commonly work with: box 24–28 ft with roughly 10k–17k lb payload and lift gate or pallet jack when needed; hotshot 30–40 ft with straps, tarps, chains, and binders; dry van and reefer 48–53 ft; flatbed and step deck 48–53 ft. Exact fit still needs onboarding. Sprinter and cargo van stay out of scope.",
+    "equip_specs": "Catalog we dispatch: box 24/26/28 ft (about 10k–17k lb, lift gate or pallet jack when needed); hotshot 30/40 ft (binders, straps, tarps, chains); dry van and reefer 48/53 ft (about 40k–48k lb); flatbed and step deck 48/53 ft (about 40k–48k lb / up to ~100k gross on flatbed); power-only tractor with trailer attached. Anything outside that list is out of scope — including Sprinter and cargo van.",
     "cab_driver_types": "Day cab usually fits local or shorter runs. Sleeper cab supports longer OTR. Solo versus team driving and ELD hours follow FMCSA — we don't override hours-of-service from this chat.",
     "lane_prefs": "We note OTR versus local radius, how many miles you can cover in a day, and how long you can stay out. Daily home time every night is a hard constraint when you need it — if lanes can't support it, onboarding has to say so.",
     "docs_checklist": "Before production, onboarding typically reviews licence, COI, truck registration, equipment photos, and — when factoring — a notice of assignment. Own-MC also needs authority and W-9. Files received here are unverified; dispatch starts after review, and you still approve each load.",
@@ -20,17 +20,18 @@ REGISTER = {
     "accessorials": "Detention, layover, and TONU are accessorial terms on the rate confirmation or broker agreement when they apply. Dispatch handles those with the broker after you're running — I won't invent amounts from chat.",
     "trip_docs_invoice": "After delivery, BOL, POD, and related receipts support invoicing. Accurate paperwork helps payment move. Settlement timing still comes from your agreement and verified records — not from this sales chat.",
     "broker_vs_fee": "Broker freight negotiation is about the load rate. Ayyan's dispatch fee is separate and only quoted from our published schedule once we know own-MC or lease-on.",
-    "equip_dry_van": "Dry van is in scope. You still approve every load; we work brokers and paperwork for that equipment.",
-    "equip_reefer": "Reefer is in scope. Temperature and appointment work still go through you on each load; we handle the broker side.",
-    "equip_flatbed": "Flatbed and hotshot-style decks are in scope when the truck matches. We will not pretend a box registration is a deck.",
-    "equip_box_truck": "Box truck 24 ft or longer is in scope. Eligibility still needs a look from our onboarding manager.",
-    "equip_box_truck_short": "We only dispatch box trucks 24 ft or longer. A shorter box is outside our current service.",
-    "equip_hotshot": "Hotshot is in scope. Fit still depends on lanes and whether you run your own MC or need lease-on review.",
+    "equip_dry_van": "Dry van 48 or 53 ft is in scope (about 40k–48k lb enclosed freight). You still approve every load; we work brokers and paperwork.",
+    "equip_reefer": "Reefer 48 or 53 ft is in scope (temp-controlled cold/hot, about 40k–48k lb). Temperature and appointments still go through you on each load.",
+    "equip_flatbed": "Flatbed 48 or 53 ft is in scope (about 40k–48k lb / up to ~100k gross) when straps and securing match. We will not pretend a box registration is a deck.",
+    "equip_box_truck": "Box truck 24, 26, or 28 ft is in scope (about 10k–17k lb; lift gate or pallet jack when needed). Eligibility still needs onboarding.",
+    "equip_box_truck_short": "We only dispatch box trucks at 24, 26, or 28 ft. That length is outside our current service.",
+    "equip_length_mismatch": "That length isn't on our dispatch catalog for that equipment. We only run the standard sizes we publish — anything else is outside our current service.",
+    "equip_hotshot": "Hotshot 30 or 40 ft is in scope (binders, straps, tarps, chains as needed). Fit still depends on lanes and own-MC vs lease-on review.",
     "equip_sprinter_van": "We don't provide dispatch services for Sprinter or cargo vans.",
     "equip_cargo_van": "We don't provide dispatch services for cargo vans.",
-    "equip_step_deck": "Step deck is in scope. Fit still depends on lanes and whether you run your own MC or need lease-on review.",
-    "equip_power_only": "Power-only is in scope. Onboarding still confirms the authority path before production.",
-    "equip_unsupported": "That equipment is outside the categories we dispatch. We serve box trucks 24 ft or longer, hotshot, dry van, reefer, flatbed, step deck, and power-only.",
+    "equip_step_deck": "Step deck 48 or 53 ft is in scope (same payload band as flatbed, lower deck for taller cargo). Fit still depends on lanes and authority path.",
+    "equip_power_only": "Power-only (tractor unit) is in scope; payload follows the trailer attached. Onboarding still confirms the authority path before production.",
+    "equip_unsupported": "That equipment is outside what we dispatch. We only serve box 24/26/28 ft, hotshot 30/40 ft, dry van 48/53 ft, reefer 48/53 ft, flatbed 48/53 ft, step deck 48/53 ft, and power-only.",
     "onboarding": "Talking here isn't a contract. If you keep your own MC, our onboarding manager sends the setup packet and looks over the files. If you want to lease on, they review eligibility and the agreement. I don't approve from chat.",
     "fee": "Once we know own-MC or lease-on, I can give you the current dispatch fee. What you pay today is useful for onboarding — I just won't match another company's number here.",
     "fee_need_arrangement": "Once we know if you're keeping your own MC or leasing on, I can give you the current fee.",
@@ -94,7 +95,7 @@ REGISTER = {
 }
 
 META = {
-    key: {"source": "ayyan_sales_v9", "customer_facing": True}
+    key: {"source": "ayyan_sales_v10", "customer_facing": True}
     for key in REGISTER
     if key != "version"
 }
@@ -115,7 +116,25 @@ SUPPORTED_EQUIPMENT = frozenset(
     {"dry_van", "reefer", "flatbed", "box_truck", "hotshot", "step_deck", "power_only"}
 )
 UNSUPPORTED_EQUIPMENT = frozenset({"sprinter_van", "cargo_van"})
-BOX_MIN_FT = 24
+# Exact standard lengths we dispatch — anything else for that type is out of scope.
+# Power-only has no trailer length requirement.
+EQUIPMENT_LENGTHS_FT = {
+    "box_truck": frozenset({24, 26, 28}),
+    "hotshot": frozenset({30, 40}),
+    "dry_van": frozenset({48, 53}),
+    "reefer": frozenset({48, 53}),
+    "flatbed": frozenset({48, 53}),
+    "step_deck": frozenset({48, 53}),
+}
+# Typical payload bands from the catalog (lb). Used for copy/context; length remains the hard gate.
+EQUIPMENT_PAYLOAD_LB = {
+    "box_truck": (10_000, 17_000),
+    "dry_van": (40_000, 48_000),
+    "reefer": (40_000, 48_000),
+    "flatbed": (40_000, 48_000),
+    "step_deck": (40_000, 48_000),
+}
+BOX_MIN_FT = 24  # legacy alias; prefer EQUIPMENT_LENGTHS_FT["box_truck"]
 
 BLOCKED_CLAIMS = ("guarantee", "invented_fee", "load_promise", "insurance_approved", "contract_complete")
 

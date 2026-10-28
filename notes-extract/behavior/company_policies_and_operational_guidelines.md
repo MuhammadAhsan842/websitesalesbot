@@ -1,7 +1,7 @@
 \[
 {
 "id": "POL01",
-"title": "Supported equipment and the box-truck minimum",
+"title": "Supported equipment catalog (exact lengths)",
 "category": "company_policy",
 "triggers": \[
 "cargo van",
@@ -9,25 +9,28 @@
 "box truck length",
 "supported equipment"
 \],
-"behavior": "Serve box trucks of 24 ft or longer, hotshot, dry van, reefer, flatbed, step deck and power only. Day cab and sleeper describe tractor configurations. Cargo vans, Sprinter vans and unlisted equipment categories are outside scope. Recognize the equipment and explain the service boundary; stop qualification for the unsupported vehicle. A supported category or sufficient length does not establish complete onboarding eligibility. Do not invent minimum hotshot length or payload limits from ambiguous training notes.",
+"behavior": "Dispatch only this catalog: box truck 24/26/28 ft (about 10k–17k lb; lift gate/pallet jack when needed); hotshot 30/40 ft (binders, straps, tarps, chains); dry van 48/53 ft (about 40k–48k lb); reefer 48/53 ft (temp-controlled; about 40k–48k lb); flatbed 48/53 ft (about 40k–48k lb / up to ~100k gross); step deck 48/53 ft (same payload band, lower deck); power-only tractor (payload by trailer). Day cab and sleeper describe tractor configurations. Cargo vans, Sprinter vans, unlisted types, and non-catalog lengths are outside scope. Recognize the equipment and explain the boundary; stop qualification for the unsupported vehicle. In-catalog type/length is not complete onboarding eligibility.",
 "illustrative_reply": "For a cargo-van inquiry: “We don’t provide dispatch services for cargo vans.”",
 "avoid": \[
 "Ignoring an unsupported-equipment message",
 "Calling Sprinter support uncertain instead of unavailable",
 "Requesting MC and insurance for a rejected vehicle",
-"Treating 24 ft as an upper limit"
+"Treating box as any length 24 ft or longer (30+ ft box is out)",
+"Accepting dry van/reefer/flatbed/step deck lengths other than 48 or 53 ft",
+"Accepting hotshot lengths other than 30 or 40 ft"
 \],
 "source_refs": \[
-"SRC10: user confirmations"
+"SRC10: user confirmations",
+"SRC11: equipment catalog table"
 \],
 "facts_to_preserve": \[\],
 "authority": "company_rule",
 "review_status": "user_confirmed",
-"version": "1.0",
+"version": "1.1",
 "prepared_on": "2026-10-27",
 "example_is_template": false,
 "historical_numbers_are_policy": false,
-"content": "Supported equipment and the box-truck minimum\\nApplies when: cargo van, sprinter, box truck length, supported equipment\\nHandling: Serve box trucks of 24 ft or longer, hotshot, dry van, reefer, flatbed, step deck and power only. Day cab and sleeper describe tractor configurations. Cargo vans, Sprinter vans and unlisted equipment categories are outside scope. Recognize the equipment and explain the service boundary; stop qualification for the unsupported vehicle. A supported category or sufficient length does not establish complete onboarding eligibility. Do not invent minimum hotshot length or payload limits from ambiguous training notes.\\nIllustrative pattern, not a script: For a cargo-van inquiry: “We don’t provide dispatch services for cargo vans.”\\nAvoid: Ignoring an unsupported-equipment message; Calling Sprinter support uncertain instead of unavailable; Requesting MC and insurance for a rejected vehicle; Treating 24 ft as an upper limit\\nSource: SRC10: user confirmations"
+"content": "Supported equipment catalog (exact lengths)\\nApplies when: cargo van, sprinter, box truck length, supported equipment\\nHandling: Dispatch only box 24/26/28, hotshot 30/40, dry van/reefer/flatbed/step deck 48/53, and power-only. Non-catalog lengths and Sprinter/cargo van are out of scope.\\nIllustrative pattern, not a script: For a cargo-van inquiry: “We don’t provide dispatch services for cargo vans.”\\nSource: SRC11 equipment catalog"
 },
 {
 "id": "BEH01",

@@ -60,6 +60,24 @@ class FactMeanings(unittest.TestCase):
         self.assertEqual(items.get("trailerLength"), "22ft")
         self.assertEqual(items.get("equipmentSupport"), "out_of_scope")
 
+    def test_catalog_lengths_only(self):
+        cases = [
+            ("I have a 26 foot box truck", "box_truck", "26ft", "in_scope"),
+            ("I have a 30 foot box truck", "box_truck", "30ft", "out_of_scope"),
+            ("I run a 40 ft hotshot", "hotshot", "40ft", "in_scope"),
+            ("I run a 20 ft hotshot", "hotshot", "20ft", "out_of_scope"),
+            ("I have a 53 ft dry van", "dry_van", "53ft", "in_scope"),
+            ("I have a 45 ft dry van", "dry_van", "45ft", "out_of_scope"),
+            ("I run a 48 ft reefer", "reefer", "48ft", "in_scope"),
+            ("I run a 40 ft flatbed", "flatbed", "40ft", "out_of_scope"),
+            ("I have a 53 ft step deck", "step_deck", "53ft", "in_scope"),
+        ]
+        for text, eq, length, support in cases:
+            items = {item["key"]: item["value"] for item in rules.extract_facts(text)}
+            self.assertEqual(items.get("equipment"), eq, text)
+            self.assertEqual(items.get("trailerLength"), length, text)
+            self.assertEqual(items.get("equipmentSupport"), support, text)
+
     def test_regional_operating_mode(self):
         items = {item["key"]: item["value"] for item in rules.extract_facts(
             "I only want regional work."

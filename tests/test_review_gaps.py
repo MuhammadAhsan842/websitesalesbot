@@ -173,6 +173,23 @@ class WordingConsistency(unittest.TestCase):
             user_text="I have a 20 ft box truck",
         )
         self.assertIn("24", reply)
+        self.assertRegex(reply, r"24.*26.*28|24, 26, or 28")
+
+    def test_noncatalog_dry_van_length_refusal(self):
+        reply, _, _ = playbook.compose(
+            "general",
+            facts(equipment="dry_van", trailerLength="45ft", equipmentSupport="out_of_scope"),
+            [],
+            None,
+            False,
+            None,
+            None,
+            {"answered": ["equipment", "trailerLength"]},
+            wording="Dry van is in scope.",
+            plan={"answer_topics": [], "next_question_id": None, "conversation_move": "answer"},
+            user_text="I have a 45 ft dry van",
+        )
+        self.assertRegex(reply.lower(), r"catalog|outside our current service|standard sizes")
 
 
 class CrossTurnSupport(unittest.TestCase):

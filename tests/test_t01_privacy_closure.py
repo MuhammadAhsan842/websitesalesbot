@@ -109,7 +109,7 @@ class T01RetrievalAndHygiene(unittest.TestCase):
         self.assertFalse(graph._leaks(knowledge.lookup("expired_demand")))
 
     def test_register_v9_keys(self):
-        self.assertEqual(knowledge.REGISTER["version"], "ayyan_sales_v9")
+        self.assertEqual(knowledge.REGISTER["version"], "ayyan_sales_v10")
         for key in ("expired_demand", "existing_dispatcher", "privacy_boundary", "apology_no_pitch"):
             self.assertIn(key, knowledge.REGISTER)
 

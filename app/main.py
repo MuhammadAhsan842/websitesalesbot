@@ -74,15 +74,18 @@ async def lifespan(app: FastAPI):
     async with AsyncSqliteSaver.from_conn_string(str(CHECKPOINT)) as saver:
         app.state.graph = build_graph(saver)
 
-        async def boot():
-            await asyncio.to_thread(ingest.seed_reviewed_bank)
-            await qwen.warmup()
+        # Warm the chat model before accepting turns — background warmup used to hold the
+        # single CPU slot while the UI already sent /v1/turn, causing 60–120s hangs then 503.
+        await asyncio.to_thread(ingest.seed_reviewed_bank)
+        await qwen.warmup()
+
+        async def boot_index():
             # Embeddings use EMBED_URL (MiniLM), never the chat process. Skip unchanged hashes.
             await asyncio.to_thread(examples.reload_index)
             await asyncio.to_thread(examples.ensure_embeddings)
             await asyncio.to_thread(retrieve.build_index)
 
-        boot_task = asyncio.create_task(boot())
+        boot_task = asyncio.create_task(boot_index())
         try:
             yield
         finally:
@@ -151,7 +154,11 @@ def open_session(body: SessionIn | None = None):
     seed = _seed_equipment(body.equipment)
     session = db.create_session(seed)
     zoho.queue_inquiry(session, body.page)
-    zoho.drain()
+    try:
+        zoho.drain()
+    except Exception:
+        # Never block opening chat on CRM/sqlite contention — outbox retries later.
+        pass
     text = lookup("welcome")
     chips = CHIPS["open"]
     if seed:

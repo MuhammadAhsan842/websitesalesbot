@@ -35,13 +35,52 @@ function zohoBox(crm = {}) {
   `;
 }
 
-function reqBox(packet = {}) {
+function reqBox(packet = {}, caseId) {
   const rows = packet.requirements || [];
   if (!rows.length) return "<p class='muted'>No packet issued yet. Mark packet sent to start the SLA clock.</p>";
+  const ready = packet.ready_for_handoff
+    ? `<p><strong>Ready for handoff</strong></p>`
+    : `<p class="muted">Handoff blocked: ${(packet.handoff_blockers || []).join(", ") || "incomplete"}</p>`;
   return `
     <p class="muted">${packet.returned || 0}/${packet.issued || 0} returned · ${packet.overdue || 0} overdue · outstanding: ${(packet.outstanding || []).join(", ") || "none"}</p>
-    ${rows.map((r) => `<p><strong>${r.label}</strong> · ${r.status}${r.overdue ? " · OVERDUE" : ""} · due ${r.due_at ? new Date(r.due_at).toLocaleDateString() : "—"}</p>`).join("")}
+    ${ready}
+    ${rows.map((r) => `
+      <div class="card" style="margin-top:8px" data-req="${r.doc_type}">
+        <p><strong>${r.label}</strong> · ${r.status}${r.overdue ? " · OVERDUE" : ""} · due ${r.due_at ? new Date(r.due_at).toLocaleDateString() : "—"}
+        ${r.current_file_id ? ` · file ${String(r.current_file_id).slice(-8)}` : " · <em>no file</em>"}</p>
+        <div class="actions" style="margin-top:6px;flex-wrap:wrap">
+          <button class="btn btn-navy" type="button" data-decide="approve" data-doc="${r.doc_type}" ${r.current_file_id ? "" : "title=\"Needs a returned file\""}>Approve</button>
+          <button class="btn btn-ghost" type="button" data-decide="reject" data-doc="${r.doc_type}">Reject</button>
+          <button class="btn btn-ghost" type="button" data-decide="corrections" data-doc="${r.doc_type}">Corrections</button>
+          <button class="btn btn-gold" type="button" data-decide="waive" data-doc="${r.doc_type}">Waive</button>
+        </div>
+      </div>
+    `).join("")}
   `;
+}
+
+async function decideRequirement(caseId, docType, decision) {
+  let reason = "";
+  if (decision === "waive") {
+    reason = window.prompt("Waiver reason (required — authorized exception, not a missing file):", "") || "";
+    if (!reason.trim()) {
+      alert("Waive needs an explicit reason.");
+      return false;
+    }
+  } else if (decision === "reject" || decision === "corrections") {
+    reason = window.prompt("Optional note for the carrier / file:", "") || "";
+  }
+  const result = await fetch(`${API}/v1/cases/${caseId}/requirements/${docType}/decide`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ decision, reviewer: "Staff desk", reason }),
+  });
+  const body = await result.json().catch(() => ({}));
+  if (!result.ok) {
+    alert(body.detail || `Could not ${decision} ${docType}`);
+    return false;
+  }
+  return true;
 }
 
 function entityBox(report = {}) {
@@ -253,8 +292,8 @@ async function renderDetail(id) {
     <div>
       <div class="card">
         <h3>Packet requirements</h3>
-        <p class="muted">Issued transaction, not a merged carrier file. OCR stays unverified.</p>
-        ${reqBox(current.packet)}
+        <p class="muted">Per-document review: approve needs the current file; waive is a separate authorized decision.</p>
+        ${reqBox(current.packet, current.id)}
       </div>
       <div class="card">
         <h3>Document worker</h3>
@@ -297,6 +336,14 @@ async function renderDetail(id) {
   box.querySelector("[data-ack]")?.addEventListener("click", async () => {
     await fetch(`${API}/v1/cases/${id}/acknowledge-flags`, { method: "POST" });
     await renderDetail(id);
+  });
+  box.querySelectorAll("[data-decide]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const ok = await decideRequirement(id, btn.dataset.doc, btn.dataset.decide);
+      if (!ok) return;
+      await render();
+      await renderDetail(id);
+    });
   });
 }
 

@@ -511,7 +511,26 @@ def node_plan(state: TurnState) -> dict:
             variant = variants.default_variant(move, concern, proposal.get("intent"), repair)
     proposal["reply_variant_id"] = variant
     memory.update(session, proposal, state.get("user_text") or "")
-    if (session.get("memory") or {}).get("follow_up") == "driver_initiates" and proposal["action"] == "create_case":
+    # memory.update may clear pause on voluntary return; only suppress leftover pause state.
+    reactivating = bool(
+        re.search(
+            r"situation changed|i'?m ready to start|ready to start|can we (talk|discuss).{0,20}dispatch|"
+            r"considering switching|want to (try|start) again",
+            state.get("user_text") or "",
+            re.I,
+        )
+    )
+    if (
+        (session.get("memory") or {}).get("follow_up") == "driver_initiates"
+        and proposal["action"] == "create_case"
+        and not reactivating
+    ):
+        proposal["action"] = "none"
+    if (
+        fact_value(session["facts"], "equipmentSupport") == "out_of_scope"
+        and proposal.get("action") == "create_case"
+        and proposal.get("task") in {"setup_packet", "lease_agreement", "fit_check"}
+    ):
         proposal["action"] = "none"
     if session["handed_over"]:
         session["conversation_state"] = "handed_over"
@@ -582,6 +601,11 @@ def node_execute(state: TurnState) -> dict:
         task = proposal.get("task")
         if task not in CATALOGUE:
             return {"action_result": result, **_trace("execute", blocked="unknown_task")}
+        if (
+            fact_value(session["facts"], "equipmentSupport") == "out_of_scope"
+            and task in {"setup_packet", "lease_agreement", "fit_check"}
+        ):
+            return {"action_result": result, **_trace("execute", blocked="out_of_scope_equipment")}
         persist_human_task(session, task, "awaiting_human_action" if task != "operations_support" else "routed_support", task, "Human task queued")
         session["handed_over"] = True
         session["conversation_state"] = "handed_over"

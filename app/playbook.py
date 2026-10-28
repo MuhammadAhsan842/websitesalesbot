@@ -378,13 +378,20 @@ def compose(
     unsupported = fact_value(facts, "equipmentSupport") == "out_of_scope"
     if unsupported:
         eq = fact_value(facts, "equipment")
-        if eq == "box_truck":
+        length = fact_value(facts, "trailerLength")
+        from app.knowledge import EQUIPMENT_LENGTHS_FT, UNSUPPORTED_EQUIPMENT
+
+        if eq in UNSUPPORTED_EQUIPMENT:
+            refusal = lookup(EQUIP_KEYS.get(str(eq or ""), "equip_unsupported"))
+        elif eq == "box_truck" and length:
             refusal = lookup("equip_box_truck_short")
+        elif eq in EQUIPMENT_LENGTHS_FT and length:
+            refusal = lookup("equip_length_mismatch")
         else:
             refusal = lookup(EQUIP_KEYS.get(str(eq or ""), "equip_unsupported"))
         if not spoken or not re.search(
             r"don'?t provide|do not provide|outside|not (in |within )?scope|don'?t dispatch|do not dispatch|"
-            r"only dispatch box trucks 24|24 ft or longer",
+            r"only dispatch box trucks|24,\s*26,\s*or 28|catalog|outside our current service",
             spoken,
             re.I,
         ):
@@ -437,7 +444,8 @@ def compose(
         and (unsupported or _covers(spoken, topics))
     ):
         parts.append(spoken)
-        if receipt:
+        # Never attach an onboarding receipt when the truck is out of scope.
+        if receipt and not unsupported:
             parts.append(receipt)
         if equip_key := EQUIP_KEYS.get(str(fact_value(facts, "equipment") or "")):
             mem["explained"] = mark_explained(mem, [equip_key])
@@ -609,10 +617,10 @@ def compose(
     if explained_now:
         mem["explained"] = mark_explained(mem, explained_now)
 
-    if receipt:
+    if receipt and fact_value(facts, "equipmentSupport") != "out_of_scope":
         parts.append(receipt)
 
-    if saved:
+    if saved and fact_value(facts, "equipmentSupport") != "out_of_scope":
         if spoken:
             if not action_message:
                 parts.append("I've passed this to our onboarding manager. I don't send, sign, or approve from chat.")
@@ -625,6 +633,9 @@ def compose(
             parts.append("Onboarding will confirm own-MC vs lease-on before any packet goes out.")
         parts.append("I don't send, sign, or approve from here — that's onboarding.")
         return " ".join(_dedupe(parts)), CHIPS["handoff"], summary
+    if saved and fact_value(facts, "equipmentSupport") == "out_of_scope":
+        # Never claim an onboarding request for a truck we do not dispatch.
+        return " ".join(_dedupe(parts)), CHIPS.get("open") or CHIPS["default"], summary
 
     if core_done and concern not in {"repetition"} and not bits and not spoken and not topics:
         summary = fit_summary(facts, arrangement)

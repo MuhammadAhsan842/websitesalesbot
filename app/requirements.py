@@ -197,14 +197,15 @@ def decide(
         raise ValueError(f"no requirement for {doc_type}")
     bound_file = None
     if decision == "approve":
+        # Applicable conditionals (NOA / voided check) need evidence too — waive is separate.
         current_file = file_id or row.get("current_file_id")
-        optional = doc_type in {"notice_of_assignment", "voided_check"}
-        if not current_file and not optional:
+        if not current_file:
             raise ValueError("cannot approve without a returned file on this requirement")
-        if current_file:
-            bound_file = _validate_decision_file(case_id, doc_type, current_file)
+        bound_file = _validate_decision_file(case_id, doc_type, current_file)
         status = "approved"
     elif decision == "waive":
+        if not (reason or "").strip():
+            raise ValueError("waive requires an explicit reason (authorized waiver)")
         status = "waived"
     elif decision == "reject":
         status = "rejected"
@@ -244,17 +245,17 @@ def ready_for_handoff(case_id: str) -> tuple[bool, list[str]]:
     if not rows:
         return False, ["no_requirements_issued"]
     blockers = []
-    optional = {"notice_of_assignment", "voided_check"}
     for row in rows:
         status = row.get("status")
         doc_type = row.get("doc_type")
         if status in TERMINAL_OK:
-            if status == "approved" and doc_type not in optional:
+            if status == "approved":
                 file_id = row.get("current_file_id")
                 file_row = db.get_case_file(file_id) if file_id else None
                 if not file_row or file_row.get("case_id") != case_id:
                     blockers.append(f"{doc_type}:missing_file")
                     continue
+            # waived is an authorized exception — no file required
             continue
         blockers.append(f"{doc_type}:{status or 'missing'}")
     return (not blockers), blockers
