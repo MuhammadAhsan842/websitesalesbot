@@ -309,6 +309,10 @@ def _session_from_row(row: dict) -> dict:
     row["takeover"] = bool(row["takeover"])
     row["handed_over"] = bool(row["handed_over"])
     row["identity_confirmed"] = bool(row["identity_confirmed"])
+    # Handoff flags live in memory_json so they survive reload without a schema break.
+    mem = row["memory"] or {}
+    row["manager_requested"] = bool(mem.get("manager_requested") or row.get("manager_requested"))
+    row["manager_accepted"] = bool(mem.get("manager_accepted") or row.get("manager_accepted"))
     return row
 
 
@@ -318,6 +322,12 @@ def get_session(session_id: str) -> dict | None:
 
 
 def save_session(session: dict):
+    mem = dict(session.get("memory") or {})
+    if "manager_requested" in session:
+        mem["manager_requested"] = bool(session.get("manager_requested"))
+    if "manager_accepted" in session:
+        mem["manager_accepted"] = bool(session.get("manager_accepted"))
+    session["memory"] = mem
     execute(
         """UPDATE sessions SET case_id=?, channel=?, conversation_state=?, state_version=?,
            takeover=?, handed_over=?, identity_confirmed=?, facts_json=?, memory_json=?, updated_at=?
@@ -327,11 +337,11 @@ def save_session(session: dict):
             session["channel"],
             session["conversation_state"],
             session["state_version"],
-            int(session["takeover"]),
+            int(session.get("takeover") or session.get("manager_accepted") or False),
             int(session["handed_over"]),
             int(session["identity_confirmed"]),
             dumps(session["facts"]),
-            dumps(session.get("memory") or {}),
+            dumps(mem),
             now(),
             session["id"],
         ),

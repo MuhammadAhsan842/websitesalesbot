@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from app import db, docworker, embed, entities, examples, fees, ingest, media, playbook, qwen, requirements, retrieve, second_pass, vision, zoho
 from app.graph import _chips, build_graph
 from app.knowledge import EQUIP_KEYS, lookup
-from app.schema import CHIPS, STAFF_ACTS
+from app.schema import CHIPS, STAFF_ACTS, chip_options
 
 ROOT = Path(__file__).resolve().parent.parent
 CHECKPOINT = ROOT / "data" / "checkpoints.db"
@@ -23,11 +23,21 @@ class SessionIn(BaseModel):
     equipment: str | None = None
 
 
+class ChipIn(BaseModel):
+    label: str | None = None
+    field: str | None = None
+    value: str | int | float | None = None
+    autoLiabilityCoverage: str | None = None
+    cargoCoverage: str | None = None
+    requestedArrangement: str | None = None
+
+
 class TurnIn(BaseModel):
     session_id: str
     text: str
     turn_id: str | None = None
     equipment: str | None = None
+    chip: ChipIn | None = None
 
 
 class StaffAct(BaseModel):
@@ -160,18 +170,25 @@ def open_session(body: SessionIn | None = None):
         # Never block opening chat on CRM/sqlite contention — outbox retries later.
         pass
     text = lookup("welcome")
-    chips = CHIPS["open"]
+    ask = "open"
     if seed:
         from app.knowledge import lookup as kn
 
         text = kn(EQUIP_KEYS[seed["equipment"]["value"]]) + " " + kn("welcome").split(". ", 1)[-1]
-        chips = CHIPS["primaryProblem"]
+        ask = "primaryProblem"
+    session["manager_requested"] = False
+    session["manager_accepted"] = False
+    db.save_session(session)
     return {
         "session_id": session["id"],
         "opportunity_id": session["opportunity_id"],
         "channel": session["channel"],
         "text": text,
-        "chips": chips,
+        "chips": chip_options(ask) if ask != "open" else [
+            {"label": label, "field": None, "value": label} for label in CHIPS["open"]
+        ],
+        "manager_requested": False,
+        "manager_accepted": False,
     }
 
 
@@ -191,8 +208,14 @@ def session_history(session_id: str):
         "conversation_state": session["conversation_state"],
         "state_version": session["state_version"],
         "takeover": session["takeover"],
+        "manager_requested": bool(session.get("manager_requested")),
+        "manager_accepted": bool(session.get("manager_accepted")),
         "messages": messages,
-        "chips": CHIPS["open"] if not messages else _chips(session, {"next_field": ask}),
+        "chips": (
+            [{"label": label, "field": None, "value": label} for label in CHIPS["open"]]
+            if not messages
+            else chip_options(ask) if ask else [{"label": label, "field": None, "value": label} for label in _chips(session, {"next_field": ask})]
+        ),
         "text": None if messages else lookup("welcome"),
         "memory": session.get("memory") or {},
         "desk": playbook.desk_card(session),
@@ -208,8 +231,14 @@ async def turn(body: TurnIn, background: BackgroundTasks):
     if replay:
         return replay
     db.add_message(session["id"], "user", body.text)
+    chip_payload = body.chip.model_dump(exclude_none=True) if body.chip else None
     result = await app.state.graph.ainvoke(
-        {"session": session, "user_text": body.text, "traces": [{"_reset": True}]},
+        {
+            "session": session,
+            "user_text": body.text,
+            "chip": chip_payload,
+            "traces": [{"_reset": True}],
+        },
         {"configurable": {"thread_id": session["id"]}},
     )
     session = result["session"]
@@ -226,6 +255,8 @@ async def turn(body: TurnIn, background: BackgroundTasks):
         "chips": result.get("chips") or [],
         "traces": result.get("traces") or [],
         "takeover": session["takeover"],
+        "manager_requested": bool(session.get("manager_requested")),
+        "manager_accepted": bool(session.get("manager_accepted")),
         "fit_summary": session.get("fit_summary"),
         "desk": playbook.desk_card(session),
         "zoho": zoho.sync_status(session_id=session["id"], case_id=session.get("case_id"), opportunity_id=session.get("opportunity_id")),
@@ -538,6 +569,11 @@ def case_act(case_id: str, body: StaffAct):
         if session:
             session["takeover"] = True
             session["manager_accepted"] = True
+            session["manager_requested"] = True
+            mem = session.get("memory") or {}
+            mem["manager_accepted"] = True
+            mem["manager_requested"] = True
+            session["memory"] = mem
             db.save_session(session)
     db.add_event(f"Staff: {body.act}", {"caseId": case_id})
     zoho.queue_stage(saved, body.act, status, next_action)

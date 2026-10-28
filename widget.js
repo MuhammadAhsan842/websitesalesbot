@@ -49,6 +49,21 @@
     return "Chat · Talk here keeps this case; Call me is a callback";
   }
 
+  function normalizeChip(item) {
+    if (item && typeof item === "object") {
+      return {
+        label: item.label || String(item.value || ""),
+        field: item.field || null,
+        value: item.value != null ? item.value : item.label,
+        autoLiabilityCoverage: item.autoLiabilityCoverage,
+        cargoCoverage: item.cargoCoverage,
+        requestedArrangement: item.requestedArrangement,
+      };
+    }
+    const label = String(item || "");
+    return { label, field: null, value: label };
+  }
+
   function addMsg(role, text, pending = false) {
     const msg = el("div", { class: `agoc-msg ${role}${pending ? " pending" : ""}` });
     msg.innerHTML = String(text).replace(/\n/g, "<br>");
@@ -59,9 +74,10 @@
 
   function renderChips(list) {
     chips.innerHTML = "";
-    (list || []).forEach((label) => {
-      const btn = el("button", { type: "button" }, label);
-      btn.addEventListener("click", () => send(label));
+    (list || []).map(normalizeChip).forEach((chip) => {
+      if (!chip.label) return;
+      const btn = el("button", { type: "button" }, chip.label);
+      btn.addEventListener("click", () => send(chip.label, chip));
       chips.appendChild(btn);
     });
   }
@@ -73,7 +89,11 @@
       text ||
         "I'm Ayyan Group's AI sales assistant. I can check dispatch fit; a person handles papers. What are you running?",
     );
-    renderChips(list && list.length ? list : ["I need dispatch", "What equipment do you support?", "I'm already a carrier"]);
+    renderChips(
+      list && list.length
+        ? list
+        : ["I need dispatch", "What equipment do you support?", "I'm already a carrier"],
+    );
   }
 
   function renderHistory(data) {
@@ -125,19 +145,35 @@
     }
   }
 
-  async function send(text) {
-    const value = text.trim();
+  async function send(text, chip = null) {
+    const value = String(text || "").trim();
     if (!value) return;
     await ensureSession();
     addMsg("user", value);
     renderChips([]);
     const pending = addMsg("bot", "Listening — keeping this on the same case…", true);
     const turnId = crypto.randomUUID ? crypto.randomUUID() : `turn_${Date.now()}`;
+    const payload = {
+      session_id: sessionId,
+      text: value,
+      equipment: pageEquipment(),
+      turn_id: turnId,
+    };
+    if (chip && (chip.field || chip.value != null)) {
+      payload.chip = {
+        label: chip.label || value,
+        field: chip.field || null,
+        value: chip.value != null ? chip.value : value,
+      };
+      if (chip.autoLiabilityCoverage) payload.chip.autoLiabilityCoverage = chip.autoLiabilityCoverage;
+      if (chip.cargoCoverage) payload.chip.cargoCoverage = chip.cargoCoverage;
+      if (chip.requestedArrangement) payload.chip.requestedArrangement = chip.requestedArrangement;
+    }
     const post = () =>
       fetch(`${API}/v1/turn`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session_id: sessionId, text: value, equipment: pageEquipment(), turn_id: turnId }),
+        body: JSON.stringify(payload),
       });
     try {
       let response = await post();

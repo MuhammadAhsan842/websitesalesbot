@@ -124,7 +124,7 @@ class MdSuccessCompose(unittest.TestCase):
 
 class RegisterTone(unittest.TestCase):
     def test_v8_human_keys(self):
-        self.assertEqual(knowledge.REGISTER["version"], "ayyan_sales_v11")
+        self.assertEqual(knowledge.REGISTER["version"], "ayyan_sales_v12")
         self.assertIn("Hey", knowledge.lookup("welcome"))
         self.assertIn("fuel_requirement", knowledge.REGISTER)
         self.assertIn("privacy_boundary", knowledge.REGISTER)

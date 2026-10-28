@@ -63,7 +63,8 @@ class OneQuestionFlow(unittest.TestCase):
             {"answered": ["equipment", "trailerLength", "mcOwnership", "insurance"]},
         )
         self.assertEqual(ask, "coverageTypes")
-        self.assertIn("750k", QUESTIONS["coverageTypes"].lower() + CHIPS["coverageTypes"][1].lower())
+        self.assertIn("coverage", QUESTIONS["coverageTypes"].lower())
+        self.assertIn("Auto + cargo", CHIPS["coverageTypes"])
 
 
 class FeeAndHandoff(unittest.TestCase):
@@ -106,7 +107,10 @@ class FeeAndHandoff(unittest.TestCase):
         low = reply.lower()
         self.assertIn("review", low)
         self.assertIn("onboarding manager", low)
-        self.assertIn("Talk to onboarding manager", " ".join(chips))
+        chip_text = " ".join(
+            (c["label"] if isinstance(c, dict) else str(c)) for c in chips
+        )
+        self.assertIn("Talk to onboarding manager", chip_text)
 
     def test_human_intent_is_manager_not_generic(self):
         self.assertEqual(rules.detect_intent("Talk to onboarding manager"), "human")
@@ -217,7 +221,7 @@ class ReadyToStartDocs(unittest.TestCase):
 
 class RegisterVersion(unittest.TestCase):
     def test_v11(self):
-        self.assertEqual(knowledge.REGISTER["version"], "ayyan_sales_v11")
+        self.assertEqual(knowledge.REGISTER["version"], "ayyan_sales_v12")
 
 
 if __name__ == "__main__":

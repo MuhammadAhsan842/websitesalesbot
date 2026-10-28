@@ -16,13 +16,14 @@ def merge_traces(left: list, right: list) -> list:
 
 from app import db, examples, fees, media, memory, plan, playbook, qwen, requirements as reqmod, rules, second_pass, variants, zoho
 from app.knowledge import BLOCKED_CLAIMS, REGISTER, lookup
-from app.schema import ANSWER_TOPICS, CATALOGUE, CHIPS, FACT_KEYS, INTENTS, MOVES, VARIANTS
+from app.schema import ANSWER_TOPICS, CATALOGUE, CHIPS, FACT_KEYS, INTENTS, MOVES, QUESTIONS, VARIANTS, chip_options
 from app.tasks import fact_value, persist_human_task
 
 
 class TurnState(TypedDict, total=False):
     session: dict
     user_text: str
+    chip: dict
     proposal: dict
     knowledge_bits: list
     action_result: dict
@@ -31,6 +32,7 @@ class TurnState(TypedDict, total=False):
     traces: Annotated[list, merge_traces]
 
 
+# Earnings / guarantee dollars — not insurance-limit illustrations or attributed counteroffers.
 LEAK_MONEY = re.compile(r"\$\s*\d+", re.I)
 LEAK_CLAIM = re.compile(
     r"(?<![A-Za-z'])we guarantee|(?<![A-Za-z'])guaranteed \$?\d|you are approved|you're approved|"
@@ -41,20 +43,41 @@ LEAK_CLAIM = re.compile(
 )
 LEAK_DEBRIS = re.compile(r"(?:^|\s)\d+\)\s*hey!?|(?:^|\s)TODO:|\[insert|\{\{|placeholder", re.I)
 PERCENT = re.compile(r"(\d+(?:\.\d+)?)\s*%")
+# Allowed illustrative insurance / cargo limits in approved copy (not earnings promises).
+ALLOWED_MONEY_CONTEXT = re.compile(
+    r"(?:\$\s*)?(?:750\s*k|1\s*m(?:il)?(?:lion)?|100\s*,?\s*000|100\s*k)|"
+    r"\$\s*(?:750,?000|1,?000,?000|100,?000)|"
+    r"(?:around|about|often|typically|usually)\s+\$\s*[\d,]+|"
+    r"\$\s*[\d,]+\s*(?:–|-|to|/)\s*\$?\s*[\d,]*\s*m?",
+    re.I,
+)
+ATTRIBUTED_PERCENT = re.compile(
+    r"(?:proposing|requesting|you(?:'re| are) (?:asking for|proposing)|customer (?:asks?|wants?)|recorded (?:as|for) review)\s+(\d+(?:\.\d+)?)\s*%",
+    re.I,
+)
+
+
+def _scrub_allowed_money(text: str) -> str:
+    return ALLOWED_MONEY_CONTEXT.sub("LIMIT", text or "")
 
 
 def _leaks(text: str) -> bool:
-    if LEAK_MONEY.search(text) or LEAK_CLAIM.search(text) or LEAK_DEBRIS.search(text or ""):
+    """Reject ungrounded earnings/approval claims — not every dollar or percent."""
+    if LEAK_CLAIM.search(text or "") or LEAK_DEBRIS.search(text or ""):
+        return True
+    scrubbed = _scrub_allowed_money(text or "")
+    if LEAK_MONEY.search(scrubbed):
         return True
     try:
         allowed = fees.approved_percents()
     except Exception:
         allowed = set()
+    attributed = {m.group(1) for m in ATTRIBUTED_PERCENT.finditer(text or "")}
     for match in PERCENT.finditer(text or ""):
         token = match.group(1)
-        if token in allowed:
+        if token in allowed or (token.endswith(".0") and token[:-2] in allowed):
             continue
-        if token.endswith(".0") and token[:-2] in allowed:
+        if token in attributed:
             continue
         return True
     return False
@@ -247,10 +270,22 @@ def _from_qwen(model: dict, ruled: dict, user_text: str = "", current_facts: dic
     }
 
 
+def _api_chips(ask: str | None, labels: list | None) -> list[dict]:
+    if ask:
+        return chip_options(ask)
+    out = []
+    for item in labels or []:
+        if isinstance(item, dict) and item.get("label"):
+            out.append(item)
+        else:
+            out.append({"label": str(item), "field": None, "value": str(item)})
+    return out or chip_options(None)
+
+
 async def node_propose(state: TurnState) -> dict:
     session = state["session"]
     text = state["user_text"]
-    ruled = rules.propose(text, session["facts"], session.get("memory"))
+    ruled = rules.propose(text, session["facts"], session.get("memory"), chip=state.get("chip"))
     mem = session.get("memory") or {}
     tags = [
         tag
@@ -580,8 +615,9 @@ def node_execute(state: TurnState) -> dict:
     proposal = state["proposal"]
     action = proposal.get("action") or "none"
     result = {"verified": False, "saved": False, "message": None}
-    if session["takeover"] and action != "none":
-        return {"action_result": result, **_trace("execute", skipped="takeover")}
+    # Only an accepted desk takeover freezes automation; a pending request does not.
+    if session.get("manager_accepted") and action != "none":
+        return {"action_result": result, **_trace("execute", skipped="manager_accepted")}
     if action == "talk_here":
         if session["channel"] != "browser_voice":
             session["channel"] = "browser_voice"
@@ -610,7 +646,8 @@ def node_execute(state: TurnState) -> dict:
         )
         return {"session": session, "action_result": result, **_trace("execute", action="callback", case_id=session.get("case_id"))}
     if action == "takeover":
-        session["takeover"] = True
+        session["manager_requested"] = True
+        # Do not set takeover/manager_accepted — assistant keeps answering until staff accepts.
         persist_human_task(
             session,
             proposal.get("task") or "clarification",
@@ -668,16 +705,23 @@ def _voice_identity_required(session: dict) -> bool:
 
 
 def _chips(session: dict, proposal: dict) -> list[str]:
-    if session["takeover"]:
+    if session.get("manager_accepted"):
         return CHIPS["handoff"][:1]
-    if session["handed_over"]:
+    if session["handed_over"] and not session.get("manager_requested"):
         return CHIPS["handoff"]
     if _voice_identity_required(session):
         return CHIPS["voice_id"]
     if not playbook.missing_core(session["facts"], session.get("memory")):
         return CHIPS["assess"]
-    field = proposal.get("next_field")
+    field = proposal.get("next_field") or proposal.get("next_question_id")
     return CHIPS.get(field) or CHIPS["default"]
+
+
+def _commit_delivered_question(session: dict, ask: str | None) -> None:
+    mem = session.get("memory") or {}
+    mem["last_question_id"] = ask
+    mem["proposed_question_id"] = ask
+    session["memory"] = mem
 
 
 def node_reply(state: TurnState) -> dict:
@@ -687,14 +731,36 @@ def node_reply(state: TurnState) -> dict:
     action_result = state.get("action_result") or {}
     if proposal.get("intent") == "decline":
         text = action_result.get("message") or lookup("commit")
-        return {"reply_text": text, "chips": CHIPS["handoff"][:1], **_trace("reply", composed="decline")}
-    if session["takeover"] and proposal.get("intent") != "status":
-        # Bot-requested handoff ≠ accepted desk ownership.
-        if session.get("manager_accepted"):
-            text = "Our onboarding manager has this chat. I'll stay out of the way."
-        else:
-            text = action_result.get("message") or lookup("handoff_requested")
-        return {"reply_text": text, "chips": _chips(session, proposal), **_trace("reply", composed="takeover")}
+        _commit_delivered_question(session, None)
+        return {
+            "reply_text": text,
+            "chips": _api_chips(None, CHIPS["handoff"][:1]),
+            "session": session,
+            **_trace("reply", composed="decline"),
+        }
+    # Accepted desk ownership only — pending manager request still allows useful turns.
+    if session.get("manager_accepted") and proposal.get("intent") != "status":
+        text = "Our onboarding manager has this chat. I'll stay out of the way."
+        _commit_delivered_question(session, None)
+        return {
+            "reply_text": text,
+            "chips": _api_chips(None, _chips(session, proposal)),
+            "session": session,
+            **_trace("reply", composed="takeover"),
+        }
+    if proposal.get("intent") == "human" or (
+        proposal.get("action") == "takeover" and action_result.get("message")
+    ):
+        # First manager-request turn uses the honest waiting copy once.
+        if action_result.get("message") and not session.get("manager_accepted"):
+            text = action_result["message"]
+            _commit_delivered_question(session, None)
+            return {
+                "reply_text": text,
+                "chips": _api_chips(None, CHIPS["handoff"]),
+                "session": session,
+                **_trace("reply", composed="manager_requested"),
+            }
     if proposal.get("intent") == "status":
         if not session.get("case_id"):
             text = "Onboarding hasn't opened a case on this chat yet."
@@ -704,6 +770,8 @@ def node_reply(state: TurnState) -> dict:
             current = db.get_case(session["case_id"])
             status_key = (current or {}).get("status") or "unknown"
             text = _case_say(status_key)
+            if session.get("manager_requested") and not session.get("manager_accepted"):
+                text = lookup("handoff_requested") + " " + text
             snap = reqmod.snapshot(session["case_id"])
             if snap["issued"]:
                 outstanding = snap.get("outstanding") or []
@@ -721,7 +789,13 @@ def node_reply(state: TurnState) -> dict:
                     if flagged:
                         text += f"; {flagged} still need a look"
                     text += ". A COI on file isn't approved."
-        return {"reply_text": text, "chips": _chips(session, proposal), **_trace("reply", composed="status")}
+        _commit_delivered_question(session, None)
+        return {
+            "reply_text": text,
+            "chips": _api_chips(None, _chips(session, proposal)),
+            "session": session,
+            **_trace("reply", composed="status"),
+        }
     variant_text = variants.text_for(proposal.get("reply_variant_id"))
     text, chips, summary = playbook.compose(
         proposal.get("intent") or "general",
@@ -739,26 +813,50 @@ def node_reply(state: TurnState) -> dict:
         plan=proposal.get("plan"),
         user_text=state.get("user_text") or "",
     )
+    ask = (proposal.get("plan") or {}).get("next_question_id") or proposal.get("next_question_id") or proposal.get("next_field")
+    # Negotiation while a manager request is pending — acknowledge terms, don't mute.
+    if session.get("manager_requested") and not session.get("manager_accepted"):
+        percent = fact_value(session["facts"], "requestedFeePercent")
+        if percent and (
+            proposal.get("intent") == "fee"
+            or "negotiation" in ((proposal.get("plan") or {}).get("answer_topics") or [])
+        ):
+            text = (
+                f"You're requesting {percent}%. That hasn't been approved — it needs our onboarding manager's review. "
+                + lookup("handoff_requested")
+            )
+            chips = CHIPS["handoff"]
+            ask = None
     if not text:
         text = lookup("unknown")
     leaked = _leaks(text)
     if leaked:
-        text = lookup("unknown")
+        # Never replace a valid next question with unknown because of illustrative numbers.
+        if ask and ask in QUESTIONS:
+            text = QUESTIONS[ask]
+            leaked = False
+        else:
+            text = lookup("unknown")
+    text, ask, aligned_chips = playbook.align_delivery(text, ask, session["facts"])
+    chips = aligned_chips or chips or _chips(session, {**proposal, "next_field": ask})
     traces = state.get("traces") or []
     knowledge = next((item for item in traces if item.get("stage") == "knowledge"), {})
     propose = next((item for item in traces if item.get("stage") == "propose"), {})
     reason = second_pass.is_hard(proposal, bool(knowledge.get("hybrid_rerank")), leaked, propose.get("source") or "qwen")
     if reason:
         text = second_pass.repair(text)
+        text, ask, aligned_chips = playbook.align_delivery(text, ask, session["facts"])
+        chips = aligned_chips or chips
         second_pass.log(session["id"], state.get("user_text") or "", text, reason, propose.get("source") or "qwen")
+    _commit_delivered_question(session, ask)
     session["fit_summary"] = summary
     if summary and session["conversation_state"] not in {"handed_over"}:
         session["conversation_state"] = "assess_fit"
     return {
         "reply_text": text,
-        "chips": chips or _chips(session, proposal),
+        "chips": _api_chips(ask, chips),
         "session": session,
-        **_trace("reply", composed="playbook", second_pass=reason),
+        **_trace("reply", composed="playbook", second_pass=reason, delivered_question=ask),
     }
 
 

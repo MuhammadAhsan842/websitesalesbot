@@ -74,6 +74,7 @@ def empty() -> dict:
         "last_channel": "chat",
         "last_move": None,
         "last_question_id": None,
+        "proposed_question_id": None,
         "follow_up": "assistant",
         "preferred_channel": "chat",
         "next_step_readiness": "needs_explanation",
@@ -536,7 +537,9 @@ def update(session: dict, proposal: dict, user_text: str) -> dict:
         "last_offer": proposal.get("reply_variant_id") or current.get("last_offer"),
         "last_channel": session.get("channel") or current.get("last_channel") or "chat",
         "last_move": proposal.get("conversation_move") or current.get("last_move"),
-        "last_question_id": proposal.get("next_question_id") or proposal.get("next_field"),
+        # Keep prior delivered question until reply commits the one the customer actually saw.
+        "last_question_id": current.get("last_question_id"),
+        "proposed_question_id": proposal.get("next_question_id") or proposal.get("next_field"),
         "follow_up": follow_up,
         "preferred_channel": session.get("channel") or "chat",
         "next_step_readiness": readiness,

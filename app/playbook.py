@@ -323,6 +323,13 @@ def _wording_conflicts(spoken: str, facts: dict, ask: str | None, move: str | No
     # Kill empty-ack / filler loops that never advance.
     if re.search(r"next open point|what'?s next on (your|the) (list|file)|anything else (i|we) (should|can) (note|cover)", low):
         return True
+    # Stuck "fit already / future purchase / current setup" is not a qualify slot.
+    if re.search(
+        r"fit already|future purchase|current setup|planning a future purchase|"
+        r"what'?s your current mc status|do you have a fit already",
+        low,
+    ):
+        return True
     if fact_value(facts, "equipment") and re.search(
         r"what type of truck|what (truck|equipment) (are you|do you)|what are you running",
         low,
@@ -506,6 +513,9 @@ def compose(
         and (unsupported or _covers(spoken, topics))
     ):
         parts.append(spoken)
+        # Chips alone are not enough — the spoken line must ask the same pending question.
+        if ask and QUESTIONS.get(ask) and not unsupported and not _asks_about(" ".join(parts), ask):
+            parts.append(QUESTIONS[ask])
         # Never attach an onboarding receipt when the truck is out of scope.
         if receipt and not unsupported:
             parts.append(receipt)
@@ -726,3 +736,63 @@ def select_question(plan: dict, parts: list[str]) -> tuple[str | None, str | Non
     if ask and QUESTIONS.get(ask) and not _has_question(" ".join(parts)):
         return QUESTIONS[ask], ask
     return None, ask
+
+
+_ASK_MARKERS = {
+    "equipment": r"what type of truck|what are you running",
+    "trailerLength": r"what length|24,\s*26,\s*or 28|length trailer|length.*box",
+    "mcOwnership": r"own mc|lease on",
+    "insurance": r"own insurance on the truck|have your own insurance",
+    "coverageTypes": r"what coverage|commercial auto|cargo, or both",
+    "authorityAgeMonths": r"how old is your mc|age of your mc|authority\?",
+    "operatingMode": r"otr or staying local|prefer otr|staying local",
+    "milesPerDay": r"miles can you cover|miles.*a day|miles per day",
+    "stayOutDuration": r"stay(?:ing)? out|comfortable staying out",
+    "operatingArea": r"operating from|city or zip|which city",
+    "phone": r"what number should|callback number|timezone",
+}
+
+
+def _asks_about(text: str, ask: str | None) -> bool:
+    if not ask or not text:
+        return False
+    marker = _ASK_MARKERS.get(ask)
+    if not marker:
+        q = QUESTIONS.get(ask) or ""
+        return bool(q) and q.lower().rstrip("?") in text.lower()
+    return bool(re.search(marker, text, re.I))
+
+
+def align_delivery(text: str, ask: str | None, facts: dict) -> tuple[str, str | None, list[str]]:
+    """Force wording, pending question, and chips to agree before the customer sees them."""
+    spoken = (text or "").strip()
+    chips = CHIPS.get(ask) if ask and ask in CHIPS else None
+    if ask and QUESTIONS.get(ask):
+        if not _asks_about(spoken, ask) or re.search(
+            r"fit already|future purchase|current setup|current mc status|"
+            r"i don'?t have that answer",
+            spoken,
+            re.I,
+        ):
+            equip = fact_value(facts, "equipment")
+            length = fact_value(facts, "trailerLength")
+            ack = ""
+            if equip:
+                label = EQUIP_LABELS.get(str(equip), str(equip).replace("_", " "))
+                focus = f"{length} {label}" if length else label
+                ack = f"Got it — {focus}. "
+            spoken = (ack + QUESTIONS[ask]).strip()
+        elif not _has_question(spoken):
+            spoken = f"{spoken} {QUESTIONS[ask]}".strip()
+        return spoken, ask, list(chips or CHIPS.get(ask) or CHIPS["default"])
+    # No pending question — strip stuck qualify loops.
+    if re.search(r"fit already|future purchase|current setup|current mc status", spoken, re.I):
+        equip = fact_value(facts, "equipment")
+        length = fact_value(facts, "trailerLength")
+        if equip:
+            label = EQUIP_LABELS.get(str(equip), str(equip).replace("_", " "))
+            focus = f"{length} {label}" if length else label
+            spoken = f"Got it — {focus} is on file. What else should we cover?"
+        else:
+            spoken = lookup("welcome")
+    return spoken, None, list(CHIPS["default"])

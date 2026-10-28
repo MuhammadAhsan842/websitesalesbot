@@ -150,7 +150,7 @@ QUESTIONS = {
     "liftgate": "Do you need a liftgate?",
     "operatingMode": "Do you prefer OTR or staying local?",
     "insurance": "Do you currently have your own insurance on the truck?",
-    "coverageTypes": "What coverage does your policy include — commercial auto (often around $750k–$1M), cargo (often around $100k), or both?",
+    "coverageTypes": "What coverage does your policy include — commercial auto, cargo, or both?",
     "authorityAgeMonths": "About how old is your MC or authority?",
     "weekdaySchedule": "Are you able to stay on the road Monday through Friday?",
     "milesPerDay": "How many miles can you cover in a day?",
@@ -170,7 +170,7 @@ CHIPS = {
     "operatingMode": ["OTR", "Local work"],
     "trailerLength": ["24 ft", "26 ft", "28 ft", "30 ft", "40 ft", "48 ft", "53 ft"],
     "insurance": ["I have my own insurance", "I need insurance", "Not sure yet"],
-    "coverageTypes": ["Auto + cargo", "750k / 1M auto", "Cargo ~$100k", "Not sure yet"],
+    "coverageTypes": ["Auto + cargo", "Commercial auto", "Cargo", "Not sure yet"],
     "authorityAgeMonths": ["Under 3 months", "About 5 months", "1 year+", "Not sure"],
     "weekdaySchedule": ["Monday through Friday", "Home weekends", "Flexible"],
     "milesPerDay": ["400-500", "500-600", "I don't know yet"],
@@ -201,3 +201,45 @@ EQUIP_LABELS = {
     "step_deck": "step deck",
     "power_only": "power only",
 }
+
+# Structured meanings for chip labels (and matching free text). Parser uses these first.
+CHIP_VALUES: dict[str, dict] = {
+    "auto + cargo": {"coverageTypes": "auto_and_cargo", "autoLiabilityCoverage": "present", "cargoCoverage": "present"},
+    "commercial auto": {"coverageTypes": "auto", "autoLiabilityCoverage": "present"},
+    "750k / 1m auto": {"coverageTypes": "auto", "autoLiabilityCoverage": "present"},
+    "cargo": {"coverageTypes": "cargo", "cargoCoverage": "present"},
+    "cargo ~$100k": {"coverageTypes": "cargo", "cargoCoverage": "present"},
+    "under 3 months": {"authorityAgeMonths": 2},
+    "about 5 months": {"authorityAgeMonths": 5},
+    "1 year+": {"authorityAgeMonths": 12},
+    "400-500": {"milesPerDay": "400-500"},
+    "500-600": {"milesPerDay": "500-600"},
+    "otr": {"operatingMode": "otr"},
+    "local work": {"operatingMode": "local"},
+    "i have my own insurance": {"insurance": "own_insurance"},
+    "i need insurance": {"insurance": "needs_insurance"},
+    "i have my own mc": {"mcOwnership": "own_mc", "requestedArrangement": "dispatch_service"},
+    "i want to lease on": {"mcOwnership": "no_own_mc", "requestedArrangement": "lease_on"},
+    "not sure about my mc": {"mcOwnership": "unclear", "requestedArrangement": "needs_clarification"},
+    "home weekends": {"stayOutDuration": "home_weekends", "weekdaySchedule": "flexible"},
+    "1-2 weeks out": {"stayOutDuration": "1-2 weeks"},
+}
+
+
+def chip_options(field: str | None) -> list[dict]:
+    """API chip payloads: label for display, field+value for reliable submission."""
+    if not field:
+        return [{"label": label, "field": None, "value": label} for label in CHIPS.get("default") or []]
+    labels = CHIPS.get(field) or CHIPS.get("default") or []
+    out = []
+    for label in labels:
+        mapped = CHIP_VALUES.get(label.lower(), {})
+        value = mapped.get(field)
+        if value is None and mapped:
+            value = mapped.get("coverageTypes") or mapped.get("operatingMode") or next(iter(mapped.values()), label)
+        payload = {"label": label, "field": field, "value": value if value is not None else label}
+        for key in ("autoLiabilityCoverage", "cargoCoverage", "requestedArrangement"):
+            if key in mapped:
+                payload[key] = mapped[key]
+        out.append(payload)
+    return out

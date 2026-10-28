@@ -1,7 +1,7 @@
 """Approved sales playbook. Personality lives here; the model cannot add claims."""
 
 REGISTER = {
-    "version": "ayyan_sales_v11",
+    "version": "ayyan_sales_v12",
     "welcome": "Hey — I'm Ayyan Group's AI sales assistant. I can help see if we're a fit; our onboarding manager handles the papers. What are you running?",
     "services": "We only dispatch these types: box truck 24/26/28 ft, hotshot 30/40 ft, dry van 48/53 ft, reefer 48/53 ft, flatbed 48/53 ft, step deck 48/53 ft, and power-only. You approve every load. We handle brokers and paperwork.",
     "freight_roles": "Shippers own the cargo. Brokers connect shippers with carriers and pay for completed loads. A dispatcher represents the carrier — finds matching freight, negotiates with brokers, and handles paperwork. The motor carrier runs the truck under FMCSA rules. Broker freight pay goes to the carrier's account — dispatchers don't take those payments personally.",
@@ -80,7 +80,7 @@ REGISTER = {
     "email_delivery": "The packet email didn't go through. Clear some space and tell me when to resend. I won't ask you to sign until that lands.",
     "photo_unverified": "I have the photo on this chat (unverified). Onboarding still needs to look at it — I can't confirm equipment, insurance, or eligibility from an image.",
     "insurance": "Onboarding checks commercial auto liability and cargo on your COI. Ayyan confirms the limits that apply to your setup — a COI on this chat isn't insurance approved.",
-    "insurance_coverage_ask": "What coverage does your policy include — commercial auto (often around $750k–$1M), cargo (often around $100k), or both? Ayyan still confirms the required limits at review.",
+    "insurance_coverage_ask": "What coverage does your policy include — commercial auto, cargo, or both? Ayyan still confirms the required limits at review.",
     "insurance_affordability": "Understood — insurance cost is holding things up. I don't sell policies from chat. We can pause until you and the owner are ready; no pressure from me.",
     "packet_received": "Nice — you have the packet and plan to return it. On our side it still isn't signed or approved until onboarding has the returned files.",
     "negotiation": "I can pass that fee request to our onboarding manager for review — it isn't approved from chat.",
@@ -103,7 +103,7 @@ REGISTER = {
 }
 
 META = {
-    key: {"source": "ayyan_sales_v11", "customer_facing": True}
+    key: {"source": "ayyan_sales_v12", "customer_facing": True}
     for key in REGISTER
     if key != "version"
 }

@@ -285,29 +285,42 @@ def extract_facts(text: str) -> list[dict]:
         "eleven": 11,
         "twelve": 12,
     }
-    age = re.search(
-        r"(?:mc|authority).{0,32}(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)"
-        r"\s*(day|days|week|weeks|month|months|year|years)\s*old|"
-        r"(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)"
-        r"\s*(day|days|week|weeks|month|months|year|years)\s*old.{0,32}(?:mc|authority)",
-        t,
-    )
-    if age:
-        raw_num = age.group(1) or age.group(3)
-        unit = (age.group(2) or age.group(4) or "").rstrip("s")
-        num = age_words.get(str(raw_num), int(raw_num) if str(raw_num).isdigit() else None)
-        if num is not None:
-            months = num
-            if unit == "day":
-                months = max(1, num // 30) if num >= 30 else 0
-            elif unit == "week":
-                months = max(1, num // 4)
-            elif unit == "year":
-                months = num * 12
-            items.append({"key": "authorityAgeMonths", "value": months, "status": "user_stated"})
-            if not any(item["key"] == "mcOwnership" for item in items):
-                items.append({"key": "mcOwnership", "value": "own_mc", "status": "user_stated"})
-                items.append({"key": "requestedArrangement", "value": "dispatch_service", "status": "user_stated"})
+    months_val = None
+    if re.search(r"\b1\s*year\+|\ba year\+|\bone year\+|over (?:a |one )?year", t):
+        months_val = 12
+    else:
+        age = re.search(
+            r"(?:about |around |roughly |approximately )?"
+            r"(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)"
+            r"\s*(days?|weeks?|months?|years?)(?:\s*old)?",
+            t,
+        )
+        # Require MC/authority context OR a bare chip-like age phrase.
+        if age and (
+            re.search(r"\b(mc|authority)\b", t)
+            or re.fullmatch(
+                r"\s*(?:about |around )?\d+\s*months?(?:\s*old)?\s*",
+                t,
+            )
+            or re.search(r"under\s*3\s*months", t)
+        ):
+            raw_num, unit = age.group(1), age.group(2).rstrip("s")
+            num = age_words.get(str(raw_num), int(raw_num) if str(raw_num).isdigit() else None)
+            if num is not None:
+                months_val = num
+                if unit == "day":
+                    months_val = max(1, num // 30) if num >= 30 else 0
+                elif unit == "week":
+                    months_val = max(1, num // 4)
+                elif unit == "year":
+                    months_val = num * 12
+        elif re.search(r"under\s*3\s*months|less than\s*3\s*months", t):
+            months_val = 2
+    if months_val is not None:
+        items.append({"key": "authorityAgeMonths", "value": months_val, "status": "user_stated"})
+        if not any(item["key"] == "mcOwnership" for item in items):
+            items.append({"key": "mcOwnership", "value": "own_mc", "status": "user_stated"})
+            items.append({"key": "requestedArrangement", "value": "dispatch_service", "status": "user_stated"})
     if re.search(r"(no mc|don'?t have.*mc|lease on|lease-on)", t):
         items.append({"key": "mcOwnership", "value": "no_own_mc", "status": "user_stated"})
         items.append({"key": "requestedArrangement", "value": "lease_on", "status": "user_stated"})
@@ -757,14 +770,19 @@ def task_for(arrangement: str | None, intent: str) -> str | None:
 
 
 def _short_answer_facts(text: str, memory: dict | None) -> list[dict]:
-    """Map terse answers to the pending qualify slot (chip / yes / no)."""
+    """Map chip labels and terse answers to the pending qualify slot."""
+    from app.schema import CHIP_VALUES
+
     pending = (memory or {}).get("last_question_id")
-    if not pending:
-        return []
-    t = (text or "").strip().lower()
-    if not t or len(t) > 80:
-        return []
+    raw = (text or "").strip()
+    t = raw.lower()
     items: list[dict] = []
+    # Exact chip labels (and legacy aliases) map to typed values.
+    chip = CHIP_VALUES.get(t) or CHIP_VALUES.get(re.sub(r"\s+", " ", t))
+    if chip:
+        return [{"key": key, "value": value, "status": "user_stated"} for key, value in chip.items()]
+    if not pending or not t or len(t) > 120:
+        return items
     yes = bool(re.fullmatch(r"(yes|yep|yeah|y|si|sí|correct|i do|i have|i have it)", t))
     no = bool(re.fullmatch(r"(no|nope|nah|n|i don'?t|do not)", t))
     if pending == "insurance":
@@ -777,10 +795,12 @@ def _short_answer_facts(text: str, memory: dict | None) -> list[dict]:
             items.append({"key": "coverageTypes", "value": "auto_and_cargo", "status": "user_stated"})
             items.append({"key": "autoLiabilityCoverage", "value": "present", "status": "user_stated"})
             items.append({"key": "cargoCoverage", "value": "present", "status": "user_stated"})
-        elif re.search(r"commercial auto|auto liability|\bauto\b", t):
+        elif re.search(r"commercial auto|auto liability|\bauto\b|750k|1\s*m", t):
             items.append({"key": "coverageTypes", "value": "auto", "status": "user_stated"})
-        elif re.search(r"\bcargo\b", t):
+            items.append({"key": "autoLiabilityCoverage", "value": "present", "status": "user_stated"})
+        elif re.search(r"\bcargo\b|100k", t):
             items.append({"key": "coverageTypes", "value": "cargo", "status": "user_stated"})
+            items.append({"key": "cargoCoverage", "value": "present", "status": "user_stated"})
     elif pending == "operatingMode":
         if re.search(r"\botr\b|over the road", t):
             items.append({"key": "operatingMode", "value": "otr", "status": "user_stated"})
@@ -793,10 +813,53 @@ def _short_answer_facts(text: str, memory: dict | None) -> list[dict]:
             items.append({"key": "mcOwnership", "value": "own_mc", "status": "user_stated"})
         elif no or re.search(r"lease", t):
             items.append({"key": "mcOwnership", "value": "no_own_mc", "status": "user_stated"})
+    elif pending == "authorityAgeMonths":
+        if re.search(r"1\s*year\+|a year\+|over (a |one )?year|12\s*months", t):
+            items.append({"key": "authorityAgeMonths", "value": 12, "status": "user_stated"})
+        elif re.search(r"under\s*3|less than\s*3|<\s*3", t):
+            items.append({"key": "authorityAgeMonths", "value": 2, "status": "user_stated"})
+        else:
+            m = re.search(r"(?:about |around |roughly |approximately )?(\d+)\s*months?", t)
+            if m:
+                items.append({"key": "authorityAgeMonths", "value": int(m.group(1)), "status": "user_stated"})
+    elif pending == "milesPerDay":
+        m = re.fullmatch(r"(\d{2,4})\s*[-–to]+\s*(\d{2,4})", t) or re.search(
+            r"(\d{2,4})\s*[-–to]+\s*(\d{2,4})", t
+        )
+        if m:
+            items.append({"key": "milesPerDay", "value": f"{m.group(1)}-{m.group(2)}", "status": "user_stated"})
+        elif re.fullmatch(r"\d{2,4}", t):
+            items.append({"key": "milesPerDay", "value": t, "status": "user_stated"})
+    elif pending == "stayOutDuration":
+        items.append({"key": "stayOutDuration", "value": raw[:80], "status": "user_stated"})
     return items
 
 
-def propose(text: str, facts: dict, memory: dict | None = None) -> dict:
+def facts_from_chip(chip: dict | None) -> list[dict]:
+    """Typed chip submission from the widget — authoritative for that field."""
+    if not isinstance(chip, dict):
+        return []
+    field = chip.get("field")
+    value = chip.get("value")
+    label = (chip.get("label") or "").strip().lower()
+    items: list[dict] = []
+    if field and value not in (None, ""):
+        items.append({"key": field, "value": value, "status": "user_stated"})
+    for key in ("autoLiabilityCoverage", "cargoCoverage", "requestedArrangement"):
+        if key in chip and chip[key] not in (None, ""):
+            items.append({"key": key, "value": chip[key], "status": "user_stated"})
+    if label:
+        from app.schema import CHIP_VALUES
+
+        mapped = CHIP_VALUES.get(label) or {}
+        have = {item["key"] for item in items}
+        for key, val in mapped.items():
+            if key not in have:
+                items.append({"key": key, "value": val, "status": "user_stated"})
+    return items
+
+
+def propose(text: str, facts: dict, memory: dict | None = None, chip: dict | None = None) -> dict:
     from app import plan as planmod
 
     from app import memory as memmod
@@ -804,8 +867,13 @@ def propose(text: str, facts: dict, memory: dict | None = None) -> dict:
     intent = detect_intent(text)
     repair = detect_repair(text)
     items = extract_facts(text)
-    # Prefer short-answer fills when extract didn't already set that key.
+    # Typed chips win over free-text guesses for the same keys.
     have = {item["key"] for item in items}
+    for item in facts_from_chip(chip):
+        if item["key"] in have:
+            items = [row for row in items if row["key"] != item["key"]]
+        items.append(item)
+        have.add(item["key"])
     for item in _short_answer_facts(text, memory):
         if item["key"] not in have:
             items.append(item)
