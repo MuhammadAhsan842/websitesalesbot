@@ -75,6 +75,7 @@ CASE_SAY = {
     "approved_for_handoff": "Onboarding signed off for handoff to dispatch.",
     "production_accepted": "Dispatch has the truck.",
     "human_takeover": "Our onboarding manager is on this chat.",
+    "manager_requested": "I've saved your request for an onboarding manager. Nobody has accepted it yet.",
     "callback_requested": "A callback is noted. Nobody has dialed yet.",
     "routed_support": "This went to operations.",
 }
@@ -85,14 +86,14 @@ def _case_say(status: str) -> str:
     return line + " That's not insurance or agreement approval."
 
 
-def _evidence_ok(evidence: str | None, user_text: str) -> bool:
+def _evidence_ok(evidence: str | None, user_text: str, *, require: bool = False) -> bool:
     span = (evidence or "").strip().lower()
     if not span:
-        return True
+        return not require
     return span in (user_text or "").lower()
 
 
-def _clean_facts(items: list | None, user_text: str = "") -> list[dict]:
+def _clean_facts(items: list | None, user_text: str = "", *, require_evidence: bool = False) -> list[dict]:
     cleaned = []
     for item in items or []:
         if not isinstance(item, dict):
@@ -100,11 +101,13 @@ def _clean_facts(items: list | None, user_text: str = "") -> list[dict]:
         key = item.get("key")
         if key != "_unknown" and key not in FACT_KEYS:
             continue
-        if not _evidence_ok(item.get("evidence"), user_text):
+        if not _evidence_ok(item.get("evidence"), user_text, require=require_evidence and key in {"equipment", "trailerLength"}):
             continue
         value = item.get("value")
         if value in ("null", ""):
             value = None
+        if key == "equipment" and isinstance(value, str):
+            value = rules.normalize_equip(value)
         cleaned.append({"key": key, "value": value, "status": item.get("status") or "user_stated"})
     return cleaned
 
@@ -117,25 +120,39 @@ def _merge_facts(
 ) -> list[dict]:
     by_key: dict[str, dict] = {}
     advertised = rules.is_advertised_equipment(user_text)
-    skip_equip = advertised or not rules.owned_equipment_claim(user_text)
+    # Catalog / support questions are not the customer's truck.
+    catalog_ask = bool(
+        re.search(
+            r"what (equipment|trucks?) (do you|did you)|do you (support|dispatch|haul)|what do you support",
+            user_text or "",
+            re.I,
+        )
+    )
+    skip_equip = advertised or catalog_ask or not rules.owned_equipment_claim(user_text)
     current_equip = None
     if isinstance((current_facts or {}).get("equipment"), dict):
         current_equip = (current_facts or {})["equipment"].get("value")
     for item in _clean_facts(ruled_facts, user_text):
-        if advertised and item["key"] in {"equipment", "trailerLength"}:
+        if (advertised or catalog_ask) and item["key"] in {"equipment", "trailerLength"}:
             continue
         by_key[item["key"]] = item
-    for item in _clean_facts(model_facts, user_text):
-        if item["key"] in {"equipment", "trailerLength"} and advertised:
+    ruled_equip = by_key.get("equipment", {}).get("value")
+    for item in _clean_facts(model_facts, user_text, require_evidence=True):
+        if item["key"] in {"equipment", "trailerLength"} and (advertised or catalog_ask):
             continue
-        if (
-            item["key"] == "equipment"
-            and current_equip
-            and item.get("value") not in (None, current_equip)
-            and skip_equip
-        ):
+        if item["key"] == "equipment":
+            # Prefer deterministic extraction; never let a conflicting model value win.
+            if ruled_equip and item.get("value") not in (None, ruled_equip):
+                continue
+            if (
+                current_equip
+                and item.get("value") not in (None, current_equip)
+                and (skip_equip or not rules.owned_equipment_claim(user_text))
+            ):
+                continue
+        if item["key"] == "trailerLength" and (advertised or catalog_ask):
             continue
-        if item["key"] == "trailerLength" and advertised:
+        if item["key"] in by_key and item["key"] in {"equipment", "trailerLength", "mcOwnership"}:
             continue
         if item.get("value") not in (None, False) or item["key"] not in by_key:
             by_key[item["key"]] = item
@@ -594,8 +611,20 @@ def node_execute(state: TurnState) -> dict:
         return {"session": session, "action_result": result, **_trace("execute", action="callback", case_id=session.get("case_id"))}
     if action == "takeover":
         session["takeover"] = True
-        persist_human_task(session, proposal.get("task") or "clarification", "human_takeover", "Onboarding manager owns conversation", "Human takeover")
-        result.update({"saved": True, "message": "I'll pause the automated follow-up. Our onboarding manager has this same chat and what's on file."})
+        persist_human_task(
+            session,
+            proposal.get("task") or "clarification",
+            "manager_requested",
+            "Onboarding manager request saved — awaiting assignment/acceptance",
+            "Manager handoff requested",
+        )
+        result.update(
+            {
+                "saved": True,
+                "verified": False,
+                "message": lookup("handoff_requested"),
+            }
+        )
         return {"session": session, "action_result": result, **_trace("execute", action="takeover")}
     if action == "create_case":
         task = proposal.get("task")
@@ -660,7 +689,11 @@ def node_reply(state: TurnState) -> dict:
         text = action_result.get("message") or lookup("commit")
         return {"reply_text": text, "chips": CHIPS["handoff"][:1], **_trace("reply", composed="decline")}
     if session["takeover"] and proposal.get("intent") != "status":
-        text = "Our onboarding manager has this chat. I'll stay out of the way."
+        # Bot-requested handoff ≠ accepted desk ownership.
+        if session.get("manager_accepted"):
+            text = "Our onboarding manager has this chat. I'll stay out of the way."
+        else:
+            text = action_result.get("message") or lookup("handoff_requested")
         return {"reply_text": text, "chips": _chips(session, proposal), **_trace("reply", composed="takeover")}
     if proposal.get("intent") == "status":
         if not session.get("case_id"):

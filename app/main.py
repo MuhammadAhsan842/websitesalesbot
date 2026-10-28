@@ -80,7 +80,7 @@ async def lifespan(app: FastAPI):
         await qwen.warmup()
 
         async def boot_index():
-            # Embeddings use EMBED_URL (MiniLM), never the chat process. Skip unchanged hashes.
+            # Embeddings use EMBED_URL (nomic-embed-text), never the chat process. Skip unchanged hashes.
             await asyncio.to_thread(examples.reload_index)
             await asyncio.to_thread(examples.ensure_embeddings)
             await asyncio.to_thread(retrieve.build_index)
@@ -537,6 +537,7 @@ def case_act(case_id: str, body: StaffAct):
         session = db.get_session(current["session_id"])
         if session:
             session["takeover"] = True
+            session["manager_accepted"] = True
             db.save_session(session)
     db.add_event(f"Staff: {body.act}", {"caseId": case_id})
     zoho.queue_stage(saved, body.act, status, next_action)

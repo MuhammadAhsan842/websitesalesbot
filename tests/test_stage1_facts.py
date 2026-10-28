@@ -82,7 +82,25 @@ class FactMeanings(unittest.TestCase):
         items = {item["key"]: item["value"] for item in rules.extract_facts(
             "I only want regional work."
         )}
-        self.assertEqual(items.get("operatingMode"), "regional")
+        # Regional is not sold — force re-ask OTR vs local.
+        self.assertEqual(items.get("operatingMode"), "unclear")
+
+    def test_refeer_normalizes_to_reefer(self):
+        items = {item["key"]: item["value"] for item in rules.extract_facts(
+            "I have a 53 ft refeer"
+        )}
+        self.assertEqual(items.get("equipment"), "reefer")
+        self.assertEqual(items.get("trailerLength"), "53ft")
+        self.assertEqual(items.get("equipmentSupport"), "in_scope")
+
+    def test_semi_truck_keeps_stated_length(self):
+        items = {item["key"]: item["value"] for item in rules.extract_facts(
+            "Told: 53 ft semitruck."
+        )}
+        # "semi" maps to dry_van catalog; length must stay 53 — never invent a 30-ft box.
+        self.assertEqual(items.get("equipment"), "dry_van")
+        self.assertEqual(items.get("trailerLength"), "53ft")
+        self.assertNotEqual(items.get("equipment"), "box_truck")
 
 
 class DirectQuestions(unittest.TestCase):
@@ -127,7 +145,7 @@ class DirectQuestions(unittest.TestCase):
             mcOwnership="own_mc",
             insurance="own_insurance",
             operatingArea="dallas",
-            operatingMode="regional",
+            operatingMode="otr",
         )
         mem = memory.empty()
         mem["answered"] = list(state.keys())

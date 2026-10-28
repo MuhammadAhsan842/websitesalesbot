@@ -57,5 +57,6 @@ def live_quote(arrangement: str | None) -> str:
     label = "lease-on settlement" if arrangement == "lease_on" else "own-MC dispatch fee"
     return (
         f"For this arrangement, the current {label} is {_fmt(row['percent'])}% of gross. "
-        "That's the rate our onboarding manager uses — I won't change it here."
+        "That's the rate our onboarding manager uses — I won't change it here. "
+        + lookup("fee_route_manager")
     )

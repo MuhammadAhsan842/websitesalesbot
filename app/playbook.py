@@ -19,6 +19,9 @@ def fact_value(facts: dict, key: str):
 def missing_core(facts: dict, memory: dict | None = None) -> list[str]:
     answered = set((memory or {}).get("answered") or [])
     constraint = (memory or {}).get("hard_constraint")
+    mode = fact_value(facts, "operatingMode")
+    insurance = fact_value(facts, "insurance")
+    mc = fact_value(facts, "mcOwnership")
     missing = []
     for key in ASK_ORDER:
         if key in answered:
@@ -34,8 +37,21 @@ def missing_core(facts: dict, memory: dict | None = None) -> list[str]:
             continue
         if constraint == "home_every_night" and key in {"supportNeed", "primaryProblem", "weekdaySchedule"}:
             continue
-        if fact_value(facts, "operatingMode") == "local" and key in {"weekdaySchedule", "milesPerDay"}:
+        # Coverage follow-up only after they say they have insurance.
+        if key == "coverageTypes" and insurance != "own_insurance":
             continue
+        # MC age only for own-MC path.
+        if key == "authorityAgeMonths" and mc != "own_mc":
+            continue
+        # OTR vs local first — then one branch only (never regional).
+        if key in {"milesPerDay", "stayOutDuration", "weekdaySchedule"} and mode in (None, "unclear"):
+            continue
+        if mode == "local" and key in {"stayOutDuration", "weekdaySchedule"}:
+            continue
+        if mode == "otr" and key == "milesPerDay":
+            continue
+        if mode == "local" and key == "milesPerDay":
+            pass  # ask miles, then city/ZIP via operatingArea
         missing.append(key)
     return missing
 
@@ -45,10 +61,13 @@ UNBLOCK_ORDER = [
     "trailerLength",
     "mcOwnership",
     "insurance",
+    "coverageTypes",
+    "authorityAgeMonths",
     "operatingMode",
-    "weekdaySchedule",
     "milesPerDay",
+    "stayOutDuration",
     "operatingArea",
+    "weekdaySchedule",
     "startDate",
 ]
 
@@ -90,8 +109,23 @@ def next_ask(facts: dict, memory: dict | None = None, intent: str | None = None,
     missing = missing_core(facts, mem)
     if fact_value(facts, "deadline"):
         missing = [key for key in missing if key != "startDate"]
-    if fact_value(facts, "operatingMode") == "local" or mem.get("hard_constraint") == "home_every_night":
-        missing = [key for key in missing if key not in {"supportNeed", "primaryProblem", "weekdaySchedule"}]
+    mode = fact_value(facts, "operatingMode")
+    if mode == "local" or mem.get("hard_constraint") == "home_every_night":
+        missing = [key for key in missing if key not in {"supportNeed", "primaryProblem", "weekdaySchedule", "stayOutDuration"}]
+    if mode == "otr":
+        missing = [key for key in missing if key != "milesPerDay"]
+    # After "yes I have insurance", ask coverages before OTR/local.
+    if fact_value(facts, "insurance") == "own_insurance" and not fact_value(facts, "coverageTypes"):
+        if "coverageTypes" in missing:
+            return "coverageTypes"
+    # After own MC + insurance path, ask MC age before lanes when still open.
+    if (
+        fact_value(facts, "mcOwnership") == "own_mc"
+        and fact_value(facts, "insurance")
+        and not fact_value(facts, "authorityAgeMonths")
+        and "authorityAgeMonths" in missing
+    ):
+        return "authorityAgeMonths"
     for key in UNBLOCK_ORDER:
         if key in missing:
             return key
@@ -286,10 +320,29 @@ def _wording_conflicts(spoken: str, facts: dict, ask: str | None, move: str | No
     low = (spoken or "").lower()
     if not low:
         return False
+    # Kill empty-ack / filler loops that never advance.
+    if re.search(r"next open point|what'?s next on (your|the) (list|file)|anything else (i|we) (should|can) (note|cover)", low):
+        return True
     if fact_value(facts, "equipment") and re.search(
         r"what type of truck|what (truck|equipment) (are you|do you)|what are you running",
         low,
     ):
+        return True
+    # Reject replies that invent a different truck than the one on file.
+    equip = fact_value(facts, "equipment")
+    length = fact_value(facts, "trailerLength")
+    if equip and length:
+        length_num = re.match(r"(\d+)", str(length))
+        if length_num and re.search(rf"\b(?!{length_num.group(1)}\b)\d{{2}}\s*(?:-)?\s*(?:ft|foot|feet)\b", low):
+            # Another foot-length mentioned that isn't the stored one — likely hallucination.
+            other = re.findall(r"(\d{2})\s*(?:-)?\s*(?:ft|foot|feet)\b", low)
+            if any(n != length_num.group(1) for n in other):
+                return True
+    if equip == "box_truck" and re.search(r"\b(semi|dry van|reefer|flatbed|hotshot)\b", low) and not re.search(
+        r"\bbox\b", low
+    ):
+        return True
+    if equip in {"dry_van", "reefer", "flatbed", "step_deck"} and re.search(r"\b30\s*(?:-)?\s*ft.{0,20}box|box truck", low):
         return True
     if fact_value(facts, "mcOwnership") and re.search(r"own mc or lease|keeping your own mc", low):
         return True
@@ -298,6 +351,9 @@ def _wording_conflicts(spoken: str, facts: dict, ask: str | None, move: str | No
     ):
         return True
     if ask is None and re.search(r"what type of truck|what are you running", low):
+        return True
+    # Do not offer "regional" as a sold operating mode.
+    if re.search(r"\bregional\b", low) and ask == "operatingMode":
         return True
     return False
 
@@ -424,12 +480,18 @@ def compose(
             parts.append(spoken if spoken and _closure_safe(spoken) else lookup("existing_dispatcher"))
             return " ".join(_dedupe(parts)), [], None
 
-    if _is_reactivation(user_text) and not spoken:
+    if _is_reactivation(user_text) and not spoken and intent != "onboard":
         parts.append(lookup("voluntary_return"))
         ask = next_ask(facts, mem, intent, repair)
         if ask and QUESTIONS.get(ask) and not _has_question(" ".join(parts)):
             parts.append(QUESTIONS[ask])
         return " ".join(_dedupe(parts)), CHIPS.get(ask) or CHIPS["default"], None
+
+    if intent == "onboard" and arrangement in {"dispatch_service", "lease_on"} and not saved:
+        parts.append(lookup("ready_own_next" if arrangement == "dispatch_service" else "ready_lease_next"))
+        if receipt:
+            parts.append(receipt)
+        return " ".join(_dedupe(parts)), CHIPS["handoff"], summary
 
     if spoken and _wording_conflicts(spoken, facts, ask, move, topics):
         spoken = ""
@@ -510,7 +572,8 @@ def compose(
             parts.append(f"You're proposing {percent}%. I can record that for review; it isn't an agreed rate.")
         else:
             parts.append(spoken or lookup("negotiation"))
-        return " ".join(_dedupe(parts)), CHIPS["default"], None
+        parts.append(lookup("fee_route_manager"))
+        return " ".join(_dedupe(parts)), CHIPS["handoff"], None
 
     if repair == "authority_uncertain":
         parts.append(spoken or lookup("mc_new"))
@@ -623,7 +686,7 @@ def compose(
     if saved and fact_value(facts, "equipmentSupport") != "out_of_scope":
         if spoken:
             if not action_message:
-                parts.append("I've passed this to our onboarding manager. I don't send, sign, or approve from chat.")
+                parts.append("I've asked our onboarding manager to take this from here. They haven't approved anything yet.")
             return " ".join(_dedupe(parts)), CHIPS["handoff"], summary
         if arrangement == "dispatch_service":
             parts.append(lookup("docs_own"))

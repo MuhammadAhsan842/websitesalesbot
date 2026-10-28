@@ -1,15 +1,15 @@
 """Approved sales playbook. Personality lives here; the model cannot add claims."""
 
 REGISTER = {
-    "version": "ayyan_sales_v10",
+    "version": "ayyan_sales_v11",
     "welcome": "Hey — I'm Ayyan Group's AI sales assistant. I can help see if we're a fit; our onboarding manager handles the papers. What are you running?",
     "services": "We only dispatch these types: box truck 24/26/28 ft, hotshot 30/40 ft, dry van 48/53 ft, reefer 48/53 ft, flatbed 48/53 ft, step deck 48/53 ft, and power-only. You approve every load. We handle brokers and paperwork.",
     "freight_roles": "Shippers own the cargo. Brokers connect shippers with carriers and pay for completed loads. A dispatcher represents the carrier — finds matching freight, negotiates with brokers, and handles paperwork. The motor carrier runs the truck under FMCSA rules. Broker freight pay goes to the carrier's account — dispatchers don't take those payments personally.",
     "dispatch_how": "Our dispatch team helps find freight that fits your equipment and preferred lanes, handles broker communication and paperwork, and coordinates the load process. You approve each load. Talking here isn't a live load search.",
     "dispatch_vs_onboarding": "Before live dispatch, onboarding confirms fit and papers — authority, insurance, and the setup agreement. Dispatch work starts after that review. If papers aren't done, I won't pretend the truck is already in production.",
-    "equip_specs": "Catalog we dispatch: box 24/26/28 ft (about 10k–17k lb, lift gate or pallet jack when needed); hotshot 30/40 ft (binders, straps, tarps, chains); dry van and reefer 48/53 ft (about 40k–48k lb); flatbed and step deck 48/53 ft (about 40k–48k lb / up to ~100k gross on flatbed); power-only tractor with trailer attached. Anything outside that list is out of scope — including Sprinter and cargo van.",
+    "equip_specs": "Catalog we dispatch: box 24/26/28 ft (about 10k–17k lb); hotshot 30/40 ft; dry van and reefer 48/53 ft; flatbed and step deck 48/53 ft; power-only. Lift gate, pallet jack, straps, tarps, chains, or binders only when you ask or that equipment needs them. Sprinter and cargo van stay out of scope.",
     "cab_driver_types": "Day cab usually fits local or shorter runs. Sleeper cab supports longer OTR. Solo versus team driving and ELD hours follow FMCSA — we don't override hours-of-service from this chat.",
-    "lane_prefs": "We note OTR versus local radius, how many miles you can cover in a day, and how long you can stay out. Daily home time every night is a hard constraint when you need it — if lanes can't support it, onboarding has to say so.",
+    "lane_prefs": "For OTR we ask how long you can stay out; for local we ask miles and city or ZIP. Daily home time every night is a hard constraint only when you ask for it — if lanes can't support it, onboarding has to say so.",
     "docs_checklist": "Before production, onboarding typically reviews licence, COI, truck registration, equipment photos, and — when factoring — a notice of assignment. Own-MC also needs authority and W-9. Files received here are unverified; dispatch starts after review, and you still approve each load.",
     "pay_to_carrier": "Broker freight payments go to the motor carrier owner's account. Dispatchers don't receive those payments into a personal account.",
     "timezone_ops": "Dispatch coordinates across US Pacific, Mountain, Central, and Eastern time. For a callback, confirm number, time, and timezone.",
@@ -23,10 +23,12 @@ REGISTER = {
     "equip_dry_van": "Dry van 48 or 53 ft is in scope (about 40k–48k lb enclosed freight). You still approve every load; we work brokers and paperwork.",
     "equip_reefer": "Reefer 48 or 53 ft is in scope (temp-controlled cold/hot, about 40k–48k lb). Temperature and appointments still go through you on each load.",
     "equip_flatbed": "Flatbed 48 or 53 ft is in scope (about 40k–48k lb / up to ~100k gross) when straps and securing match. We will not pretend a box registration is a deck.",
-    "equip_box_truck": "Box truck 24, 26, or 28 ft is in scope (about 10k–17k lb; lift gate or pallet jack when needed). Eligibility still needs onboarding.",
+    "equip_box_truck": "Box truck is in scope (about 10k–17k lb). What length are you running — 24, 26, or 28 ft?",
+    "equip_box_truck_accessories": "For box trucks we commonly work with a lift gate or pallet jack when the freight needs them. Do you have either on the truck?",
     "equip_box_truck_short": "We only dispatch box trucks at 24, 26, or 28 ft. That length is outside our current service.",
     "equip_length_mismatch": "That length isn't on our dispatch catalog for that equipment. We only run the standard sizes we publish — anything else is outside our current service.",
-    "equip_hotshot": "Hotshot 30 or 40 ft is in scope (binders, straps, tarps, chains as needed). Fit still depends on lanes and own-MC vs lease-on review.",
+    "equip_hotshot": "Hotshot 30 or 40 ft is in scope. Fit still depends on lanes and own-MC vs lease-on review.",
+    "equip_hotshot_accessories": "Hotshot setups usually need binders, straps, tarps, or chains when the freight requires them. What securing gear do you run?",
     "equip_sprinter_van": "We don't provide dispatch services for Sprinter or cargo vans.",
     "equip_cargo_van": "We don't provide dispatch services for cargo vans.",
     "equip_step_deck": "Step deck 48 or 53 ft is in scope (same payload band as flatbed, lower deck for taller cargo). Fit still depends on lanes and authority path.",
@@ -64,7 +66,7 @@ REGISTER = {
     "payment_support": "I understand this is about payment. Which load or invoice does it relate to? Operations owns settlement status — I won't promise a payday from chat.",
     "unknown": "I don't have that answer. I can note it for our onboarding manager instead of guessing.",
     "talk_here": "Talk here keeps this same fit check and uses the website microphone. It isn't a phone callback. Browser voice audio is reserved, not live in this build.",
-    "call_me": "Call me is a callback on this same inquiry. Confirm number, time, and timezone. I won't dial from the website mic.",
+    "call_me": "What number should our onboarding manager call? Once I have it, I'll also need a preferred time and timezone. This records a callback request — nobody has dialed yet.",
     "home_time": "Daily home time is on file as a hard constraint. I won't swap that for weekends-only. If the lanes can't support it, onboarding has to say so.",
     "commit": "You're not committing by talking here. Next step is a packet, a lease review, or a callback — and only if you ask.",
     "concern_commitment": "Totally fair — you shouldn't sign blind. Signing doesn't guarantee a load; the agreement is about how we work together, and you still approve each one. What worries you most?",
@@ -77,10 +79,12 @@ REGISTER = {
     "payment_timing": "When you get paid is on the agreement. Onboarding owns that clause — I won't pick invoice-now versus pay-after-broker from someone else's packet.",
     "email_delivery": "The packet email didn't go through. Clear some space and tell me when to resend. I won't ask you to sign until that lands.",
     "photo_unverified": "I have the photo on this chat (unverified). Onboarding still needs to look at it — I can't confirm equipment, insurance, or eligibility from an image.",
-    "insurance": "Onboarding checks commercial auto liability and cargo coverage on your COI — common industry ranges are often around $750,000–$1,000,000 auto liability and about $100,000 cargo, but Ayyan confirms the applicable limits for your setup. You can upload it here for review — a COI on this chat isn't insurance approved.",
+    "insurance": "Onboarding checks commercial auto liability and cargo on your COI. Ayyan confirms the limits that apply to your setup — a COI on this chat isn't insurance approved.",
+    "insurance_coverage_ask": "What coverage does your policy include — commercial auto (often around $750k–$1M), cargo (often around $100k), or both? Ayyan still confirms the required limits at review.",
     "insurance_affordability": "Understood — insurance cost is holding things up. I don't sell policies from chat. We can pause until you and the owner are ready; no pressure from me.",
     "packet_received": "Nice — you have the packet and plan to return it. On our side it still isn't signed or approved until onboarding has the returned files.",
-    "negotiation": "I can record the terms you proposed for onboarding to review. A number in chat isn't an agreed rate until they publish it.",
+    "negotiation": "I can pass that fee request to our onboarding manager for review — it isn't approved from chat.",
+    "fee_route_manager": "For further inquiry or negotiation I can route you to our onboarding manager — they can find a best-fitting price quote.",
     "loads_after_onboarding": "Dispatch can look at freight after onboarding has the papers. I can't send load options from this chat.",
     "missing_equipment": "I'll keep what you have today separate from anything you're still buying. A planned purchase isn't a truck on the road yet — what are you running right now?",
     "fuel_requirement": "If you need funding before pickup, that's a real blocker — different from faster pay after delivery. I won't invent a fuel program from chat; we should sort that with the team before calling you ready.",
@@ -91,11 +95,15 @@ REGISTER = {
     "privacy_boundary": "You're right—that was more than I needed to ask. I'm sorry for overstepping. You don't need to share that; I'll leave it there.",
     "apology_no_pitch": "I understand. You don't need to share that information — no pitch from me.",
     "voluntary_return": "Of course. What has changed, and what help are you looking for now?",
+    "handoff_requested": "I've saved your request for an onboarding manager. Nobody has accepted it yet — would you prefer a callback while you wait?",
+    "ready_own_next": "Next step is an own-MC setup review. Onboarding typically needs authority, W-9, COI, registration, and truck photos — files here stay unverified until they look.",
+    "ready_lease_next": "Next step is a lease-on review. Onboarding typically needs licence, COI with the proper holder, medical card, inspection, W-9, and the lease — nothing is approved from chat.",
+    "mc_age_ask": "About how old is your MC or authority? Newer authorities still need an onboarding look — age alone isn't an automatic yes.",
     "compound_competitor_fee": "Thanks for explaining. I'll note that as what you were told — not verified competitor policy and not an Ayyan offer. I won't match or undercut it from chat.",
 }
 
 META = {
-    key: {"source": "ayyan_sales_v10", "customer_facing": True}
+    key: {"source": "ayyan_sales_v11", "customer_facing": True}
     for key in REGISTER
     if key != "version"
 }

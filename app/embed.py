@@ -15,9 +15,9 @@ from app import db
 
 log = logging.getLogger("ayyan.embed")
 
-# Laptop default: MiniLM on the system Ollama (11434), never the Gemma/Qwen chat process.
-MODEL = os.getenv("EMBED_MODEL", "all-minilm")
-COMPARE = os.getenv("EMBED_COMPARE", "nomic-embed-text")
+# Laptop default: nomic-embed-text on system Ollama (11434), never the chat process.
+MODEL = os.getenv("EMBED_MODEL", "nomic-embed-text:latest")
+COMPARE = os.getenv("EMBED_COMPARE", "all-minilm")
 URL = os.getenv("EMBED_URL", "http://127.0.0.1:11434").rstrip("/")
 MAX_CHARS = int(os.getenv("EMBED_MAX_CHARS", "512"))
 RRF_K = 10

@@ -49,8 +49,8 @@ TOPIC_KEYS = {
         "pay_to_carrier",
         "fuel",
     ),
-    "insurance": ("insurance", "insurance_affordability"),
-    "negotiation": ("negotiation", "broker_vs_fee"),
+    "insurance": ("insurance_coverage_ask", "insurance", "insurance_affordability"),
+    "negotiation": ("negotiation", "fee_route_manager", "broker_vs_fee"),
     "dispatch_how": ("dispatch_how", "dispatch_vs_onboarding", "services", "freight_roles", "pay_to_carrier"),
     "load_approval": ("load_approval", "docs_rate_con_detail"),
     "accessorials": ("accessorials",),
@@ -545,9 +545,31 @@ def topic_lines(topics: list[str], arrangement: str | None, bits: list[str], fac
             picked = next((bit for bit in remaining if "%" in bit or "fee" in bit.lower()), None)
             if picked:
                 remaining.remove(picked)
-                lines.append(picked)
+                # Never treat a customer counter-offer percent as the live Ayyan quote.
+                from app import fees as feesmod
+
+                try:
+                    approved = feesmod.approved_percents()
+                except Exception:
+                    approved = set()
+                offer_match = re.search(r"(\d+(?:\.\d+)?)\s*%", picked)
+                if offer_match and approved and offer_match.group(1) not in approved and fact_value(facts, "mcOwnership"):
+                    try:
+                        lines.append(fees.live_quote(arrangement))
+                    except Exception:
+                        lines.append(picked.rstrip(". ") + ". " + lookup("fee_route_manager"))
+                else:
+                    if fact_value(facts, "mcOwnership") and "onboarding manager" not in picked.lower():
+                        lines.append(picked.rstrip(". ") + ". " + lookup("fee_route_manager"))
+                    else:
+                        lines.append(picked)
             else:
-                lines.append(fees.live_quote(arrangement) if fact_value(facts, "mcOwnership") else lookup("fee_need_arrangement"))
+                try:
+                    lines.append(
+                        fees.live_quote(arrangement) if fact_value(facts, "mcOwnership") else lookup("fee_need_arrangement")
+                    )
+                except Exception:
+                    lines.append(lookup("fee_need_arrangement"))
             continue
         if topic == "commitment":
             key = "commit" if "dispatch_fee" in topics else "concern_commitment"

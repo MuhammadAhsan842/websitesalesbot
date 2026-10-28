@@ -50,7 +50,16 @@ def detect_intent(text: str) -> str:
         return "existing_customer"
     if re.search(r"let you know|not right now|i'?ll think|maybe later|next summer", t):
         return "general"
-    if re.search(r"(talk here|speak|voice|microphone)", t):
+    if re.search(
+        r"talk to (an? |the )?(onboarding )?manager|speak (to|with) (an? |the )?(onboarding )?manager|"
+        r"talk to (a )?(human|person|agent)|speak (to|with) (a )?(human|person|agent)|dispatcher please|"
+        r"route (me )?to (the )?onboarding|handoff to (the )?manager",
+        t,
+    ):
+        return "human"
+    if re.search(r"\btalk here\b|website microphone|\bmicrophone\b", t) and not re.search(
+        r"manager|human|person|agent|onboarding", t
+    ):
         return "talk_here"
     if re.search(r"(call me|callback|phone me|dial)", t):
         return "call_me"
@@ -82,8 +91,6 @@ def detect_intent(text: str) -> str:
         return "trust"
     if re.search(r"home (every )?night|home time", t):
         return "hometime"
-    if re.search(r"talk to (a )?(human|person|agent)|dispatcher please", t):
-        return "human"
     if re.search(r"document|packet|onboard|ready to start|get started|i'm ready|how do i start", t):
         return "onboard"
     if re.search(r"new mc|pending (mc|authority)|authority is new|\bi('?m| am) new\b|brand new (mc|authority)", t):
@@ -115,7 +122,8 @@ EQUIP_PATTERN = (
     r"sprinter\s*van|spriter\s*van|sprintervan|sprinter|"
     r"cargo\s*van|"
     r"step\s*deck|power\s*only|"
-    r"reefer|dry van|flatbed|box truck|hot\s*shot|hotshot|\bbox\b"
+    r"reefer|refeer|refer|dry van|flatbed|box truck|hot\s*shot|hotshot|\bbox\b|"
+    r"semi\s*truck|semitruck|\bsemi\b"
 )
 OWNED_TRUCK = re.compile(rf"\bmy\b.{{0,40}}({EQUIP_PATTERN})", re.I)
 EQUIP_WORD = re.compile(EQUIP_PATTERN, re.I)
@@ -130,6 +138,7 @@ def normalize_equip(raw: str | None) -> str | None:
     if not raw:
         return None
     value = re.sub(r"\s+", " ", raw.lower().strip())
+    value = value.replace("refeer", "reefer").replace("refer", "reefer").replace("refrier", "reefer")
     aliases = {
         "box": "box_truck",
         "box truck": "box_truck",
@@ -138,6 +147,9 @@ def normalize_equip(raw: str | None) -> str | None:
         "dry van": "dry_van",
         "flatbed": "flatbed",
         "reefer": "reefer",
+        "semi": "dry_van",
+        "semi truck": "dry_van",
+        "semitruck": "dry_van",
         "sprinter": "sprinter_van",
         "sprinter van": "sprinter_van",
         "spriter van": "sprinter_van",
@@ -473,12 +485,55 @@ def extract_facts(text: str) -> list[dict]:
         else:
             value = miles.group(1)
         items.append({"key": "milesPerDay", "value": value, "status": "user_stated"})
-    if re.search(r"\bregional\b|only want regional|regional work", t):
-        items.append({"key": "operatingMode", "value": "regional", "status": "user_stated"})
-    elif re.search(r"\blocal\b|no otr|not otr|home every night", t):
+    if re.search(r"\blocal\b|no otr|not otr|home every night|staying local|local work", t) and not re.search(
+        r"\botr\b|over the road", t
+    ):
         items.append({"key": "operatingMode", "value": "local", "status": "user_stated"})
-    elif re.search(r"\botr\b", t):
+    elif re.search(r"\botr\b|over the road", t):
         items.append({"key": "operatingMode", "value": "otr", "status": "user_stated"})
+    elif re.search(r"\bregional\b|only want regional|regional work", t):
+        # Regional is not a sold mode — record uncertainty so we re-ask OTR vs local.
+        items.append({"key": "operatingMode", "value": "unclear", "status": "user_stated"})
+    stay = re.search(
+        r"(?:stay out|out for|on the road for)\s+(\d+\s*(?:-|to)\s*\d+\s*(?:day|days|week|weeks)|"
+        r"(?:a |one |two |three )?weeks?|weekends? home|home weekends)",
+        t,
+    ) or re.search(r"\b(\d+)\s*(day|days|week|weeks)\s+out\b", t)
+    if stay:
+        items.append({"key": "stayOutDuration", "value": stay.group(0).strip(), "status": "user_stated"})
+    has_auto = any(i.get("key") == "autoLiabilityCoverage" for i in items)
+    has_cargo = any(i.get("key") == "cargoCoverage" for i in items)
+    if re.search(r"\bboth\b.{0,24}(auto|cargo|liability)|auto .{0,12}cargo|cargo .{0,12}auto", t) and not asks_coverage_need:
+        items.append({"key": "coverageTypes", "value": "auto_and_cargo", "status": "user_stated"})
+        if not has_auto:
+            items.append({"key": "autoLiabilityCoverage", "value": "present", "status": "user_stated"})
+        if not has_cargo:
+            items.append({"key": "cargoCoverage", "value": "present", "status": "user_stated"})
+    elif (
+        re.search(r"\b750k\b|\b1\s*m(il)?\b|\$\s*1,?000,?000", t)
+        and not asks_coverage_need
+        and not any(i.get("key") == "autoLiabilityCoverage" and i.get("value") == "absent" for i in items)
+    ):
+        items.append({"key": "coverageTypes", "value": "auto", "status": "user_stated"})
+        if not has_auto:
+            items.append({"key": "autoLiabilityCoverage", "value": "present", "status": "user_stated"})
+    elif (
+        re.search(r"\$\s*100,?000\b|\b100k\b cargo", t)
+        and not asks_coverage_need
+        and not any(i.get("key") == "cargoCoverage" and i.get("value") == "absent" for i in items)
+    ):
+        items.append({"key": "coverageTypes", "value": "cargo", "status": "user_stated"})
+        if not has_cargo:
+            items.append({"key": "cargoCoverage", "value": "present", "status": "user_stated"})
+    elif has_auto and has_cargo:
+        auto_v = next(i["value"] for i in items if i["key"] == "autoLiabilityCoverage")
+        cargo_v = next(i["value"] for i in items if i["key"] == "cargoCoverage")
+        if auto_v == "present" and cargo_v == "present":
+            items.append({"key": "coverageTypes", "value": "auto_and_cargo", "status": "user_stated"})
+        elif auto_v == "present":
+            items.append({"key": "coverageTypes", "value": "auto", "status": "user_stated"})
+        elif cargo_v == "present":
+            items.append({"key": "coverageTypes", "value": "cargo", "status": "user_stated"})
     if re.search(r"don'?t want to sign|won'?t sign|sign for nothing", t):
         items.append({"key": "commitmentStance", "value": "wont_sign", "status": "user_stated"})
     expired_hist = bool(
@@ -549,24 +604,24 @@ def knowledge_for(
     if "guarantee" in blocked or intent == "guarantee":
         keys.append("guarantee")
     mapping = {
-        "fee": ["fee"],
+        "fee": ["fee", "fee_route_manager"],
         "fuel": ["fuel"],
-        "freight": ["freight"],
+        "freight": ["freight", "load_evaluate", "loads_after_onboarding"],
         "service": ["services"],
         "talk_here": ["talk_here"],
         "call_me": ["call_me"],
+        "human": ["handoff_requested", "fee_route_manager"],
         "existing_customer": ["support"],
         "lease": ["lease"],
         "mc": ["own_mc"],
         "mc_new": ["mc_new"],
-        "onboard": ["onboarding", "dispatch_vs_onboarding"],
+        "onboard": ["onboarding", "dispatch_vs_onboarding", "docs_checklist"],
         "trust": ["trust"],
         "commit": ["concern_commitment", "commit"],
         "email_delivery": ["email_delivery"],
         "decline": ["commit"],
         "dispatch_inquiry": ["services", "dispatch_how"],
         "status": ["docs_status"],
-        "freight": ["freight", "load_evaluate", "loads_after_onboarding"],
     }
     keys.extend(mapping.get(intent, []))
     t = (text or "").lower()
@@ -701,6 +756,46 @@ def task_for(arrangement: str | None, intent: str) -> str | None:
     return None
 
 
+def _short_answer_facts(text: str, memory: dict | None) -> list[dict]:
+    """Map terse answers to the pending qualify slot (chip / yes / no)."""
+    pending = (memory or {}).get("last_question_id")
+    if not pending:
+        return []
+    t = (text or "").strip().lower()
+    if not t or len(t) > 80:
+        return []
+    items: list[dict] = []
+    yes = bool(re.fullmatch(r"(yes|yep|yeah|y|si|sí|correct|i do|i have|i have it)", t))
+    no = bool(re.fullmatch(r"(no|nope|nah|n|i don'?t|do not)", t))
+    if pending == "insurance":
+        if yes or re.search(r"own insurance|i have (my )?insurance|insured", t):
+            items.append({"key": "insurance", "value": "own_insurance", "status": "user_stated"})
+        elif no or re.search(r"need insurance|no insurance", t):
+            items.append({"key": "insurance", "value": "needs_insurance", "status": "user_stated"})
+    elif pending == "coverageTypes":
+        if re.search(r"both|auto\s*\+\s*cargo|auto and cargo", t):
+            items.append({"key": "coverageTypes", "value": "auto_and_cargo", "status": "user_stated"})
+            items.append({"key": "autoLiabilityCoverage", "value": "present", "status": "user_stated"})
+            items.append({"key": "cargoCoverage", "value": "present", "status": "user_stated"})
+        elif re.search(r"commercial auto|auto liability|\bauto\b", t):
+            items.append({"key": "coverageTypes", "value": "auto", "status": "user_stated"})
+        elif re.search(r"\bcargo\b", t):
+            items.append({"key": "coverageTypes", "value": "cargo", "status": "user_stated"})
+    elif pending == "operatingMode":
+        if re.search(r"\botr\b|over the road", t):
+            items.append({"key": "operatingMode", "value": "otr", "status": "user_stated"})
+        elif re.search(r"\blocal\b", t):
+            items.append({"key": "operatingMode", "value": "local", "status": "user_stated"})
+        elif re.search(r"\bregional\b", t):
+            items.append({"key": "operatingMode", "value": "unclear", "status": "user_stated"})
+    elif pending == "mcOwnership":
+        if yes or re.search(r"own mc|i have (my )?mc", t):
+            items.append({"key": "mcOwnership", "value": "own_mc", "status": "user_stated"})
+        elif no or re.search(r"lease", t):
+            items.append({"key": "mcOwnership", "value": "no_own_mc", "status": "user_stated"})
+    return items
+
+
 def propose(text: str, facts: dict, memory: dict | None = None) -> dict:
     from app import plan as planmod
 
@@ -709,6 +804,12 @@ def propose(text: str, facts: dict, memory: dict | None = None) -> dict:
     intent = detect_intent(text)
     repair = detect_repair(text)
     items = extract_facts(text)
+    # Prefer short-answer fills when extract didn't already set that key.
+    have = {item["key"] for item in items}
+    for item in _short_answer_facts(text, memory):
+        if item["key"] not in have:
+            items.append(item)
+            have.add(item["key"])
     current_equip = facts.get("equipment", {}).get("value") if isinstance(facts.get("equipment"), dict) else None
     ad_value, ad_length = advertised_mention(text)
     if ad_value and current_equip and ad_value != current_equip:
