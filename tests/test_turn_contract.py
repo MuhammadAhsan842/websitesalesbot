@@ -293,7 +293,7 @@ class QualifyOrder(unittest.TestCase):
         self.assertIn("length", text.lower())
         self.assertNotIn("box truck", text.lower())
         self.assertNotIn("can't set up", text.lower())
-        self.assertEqual(chips, CHIPS["trailerLength"])
+        self.assertEqual(chips, ["30 ft", "40 ft"])
 
 
 class RegisterVersion(unittest.TestCase):

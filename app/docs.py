@@ -117,7 +117,10 @@ def keys_for(text: str, arrangement: str | None = None) -> list[str]:
         if item["match"].search(t):
             keys.append(item["key"])
     if not keys and asked(t):
-        keys.append("docs_lease" if arrangement == "lease_on" else "docs_own")
+        if arrangement == "lease_on":
+            keys.append("docs_lease")
+        else:
+            keys.append("docs_own")
     if SENT.search(t) and "photo_unverified" not in keys:
         keys.append("photo_unverified")
     if asked(t) and "docs_status" not in keys:
@@ -132,7 +135,12 @@ def missing_line(session: dict | None) -> str:
     session = session or {}
     facts = session.get("facts") or {}
     arrangement = "lease_on" if fact_value(facts, "mcOwnership") == "no_own_mc" else None
-    catalog = lookup("docs_lease") if arrangement == "lease_on" else lookup("docs_own")
+    if arrangement == "lease_on" and fact_value(facts, "insurance") == "needs_insurance":
+        catalog = lookup("docs_lease_needs_insurance")
+    elif arrangement == "lease_on":
+        catalog = lookup("docs_lease")
+    else:
+        catalog = lookup("docs_own")
     case_id = session.get("case_id")
     if not case_id:
         return catalog + " Onboarding hasn't sent a packet on this chat yet. A file here is just stored until they look at it."

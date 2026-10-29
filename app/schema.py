@@ -10,8 +10,8 @@ ASK_ORDER = [
     "operatingMode",
     "milesPerDay",
     "stayOutDuration",
-    "operatingArea",
     "weekdaySchedule",
+    "operatingArea",
     "startDate",
 ]
 
@@ -40,9 +40,16 @@ EXTRA_FIELDS = [
     "fleetSize",
     "requestedFeePercent",
     "requestedWeeklyCap",
+    "insuranceRoute",
 ]
 
-FACT_KEYS = QUAL_FIELDS + ["name", "phone", "requestedArrangement"] + EXTRA_FIELDS
+FACT_KEYS = QUAL_FIELDS + [
+    "name",
+    "phone",
+    "requestedArrangement",
+    "callbackTime",
+    "callbackTimezone",
+] + EXTRA_FIELDS
 
 MOVES = (
     "acknowledge",
@@ -132,7 +139,15 @@ INTENTS = (
     "general",
 )
 
-CATALOGUE = ("fit_check", "callback", "setup_packet", "lease_agreement", "clarification", "operations_support")
+CATALOGUE = (
+    "fit_check",
+    "callback",
+    "setup_packet",
+    "lease_agreement",
+    "insurance_quote",
+    "clarification",
+    "operations_support",
+)
 
 QUESTIONS = {
     "equipment": "What type of truck do you have?",
@@ -144,7 +159,10 @@ QUESTIONS = {
     "supportNeed": "What support matters most — home time, paperwork, or keeping the truck loaded?",
     "startDate": "When would you like to start?",
     "deadline": "When do you need to be rolling?",
-    "phone": "What number should our onboarding manager call, and what time and timezone work?",
+    "phone": (
+        "What number should our onboarding manager call? Please include the country code if you have one, "
+        "plus a preferred time and timezone."
+    ),
     "trailerLength": "What length trailer or box are you running?",
     "payload": "What payload do you need to haul?",
     "liftgate": "Do you need a liftgate?",
@@ -152,7 +170,7 @@ QUESTIONS = {
     "insurance": "Do you currently have your own insurance on the truck?",
     "coverageTypes": "What coverage does your policy include — commercial auto, cargo, or both?",
     "authorityAgeMonths": "About how old is your MC or authority?",
-    "weekdaySchedule": "Are you able to stay on the road Monday through Friday?",
+    "weekdaySchedule": "Are you able to stay on the road Monday through Friday, with weekends at home?",
     "milesPerDay": "How many miles can you cover in a day?",
     "stayOutDuration": "How long are you comfortable staying out before returning home?",
 }
@@ -272,15 +290,38 @@ CHIP_VALUE_NORMALIZE = {
 }
 
 
-def chip_options(field: str | None) -> list[dict]:
+def length_chip_labels(equipment: str | None) -> list[str]:
+    """Length chips must match EQUIPMENT_LENGTHS_FT — never show van lengths for a box truck."""
+    from app.knowledge import EQUIPMENT_LENGTHS_FT
+
+    allowed = EQUIPMENT_LENGTHS_FT.get(str(equipment or ""))
+    if not allowed:
+        return list(CHIPS.get("trailerLength") or [])
+    return [f"{n} ft" for n in sorted(allowed)]
+
+
+def chip_options(field: str | None, facts: dict | None = None) -> list[dict]:
     """API chip payloads: label for display, field+value for reliable submission."""
     if not field:
         return [{"label": label, "field": None, "value": label} for label in CHIPS.get("default") or []]
-    labels = CHIPS.get(field) or CHIPS.get("default") or []
+    if field == "trailerLength":
+        equip = None
+        if isinstance(facts, dict):
+            item = facts.get("equipment")
+            if isinstance(item, dict):
+                equip = item.get("value")
+            elif item:
+                equip = item
+        labels = length_chip_labels(equip)
+    else:
+        labels = CHIPS.get(field) or CHIPS.get("default") or []
     out = []
     for label in labels:
         mapped = CHIP_VALUES.get(label.lower(), {})
         value = mapped.get(field)
+        if value is None and field == "trailerLength":
+            digits = "".join(ch for ch in label if ch.isdigit())
+            value = f"{digits}ft" if digits else label
         if value is None and mapped:
             value = mapped.get("coverageTypes") or mapped.get("operatingMode") or next(iter(mapped.values()), label)
         payload = {"label": label, "field": field, "value": value if value is not None else label}

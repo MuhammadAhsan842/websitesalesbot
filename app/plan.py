@@ -573,9 +573,10 @@ def topic_lines(topics: list[str], arrangement: str | None, bits: list[str], fac
                 except Exception:
                     approved = set()
                 offer_match = re.search(r"(\d+(?:\.\d+)?)\s*%", picked)
+                insurance = fact_value(facts, "insurance")
                 if offer_match and approved and offer_match.group(1) not in approved and fact_value(facts, "mcOwnership"):
                     try:
-                        lines.append(fees.live_quote(arrangement))
+                        lines.append(fees.live_quote(arrangement, insurance=insurance))
                     except Exception:
                         lines.append(picked.rstrip(". ") + ". " + lookup("fee_route_manager"))
                 else:
@@ -586,7 +587,9 @@ def topic_lines(topics: list[str], arrangement: str | None, bits: list[str], fac
             else:
                 try:
                     lines.append(
-                        fees.live_quote(arrangement) if fact_value(facts, "mcOwnership") else lookup("fee_need_arrangement")
+                        fees.live_quote(arrangement, insurance=fact_value(facts, "insurance"))
+                        if fact_value(facts, "mcOwnership")
+                        else lookup("fee_need_arrangement")
                     )
                 except Exception:
                     lines.append(lookup("fee_need_arrangement"))

@@ -118,12 +118,13 @@ AD_LOAD = re.compile(
     r"facebook|(i (saw|seen|have seen) your)|your post|you seem to have|advertis",
     re.I,
 )
+# Word-bounded equipment tokens — never match "refer" inside "prefered/preferred".
 EQUIP_PATTERN = (
-    r"sprinter\s*van|spriter\s*van|sprintervan|sprinter|"
+    r"sprinter\s*van|spriter\s*van|sprintervan|\bsprinter\b|"
     r"cargo\s*van|"
     r"step\s*deck|power\s*only|"
-    r"reefer|refeer|refer|dry van|flatbed|box truck|hot\s*shot|hotshot|\bbox\b|"
-    r"semi\s*truck|semitruck|\bsemi\b"
+    r"\breefer\b|\brefeer\b|\bdry\s*van\b|\bflatbed\b|\bbox\s*truck\b|\bhot\s*shot\b|\bhotshot\b|\bbox\b|"
+    r"semi\s*truck|\bsemitruck\b|\bsemi\b"
 )
 OWNED_TRUCK = re.compile(rf"\bmy\b.{{0,40}}({EQUIP_PATTERN})", re.I)
 EQUIP_WORD = re.compile(EQUIP_PATTERN, re.I)
@@ -138,7 +139,10 @@ def normalize_equip(raw: str | None) -> str | None:
     if not raw:
         return None
     value = re.sub(r"\s+", " ", raw.lower().strip())
-    value = value.replace("refeer", "reefer").replace("refer", "reefer").replace("refrier", "reefer")
+    # Only rewrite whole-token misspellings — never rewrite "prefer"/"preferred".
+    if value in {"refer", "refeer", "refrier"}:
+        value = "reefer"
+    value = re.sub(r"\brefeer\b|\brefrier\b", "reefer", value)
     aliases = {
         "box": "box_truck",
         "box truck": "box_truck",
@@ -226,9 +230,18 @@ def extract_facts(text: str) -> list[dict]:
     t = text.lower()
     items = []
     advertised = is_advertised_equipment(text)
+    # Callback / contact replies must not rewrite truck facts.
+    contact_only = bool(
+        re.search(
+            r"time\s*zone|timezone|\bgmt\b|\butc\b|prefer(?:red)?\s*time|call\s*(me|back)|callback|"
+            r"my number|phone\s*(number|is|:)",
+            t,
+            re.I,
+        )
+    ) and not re.search(r"\b(truck|trailer|box|van|reefer|flatbed|hotshot|mc|lease|insurance)\b", t, re.I)
     length_early = re.search(r"(\d+)\s*(?:-)?\s*(?:ft|foot|feet|pies)\b", t)
-    length_value = f"{length_early.group(1)}ft" if length_early and not advertised else None
-    eq = None if advertised else _pick_equipment(t)
+    length_value = f"{length_early.group(1)}ft" if length_early and not advertised and not contact_only else None
+    eq = None if advertised or contact_only else _pick_equipment(t)
     if eq:
         items.append({"key": "equipment", "value": eq, "status": "user_stated"})
         support = _support_for(eq, length_value)
@@ -329,13 +342,61 @@ def extract_facts(text: str) -> list[dict]:
     ):
         items.append({"key": "mcOwnership", "value": "unclear", "status": "user_stated"})
         items.append({"key": "requestedArrangement", "value": "needs_clarification", "status": "user_stated"})
+    # Timezone / callback context must not become the truck's operating city.
+    timezone_ctx = bool(
+        re.search(
+            r"time\s*zone|timezone|\bgmt\b|\butc\b|america/[a-z_]+|prefer(?:red)?\s*time|"
+            r"call\s*(me|back)|callback|phone|dial",
+            t,
+            re.I,
+        )
+    )
+    # Named zones / cities only in callback/timezone context — never steal operating city.
+    named_tz = None
+    if timezone_ctx:
+        named_tz = re.search(
+            r"\b(america/[a-z_]+|chicago|central|eastern|pacific|mountain|new[\s_]?york|los[\s_]?angeles|denver)\b",
+            t,
+            re.I,
+        )
+    tz = re.search(
+        r"(?:time\s*zone|timezone)\s*[:=]?\s*"
+        r"([+-]?\d{1,2}(?::\d{2})?\s*(?:gmt|utc)?|gmt\s*[+-]?\s*\d{1,2}|utc\s*[+-]?\s*\d{1,2}|"
+        r"america/[a-z_]+|[a-z][a-z\s/+_-]{2,40})",
+        t,
+        re.I,
+    )
+    raw_tz = None
+    if named_tz:
+        raw_tz = named_tz.group(1).strip().lower()
+    elif tz:
+        raw_tz = re.sub(r"\s+", " ", tz.group(1).strip().lower())
+    if raw_tz:
+        if "chicago" in raw_tz or "central" in raw_tz:
+            raw_tz = "America/Chicago"
+        elif "eastern" in raw_tz or "new york" in raw_tz or "new_york" in raw_tz:
+            raw_tz = "America/New_York"
+        elif "pacific" in raw_tz or "los angeles" in raw_tz or "los_angeles" in raw_tz:
+            raw_tz = "America/Los_Angeles"
+        elif "mountain" in raw_tz or "denver" in raw_tz:
+            raw_tz = "America/Denver"
+        items.append({"key": "callbackTimezone", "value": raw_tz, "status": "user_stated"})
+    pref_time = re.search(
+        r"(?:prefer(?:r?ed)?\s*time|call(?:\s*me)?(?:\s*at)?|around|can call(?:\s*is)?)\s*[:=]?\s*"
+        r"(?:you can call (?:is|at)\s*)?"
+        r"(\d{1,2}(?::\d{2})?\s*(?:am|pm)?|\d{1,2}\s*(?:am|pm))",
+        t,
+        re.I,
+    ) or re.search(r"(?:prefer(?:r?ed)?\s*time[^.]*?|call is)\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm))", t, re.I)
+    if pref_time:
+        items.append({"key": "callbackTime", "value": pref_time.group(1).strip().lower(), "status": "user_stated"})
     area = re.search(
         r"midwest|southeast|northeast|southwest|west coast|southern states|texas|california|georgia|florida|"
         r"dallas|houston|atlanta|chicago|irving|utah|michigan|new jersey|\bnj\b|jersey",
         t,
         re.I,
     )
-    if area:
+    if area and not timezone_ctx:
         value = area.group(0).lower().replace("new jersey", "nj").replace("southern states", "southern_states")
         if value in {"jersey"}:
             value = "nj"
@@ -456,12 +517,21 @@ def extract_facts(text: str) -> list[dict]:
             t,
         )
     )
+    expired_coverage = bool(
+        re.search(r"\b(expired|lapse[d]?|lapsed|no longer (have|active)|ran out)\b", t)
+    )
     if re.search(r"no commercial auto|without commercial auto|no auto liability|don'?t have (commercial )?auto", t):
         items.append({"key": "autoLiabilityCoverage", "value": "absent", "status": "user_stated"})
+    elif expired_coverage and re.search(r"commercial auto|auto liability|auto policy", t):
+        items.append({"key": "autoLiabilityCoverage", "value": "expired", "status": "user_stated"})
+        items.append({"key": "insurance", "value": "needs_insurance", "status": "user_stated"})
     elif re.search(r"commercial auto|auto liability", t) and not asks_coverage_need:
         items.append({"key": "autoLiabilityCoverage", "value": "present", "status": "user_stated"})
     if re.search(r"no cargo (insurance|coverage)|without cargo|don'?t have cargo", t):
         items.append({"key": "cargoCoverage", "value": "absent", "status": "user_stated"})
+    elif expired_coverage and re.search(r"cargo (insurance|coverage|policy)", t):
+        items.append({"key": "cargoCoverage", "value": "expired", "status": "user_stated"})
+        items.append({"key": "insurance", "value": "needs_insurance", "status": "user_stated"})
     elif re.search(r"cargo (insurance|coverage)|have cargo", t) and not asks_coverage_need:
         items.append({"key": "cargoCoverage", "value": "present", "status": "user_stated"})
     if re.search(
@@ -471,9 +541,16 @@ def extract_facts(text: str) -> list[dict]:
         items.append({"key": "insurance", "value": "needs_insurance", "status": "user_stated"})
     elif asks_coverage_need:
         pass
+    elif re.search(
+        r"\byour insurance\b|company[- ]arranged insurance|need (you|ayyan|the company) to (get|arrange|provide) insurance|"
+        r"arrange(d)? (insurance|coverage) (for me|through you)",
+        t,
+    ):
+        items.append({"key": "insurance", "value": "needs_insurance", "status": "user_stated"})
+        items.append({"key": "insuranceRoute", "value": "company_arranged", "status": "user_stated"})
     elif re.search(r"need insurance|no insurance|don'?t have insurance|looking for insurance", t):
         items.append({"key": "insurance", "value": "needs_insurance", "status": "user_stated"})
-    elif re.search(r"have (my |our )?(own )?insurance|i('m| am) insured|got insurance|\binsured\b", t):
+    elif re.search(r"have (my |our )?(own )?insurance|i('m| am) insured|got insurance|\binsured\b", t) and not expired_coverage:
         items.append({"key": "insurance", "value": "own_insurance", "status": "user_stated"})
     if re.search(r"\bi use factoring\b|\bfactoring\b", t) and not re.search(r"what is factoring|explain factoring", t):
         items.append({"key": "paymentArrangement", "value": "factoring", "status": "user_stated"})
@@ -575,9 +652,23 @@ def extract_facts(text: str) -> list[dict]:
         items.append({"key": "startDate", "value": re.search(r"next week|immediately|asap|monday", t).group(0), "status": "user_stated"})
     if re.search(r"\bnext week\b", t) and "start" not in t:
         items.append({"key": "startDate", "value": "next week", "status": "user_stated"})
-    phone = re.search(r"(\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}", text)
-    if phone:
-        items.append({"key": "phone", "value": phone.group(0), "status": "confirmed"})
+    # Keep full local numbers (10–15 digits). Do not glue timezone/time digits onto the phone.
+    phone_digits = None
+    token_runs = re.findall(r"(?<!\d)(\+?\d[\d\s()./-]{8,22}\d)(?!\d)", text)
+    scored = []
+    for raw in token_runs:
+        digits = re.sub(r"\D", "", raw)
+        if not (10 <= len(digits) <= 15):
+            continue
+        # Skip pure clock / GMT fragments.
+        if re.fullmatch(r"\d{1,2}", digits):
+            continue
+        scored.append(digits)
+    if scored:
+        # Prefer longest phone-like token (keeps 11-digit mobiles intact; never 10-only truncate).
+        phone_digits = max(scored, key=len)
+    if phone_digits:
+        items.append({"key": "phone", "value": phone_digits, "status": "confirmed"})
     name = re.search(r"my name is ([a-z][a-z ]{1,40})", text, re.I)
     if name:
         items.append({"key": "name", "value": name.group(1).strip(), "status": "confirmed"})
@@ -755,11 +846,17 @@ def arrangement_of(facts: dict) -> str | None:
     return None
 
 
-def task_for(arrangement: str | None, intent: str) -> str | None:
+def task_for(arrangement: str | None, intent: str, facts: dict | None = None) -> str | None:
     if intent == "existing_customer":
         return "operations_support"
     if intent == "call_me":
         return "callback"
+    from app.tasks import fact_value
+
+    insurance = fact_value(facts or {}, "insurance")
+    route = fact_value(facts or {}, "insuranceRoute")
+    if arrangement == "lease_on" and (insurance == "needs_insurance" or route == "company_arranged"):
+        return "insurance_quote"
     if arrangement == "dispatch_service":
         return "setup_packet"
     if arrangement == "lease_on":
@@ -783,15 +880,25 @@ def _short_answer_facts(text: str, memory: dict | None) -> list[dict]:
         return [{"key": key, "value": value, "status": "user_stated"} for key, value in chip.items()]
     if not pending or not t or len(t) > 120:
         return items
-    yes = bool(re.fullmatch(r"(yes|yep|yeah|y|si|sí|correct|i do|i have|i have it)", t))
-    no = bool(re.fullmatch(r"(no|nope|nah|n|i don'?t|do not)", t))
+    yes = bool(re.fullmatch(r"(yes|yep|yeah|y|si|sí|correct|i do|i have|i have it|yes\s*👍|👍)", t))
+    no = bool(
+        re.fullmatch(r"(no|nope|nah|n|i don'?t|do not|no do not|no[,.]?\s*do not)", t)
+        or re.fullmatch(r"no\s+do\s+not.*", t)
+    )
     if pending == "insurance":
-        if yes or re.search(r"own insurance|i have (my )?insurance|insured", t):
+        if re.search(r"\byour insurance\b|company[- ]arranged|arrange(d)? (it|insurance|coverage)", t):
+            items.append({"key": "insurance", "value": "needs_insurance", "status": "user_stated"})
+            items.append({"key": "insuranceRoute", "value": "company_arranged", "status": "user_stated"})
+        elif yes or re.search(r"own insurance|i have (my )?insurance|insured", t):
             items.append({"key": "insurance", "value": "own_insurance", "status": "user_stated"})
-        elif no or re.search(r"need insurance|no insurance", t):
+        elif no or re.search(r"need insurance|no insurance|neither|don'?t have", t):
             items.append({"key": "insurance", "value": "needs_insurance", "status": "user_stated"})
     elif pending == "coverageTypes":
-        if re.search(r"both|auto\s*\+\s*cargo|auto and cargo", t):
+        if no or re.search(r"neither|none|no do not|don'?t have", t):
+            # Combined coverage question answered no → uncertainty, not full absence of every coverage.
+            items.append({"key": "coverageTypes", "value": "unclear", "status": "user_stated"})
+            items.append({"key": "insurance", "value": "needs_insurance", "status": "user_stated"})
+        elif re.search(r"both|auto\s*\+\s*cargo|auto and cargo", t):
             items.append({"key": "coverageTypes", "value": "auto_and_cargo", "status": "user_stated"})
             items.append({"key": "autoLiabilityCoverage", "value": "present", "status": "user_stated"})
             items.append({"key": "cargoCoverage", "value": "present", "status": "user_stated"})
@@ -806,10 +913,14 @@ def _short_answer_facts(text: str, memory: dict | None) -> list[dict]:
             items.append({"key": "operatingMode", "value": "otr", "status": "user_stated"})
         elif re.search(r"\blocal\b", t):
             items.append({"key": "operatingMode", "value": "local", "status": "user_stated"})
-        elif re.search(r"\bregional\b", t):
+        elif re.search(r"\bopen\b|\beither\b|\bflexible\b|\bregional\b", t):
             items.append({"key": "operatingMode", "value": "unclear", "status": "user_stated"})
     elif pending == "mcOwnership":
-        if yes or re.search(r"own mc|i have (my )?mc", t):
+        if re.fullmatch(r"yours|your(s)?|lease(\s*on)?|under yours", t) or re.search(
+            r"\byours\b|lease on|under (your|ayyan)", t
+        ):
+            items.append({"key": "mcOwnership", "value": "no_own_mc", "status": "user_stated"})
+        elif yes or re.search(r"own mc|i have (my )?mc|mine|my own", t):
             items.append({"key": "mcOwnership", "value": "own_mc", "status": "user_stated"})
         elif no or re.search(r"lease", t):
             items.append({"key": "mcOwnership", "value": "no_own_mc", "status": "user_stated"})
@@ -959,7 +1070,7 @@ def propose(text: str, facts: dict, memory: dict | None = None, chip: dict | Non
         "next_field": ask,
         "arrangement": arrangement,
         "action": action,
-        "task": task_for(arrangement, intent),
+        "task": task_for(arrangement, intent, preview),
         "repair": repair,
         "advertised_equipment": ad_value,
         "advertised_length": ad_length,

@@ -27,6 +27,12 @@ CORE_LEASE = [
     ("equipment_photos", "Truck photos"),
 ]
 
+# Quote-stage paperwork when coverage still needs arranging — never demand an existing COI.
+INSURANCE_QUOTE = [
+    ("licence", "Driver licence"),
+    ("registration", "Cab card / registration"),
+]
+
 SAMPLE_TYPES = {
     "lease": "lease",
     "setup": "setup",
@@ -52,11 +58,22 @@ def _payment_arrangement(facts: dict | None) -> str | None:
 
 
 def catalog_for(task: str | None, facts: dict | None = None) -> list[tuple[str, str]]:
+    from app.tasks import fact_value
+
     if task in {"callback", "clarification", "operations_support", "fit_check"}:
         return []
+    insurance = fact_value(facts or {}, "insurance")
+    route = fact_value(facts or {}, "insuranceRoute")
+    if task in {"insurance_quote", "lease_agreement"} and (
+        insurance == "needs_insurance" or route == "company_arranged"
+    ):
+        # Quote review precedes full lease packet; COI waits until coverage exists.
+        return list(INSURANCE_QUOTE)
     if task == "lease_agreement":
         return list(CORE_LEASE)
     rows = list(CORE_SETUP)
+    if insurance == "needs_insurance":
+        rows = [(doc, label) for doc, label in rows if doc != "coi"]
     payment = (_payment_arrangement(facts) or "").lower()
     if payment == "factoring":
         rows.append(("notice_of_assignment", "Notice of assignment"))

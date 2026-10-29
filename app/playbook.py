@@ -46,12 +46,11 @@ def missing_core(facts: dict, memory: dict | None = None) -> list[str]:
         # OTR vs local first — then one branch only (never regional).
         if key in {"milesPerDay", "stayOutDuration", "weekdaySchedule"} and mode in (None, "unclear"):
             continue
-        if mode == "local" and key in {"stayOutDuration", "weekdaySchedule"}:
+        # Local: miles/day → Monday–Friday → city/ZIP. Skip OTR stay-out.
+        if mode == "local" and key == "stayOutDuration":
             continue
-        if mode == "otr" and key == "milesPerDay":
+        if mode == "otr" and key in {"milesPerDay", "weekdaySchedule"}:
             continue
-        if mode == "local" and key == "milesPerDay":
-            pass  # ask miles, then city/ZIP via operatingArea
         missing.append(key)
     return missing
 
@@ -66,8 +65,8 @@ UNBLOCK_ORDER = [
     "operatingMode",
     "milesPerDay",
     "stayOutDuration",
-    "operatingArea",
     "weekdaySchedule",
+    "operatingArea",
     "startDate",
 ]
 
@@ -111,9 +110,10 @@ def next_ask(facts: dict, memory: dict | None = None, intent: str | None = None,
         missing = [key for key in missing if key != "startDate"]
     mode = fact_value(facts, "operatingMode")
     if mode == "local" or mem.get("hard_constraint") == "home_every_night":
-        missing = [key for key in missing if key not in {"supportNeed", "primaryProblem", "weekdaySchedule", "stayOutDuration"}]
+        # Keep weekdaySchedule for local; only drop support/problem and OTR stay-out.
+        missing = [key for key in missing if key not in {"supportNeed", "primaryProblem", "stayOutDuration"}]
     if mode == "otr":
-        missing = [key for key in missing if key != "milesPerDay"]
+        missing = [key for key in missing if key not in {"milesPerDay", "weekdaySchedule"}]
     # After "yes I have insurance", ask coverages before OTR/local.
     if fact_value(facts, "insurance") == "own_insurance" and not fact_value(facts, "coverageTypes"):
         if "coverageTypes" in missing:
@@ -183,36 +183,215 @@ def recorded_line(facts: dict, memory: dict | None = None) -> str:
 
 
 def fit_summary(facts: dict, arrangement: str | None) -> str:
+    """Customer-facing fit narrative for chat — not the manager handoff brief."""
     n = fact_value(facts, "fleetSize")
-    equip = EQUIP_LABELS.get(str(fact_value(facts, "equipment") or ""), fact_value(facts, "equipment") or "equipment")
+    equip_key = fact_value(facts, "equipment")
+    equip = EQUIP_LABELS.get(str(equip_key or ""), equip_key or "equipment") if equip_key else None
+    length = fact_value(facts, "trailerLength")
+    support = fact_value(facts, "equipmentSupport")
+    if equip and length:
+        equip_bit = f"{length} {equip}"
+    elif equip:
+        equip_bit = str(equip)
+    else:
+        equip_bit = "equipment still unconfirmed"
     plurals = {"dry van": "dry vans", "reefer": "reefers", "flatbed": "flatbeds", "box truck": "box trucks", "hotshot": "hotshots"}
-    noun = plurals.get(str(equip), str(equip)) if n and n != 1 else equip
-    count = f"{n} {noun}" if n else equip
-    area = fact_value(facts, "operatingArea") or fact_value(facts, "lanes") or "an area we still need to pin down"
-    lanes = fact_value(facts, "lanes")
-    lane_bit = f", keeping {lanes} lanes" if lanes and lanes != area else ""
-    start = fact_value(facts, "startDate")
-    start_bit = f", looking to start {start}" if start else ""
-    need = fact_value(facts, "supportNeed") or fact_value(facts, "primaryProblem")
-    need_bit = f" You care most about {str(need).replace('_', ' ')}." if need else ""
+    noun = plurals.get(str(equip), str(equip)) if n and n != 1 and equip else equip_bit
+    count = f"{n} {noun}" if n and equip else equip_bit
+    area = fact_value(facts, "operatingArea") or fact_value(facts, "lanes")
+    area_bit = f" out of {area}" if area else ""
+    mode = fact_value(facts, "operatingMode")
+    miles = fact_value(facts, "milesPerDay")
+    weekday = fact_value(facts, "weekdaySchedule")
+    ops = []
+    if mode:
+        ops.append(str(mode).replace("_", " "))
+    if miles:
+        ops.append(f"{miles} miles/day")
+    if weekday:
+        ops.append(f"schedule {str(weekday).replace('_', ' ')}")
+    ops_bit = f"; prefers {', '.join(ops)}" if ops else ""
+    insurance = fact_value(facts, "insurance")
+    ins_bit = ""
+    if insurance == "needs_insurance":
+        ins_bit = " Needs insurance arranged."
+    elif insurance == "own_insurance":
+        coverage = fact_value(facts, "coverageTypes")
+        ins_bit = f" Own insurance on file ({coverage})." if coverage else " Own insurance on file."
+    phone = fact_value(facts, "phone")
+    cb_time = fact_value(facts, "callbackTime")
+    cb_tz = fact_value(facts, "callbackTimezone")
+    callback_bit = ""
+    if phone or cb_time or cb_tz:
+        pieces = [p for p in [phone and f"phone {phone}", cb_time and f"{cb_time}", cb_tz and str(cb_tz)] if p]
+        callback_bit = f" Callback requested: {', '.join(pieces)}." if pieces else ""
     path = {
-        "dispatch_service": "With your own MC, onboarding sends the setup packet — chat alone isn't eligibility.",
-        "lease_on": "Lease-on means onboarding reviews fit and the agreement; asking here isn't approval.",
+        "dispatch_service": "Own-MC path — onboarding sends the setup packet; chat alone isn't eligibility.",
+        "lease_on": "Lease-on path — onboarding reviews fit and the agreement; asking here isn't approval.",
         "needs_clarification": "We still need own-MC vs lease-on before a packet can go out.",
     }.get(arrangement or "", "Onboarding still needs the arrangement before papers move.")
+    if support == "in_scope" and equip:
+        scope_bit = "In scope."
+    elif support == "out_of_scope":
+        scope_bit = "Outside current catalog."
+    elif equip:
+        scope_bit = "Catalog fit still to confirm."
+    else:
+        scope_bit = "Equipment not confirmed yet."
     unresolved = []
-    if not fact_value(facts, "supportNeed"):
-        unresolved.append("home time / support")
+    if mode == "local" and not weekday:
+        unresolved.append("Monday–Friday availability")
+    if not area:
+        unresolved.append("starting city/ZIP")
     if not fact_value(facts, "startDate"):
         unresolved.append("start timing")
     if arrangement == "needs_clarification" or not fact_value(facts, "mcOwnership"):
         unresolved.append("MC arrangement")
+    if insurance == "needs_insurance":
+        unresolved.append("insurance options/quote")
     open_bits = f" Still open: {', '.join(unresolved)}." if unresolved else ""
     return (
-        f"So far you're looking for help with {count} out of {area}{lane_bit}{start_bit}. "
-        f"That equipment is in scope for us.{need_bit} {path}{open_bits} "
+        f"{'Lease-on review' if arrangement == 'lease_on' else 'Fit check'}: {count}{area_bit}{ops_bit}. "
+        f"{scope_bit}{ins_bit} {path}{callback_bit}{open_bits} "
         "No live freight from this chat, and nothing's approved yet."
     )
+
+
+def handoff_brief(
+    facts: dict,
+    arrangement: str | None,
+    *,
+    task: str | None = None,
+    status: str | None = None,
+    next_action: str | None = None,
+    related_tasks: list[str] | None = None,
+    opportunity_id: str | None = None,
+    reason: str | None = None,
+) -> str:
+    """Internal manager brief for Zoho Description — evidence-based, action-oriented."""
+    equip_key = fact_value(facts, "equipment")
+    equip = EQUIP_LABELS.get(str(equip_key or ""), equip_key) if equip_key else None
+    length = fact_value(facts, "trailerLength")
+    insurance = fact_value(facts, "insurance")
+    route = fact_value(facts, "insuranceRoute")
+    mode = fact_value(facts, "operatingMode")
+    miles = fact_value(facts, "milesPerDay")
+    weekday = fact_value(facts, "weekdaySchedule")
+    area = fact_value(facts, "operatingArea") or fact_value(facts, "lanes")
+    phone = fact_value(facts, "phone")
+    cb_time = fact_value(facts, "callbackTime")
+    cb_tz = fact_value(facts, "callbackTimezone")
+    support = fact_value(facts, "equipmentSupport")
+
+    if not reason:
+        if status == "manager_requested" or task in {"clarification", "insurance_quote"}:
+            reason = "Driver explicitly requested an onboarding manager."
+        elif task == "callback":
+            reason = "Driver requested a callback."
+        elif task in {"lease_agreement", "setup_packet", "insurance_quote"}:
+            reason = "Driver readiness / onboarding packet request."
+        elif insurance == "needs_insurance":
+            reason = "Insurance assistance and pricing review needed."
+        else:
+            reason = "Fit / qualification update."
+
+    confirmed = []
+    if equip and length:
+        confirmed.append(f"{length} {equip}")
+    elif equip:
+        confirmed.append(str(equip))
+    if arrangement == "lease_on":
+        confirmed.append("wants to lease on")
+    elif arrangement == "dispatch_service":
+        confirmed.append("own MC")
+    if insurance == "needs_insurance":
+        confirmed.append("needs insurance")
+        if route == "company_arranged":
+            confirmed.append("prefers company-arranged insurance")
+    elif insurance == "own_insurance":
+        cov = fact_value(facts, "coverageTypes")
+        confirmed.append(f"own insurance ({cov})" if cov else "own insurance stated")
+    if mode:
+        confirmed.append(f"prefers {str(mode).replace('_', ' ')}")
+    if miles:
+        confirmed.append(f"comfortable with {miles} miles/day")
+    if weekday:
+        confirmed.append(f"schedule {str(weekday).replace('_', ' ')}")
+    if area:
+        confirmed.append(f"operating from {area}")
+
+    outstanding = []
+    if insurance == "needs_insurance":
+        outstanding.append("insurance arrangement and applicable charges")
+    if mode == "local" and not weekday:
+        outstanding.append("Monday–Friday availability")
+    if not area:
+        outstanding.append("starting city/ZIP")
+    if phone and (not cb_time or not cb_tz):
+        outstanding.append("callback schedule completion")
+    elif not phone and task == "callback":
+        outstanding.append("validated phone number")
+    if phone and cb_time and not fact_value(facts, "callbackDate"):
+        outstanding.append("callback date")
+    if support == "out_of_scope":
+        outstanding.append("equipment catalog fit")
+    if not fact_value(facts, "startDate") and status in {"manager_requested", "awaiting_human_action", "callback_requested"}:
+        outstanding.append("preferred start timing")
+
+    callback_lines = []
+    if phone or cb_time or cb_tz:
+        callback_lines.append(
+            f"Callback: {', '.join(p for p in [phone and f'phone {phone}', cb_time and str(cb_time), cb_tz and str(cb_tz)] if p)}."
+        )
+        if cb_tz and area and str(cb_tz).lower().find(str(area).lower()) >= 0:
+            pass
+        if cb_tz and ("chicago" in str(cb_tz).lower() or "America/Chicago" in str(cb_tz)):
+            callback_lines.append("Chicago/timezone is a callback timezone reference, not an operating location unless separately confirmed.")
+        callback_lines.append("Validate phone country/format before dialing. Manager acceptance is separate from this request.")
+
+    related = [t for t in (related_tasks or []) if t and t != task]
+    action = next_action or "Manager to review confirmed facts, resolve open items, and contact the driver if a callback was requested."
+    parts = [
+        f"Reason for review: {reason}",
+        f"Driver-confirmed facts: {'; '.join(confirmed)}." if confirmed else "Driver-confirmed facts: none recorded yet.",
+        f"Primary task: {task or 'fit_check'} ({status or 'open'}).",
+    ]
+    if related:
+        parts.append(f"Related tasks: {', '.join(related)}.")
+    if callback_lines:
+        parts.extend(callback_lines)
+    if outstanding:
+        parts.append(f"Outstanding: {'; '.join(outstanding)}.")
+    parts.append(f"Next action: {action}")
+    if opportunity_id:
+        parts.append(f"Inquiry ID: {opportunity_id}.")
+    parts.append("Readiness interest is not clearance. Manager requested ≠ assigned ≠ accepted.")
+    return " ".join(parts)
+
+
+def deal_title(facts: dict, arrangement: str | None, *, task: str | None = None, opportunity_id: str | None = None) -> str:
+    equip_key = fact_value(facts, "equipment")
+    equip = EQUIP_LABELS.get(str(equip_key or ""), equip_key) if equip_key else None
+    length = fact_value(facts, "trailerLength")
+    insurance = fact_value(facts, "insurance")
+    suffix = (opportunity_id or "")[-8:]
+    bits = []
+    if arrangement == "lease_on":
+        bits.append("Lease-on review")
+    elif arrangement == "dispatch_service":
+        bits.append("Own-MC setup")
+    else:
+        bits.append("Fit check")
+    if length and equip:
+        bits.append(f"{length} {equip}")
+    elif equip:
+        bits.append(str(equip))
+    if insurance == "needs_insurance" or task == "insurance_quote":
+        bits.append("Insurance assistance")
+    elif task == "callback":
+        bits.append("Callback")
+    title = " | ".join(bits)
+    return f"{title} ({suffix})" if suffix else title
 
 
 def _has_question(text: str) -> bool:
@@ -495,7 +674,12 @@ def compose(
         return " ".join(_dedupe(parts)), CHIPS.get(ask) or CHIPS["default"], None
 
     if intent == "onboard" and arrangement in {"dispatch_service", "lease_on"} and not saved:
-        parts.append(lookup("ready_own_next" if arrangement == "dispatch_service" else "ready_lease_next"))
+        if arrangement == "dispatch_service":
+            parts.append(lookup("ready_own_next"))
+        elif fact_value(facts, "insurance") == "needs_insurance":
+            parts.append(lookup("ready_lease_needs_insurance"))
+        else:
+            parts.append(lookup("ready_lease_next"))
         if receipt:
             parts.append(receipt)
         return " ".join(_dedupe(parts)), CHIPS["handoff"], summary
@@ -700,6 +884,8 @@ def compose(
             return " ".join(_dedupe(parts)), CHIPS["handoff"], summary
         if arrangement == "dispatch_service":
             parts.append(lookup("docs_own"))
+        elif arrangement == "lease_on" and fact_value(facts, "insurance") == "needs_insurance":
+            parts.append(lookup("docs_lease_needs_insurance"))
         elif arrangement == "lease_on":
             parts.append(lookup("docs_lease"))
         elif arrangement == "needs_clarification":
@@ -717,13 +903,25 @@ def compose(
             parts.append(lookup("next_invite"))
         return " ".join(_dedupe(parts)), CHIPS["assess"], summary
 
+    pending_ask = (validated or {}).get("next_question_id")
+    # After "I need insurance", acknowledge review before the next qualify question.
+    if (
+        pending_ask == "operatingMode"
+        and fact_value(facts, "insurance") == "needs_insurance"
+        and not any("insurance" in (p or "").lower() for p in parts)
+        and not spoken
+    ):
+        parts.append(lookup("insurance_assist_ack"))
+
     question, ask = select_question(validated, parts)
     if question:
         parts.append(question)
     elif not parts:
         parts.append(lookup("welcome"))
 
-    chips = CHIPS.get(ask) or (CHIPS["assess"] if core_done else CHIPS["default"])
+    chips = _chips_for_ask(ask, facts) if ask else (CHIPS["assess"] if core_done else CHIPS["default"])
+    if not chips:
+        chips = CHIPS.get(ask) or (CHIPS["assess"] if core_done else CHIPS["default"])
     return " ".join(_dedupe(parts)), chips, summary
 
 
@@ -749,7 +947,8 @@ _ASK_MARKERS = {
     "milesPerDay": r"miles can you cover|miles.*a day|miles per day",
     "stayOutDuration": r"stay(?:ing)? out|comfortable staying out",
     "operatingArea": r"operating from|city or zip|which city",
-    "phone": r"what number should|callback number|timezone",
+    "weekdaySchedule": r"monday through friday|weekends at home|stay on the road monday",
+    "phone": r"what number should|callback number|timezone|country code",
 }
 
 
@@ -772,10 +971,43 @@ _POLLUTED_DELIVERY = re.compile(
 )
 
 
+def _chips_for_ask(ask: str | None, facts: dict) -> list[str]:
+    from app.schema import length_chip_labels
+
+    if ask == "trailerLength":
+        return length_chip_labels(fact_value(facts, "equipment"))
+    return list(CHIPS.get(ask) or CHIPS["default"])
+
+
+def _ungrounded_equipment_claim(spoken: str, facts: dict) -> bool:
+    """True when wording asserts a truck/length that is not on file."""
+    if not spoken:
+        return False
+    equip = fact_value(facts, "equipment")
+    length = fact_value(facts, "trailerLength")
+    claims_box = bool(re.search(r"\b\d+\s*-?\s*(foot|ft)?\s*box\s*truck\b|\bbox\s*truck\b", spoken, re.I))
+    claims_hotshot = bool(re.search(r"\bhotshot\b|\bhot\s*shot\b", spoken, re.I))
+    claims_length = re.search(r"\b(\d+)\s*-?\s*(foot|ft)\b", spoken, re.I)
+    if claims_box and str(equip) not in {"box_truck"}:
+        return True
+    if claims_hotshot and str(equip) not in {"hotshot"}:
+        return True
+    if claims_length and not length:
+        # "Got it—a 26-foot …" with no saved length is invented.
+        if re.search(r"got it", spoken, re.I):
+            return True
+    if claims_length and length:
+        claimed = claims_length.group(1)
+        saved = re.sub(r"[^\d]", "", str(length))
+        if claimed and saved and claimed != saved:
+            return True
+    return False
+
+
 def align_delivery(text: str, ask: str | None, facts: dict) -> tuple[str, str | None, list[str]]:
     """Force wording, pending question, and chips to agree before the customer sees them."""
     spoken = (text or "").strip()
-    chips = CHIPS.get(ask) if ask and ask in CHIPS else None
+    chips = _chips_for_ask(ask, facts) if ask else None
     if ask and QUESTIONS.get(ask):
         equip = fact_value(facts, "equipment")
         # Model sometimes swaps hotshot ↔ box truck while still naming the ask.
@@ -783,17 +1015,19 @@ def align_delivery(text: str, ask: str | None, facts: dict) -> tuple[str, str | 
             (str(equip) == "hotshot" and re.search(r"\bbox\s*truck\b", spoken, re.I))
             or (str(equip) == "box_truck" and re.search(r"\bhotshot\b", spoken, re.I))
         )
-        if not _asks_about(spoken, ask) or _POLLUTED_DELIVERY.search(spoken) or wrong_equip:
+        invented = _ungrounded_equipment_claim(spoken, facts)
+        if not _asks_about(spoken, ask) or _POLLUTED_DELIVERY.search(spoken) or wrong_equip or invented:
             length = fact_value(facts, "trailerLength")
             ack = ""
-            if equip:
+            # Only acknowledge facts that are actually saved — never invent a truck.
+            if equip and ask != "equipment":
                 label = EQUIP_LABELS.get(str(equip), str(equip).replace("_", " "))
                 focus = f"{length} {label}" if length else label
                 ack = f"Got it — {focus}. "
             spoken = (ack + QUESTIONS[ask]).strip()
         elif not _has_question(spoken):
             spoken = f"{spoken} {QUESTIONS[ask]}".strip()
-        return spoken, ask, list(chips or CHIPS.get(ask) or CHIPS["default"])
+        return spoken, ask, list(chips or _chips_for_ask(ask, facts))
     # No pending question — strip stuck qualify loops.
     if re.search(r"fit already|future purchase|current setup|current mc status", spoken, re.I):
         equip = fact_value(facts, "equipment")

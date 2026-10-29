@@ -48,15 +48,20 @@ def publish(arrangement: str, percent: float, approved_by: str) -> dict:
     return latest(arrangement)
 
 
-def live_quote(arrangement: str | None) -> str:
+def live_quote(arrangement: str | None, *, insurance: str | None = None) -> str:
     if not arrangement or arrangement == "needs_clarification":
         return lookup("fee_need_arrangement")
     row = latest("lease_on" if arrangement == "lease_on" else "dispatch_service")
     if not row:
-        return lookup("fee")
+        # Arrangement is known — do not pretend we still need own-MC vs lease-on.
+        if insurance == "needs_insurance":
+            return lookup("fee_lease_needs_insurance")
+        return lookup("fee_manager_confirm")
     label = "lease-on settlement" if arrangement == "lease_on" else "own-MC dispatch fee"
-    return (
+    base = (
         f"For this arrangement, the current {label} is {_fmt(row['percent'])}% of gross. "
         "That's the rate our onboarding manager uses — I won't change it here. "
-        + lookup("fee_route_manager")
     )
+    if insurance == "needs_insurance":
+        return base + lookup("fee_lease_needs_insurance")
+    return base + lookup("fee_route_manager")

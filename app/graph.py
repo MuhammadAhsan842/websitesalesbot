@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from typing import Annotated, Any, TypedDict
 
@@ -270,16 +271,16 @@ def _from_qwen(model: dict, ruled: dict, user_text: str = "", current_facts: dic
     }
 
 
-def _api_chips(ask: str | None, labels: list | None) -> list[dict]:
+def _api_chips(ask: str | None, labels: list | None, facts: dict | None = None) -> list[dict]:
     if ask:
-        return chip_options(ask)
+        return chip_options(ask, facts)
     out = []
     for item in labels or []:
         if isinstance(item, dict) and item.get("label"):
             out.append(item)
         else:
             out.append({"label": str(item), "field": None, "value": str(item)})
-    return out or chip_options(None)
+    return out or chip_options(None, facts)
 
 
 async def node_propose(state: TurnState) -> dict:
@@ -292,13 +293,29 @@ async def node_propose(state: TurnState) -> dict:
         for tag in (ruled.get("repair"), mem.get("concern"), mem.get("goal"), mem.get("last_blocker"))
         if tag
     ]
-    hits = examples.search(text, tags=tags, limit=3)
+    # Dual-load of nomic embed + 4B chat thrash this laptop; skip example RAG while on agoc-qwen4b.
+    if (os.getenv("QWEN_MODEL") or "").startswith("agoc-qwen4b") or os.getenv("AGOC_SKIP_EXAMPLES", "").strip() in {
+        "1",
+        "true",
+        "yes",
+    }:
+        hits = []
+    else:
+        hits = examples.search(text, tags=tags, limit=3)
     # Retrieve approved copy before generation so the model can write a grounded full reply.
     arrangement = rules.arrangement_of(session.get("facts") or {})
     approved = []
     for key in (ruled.get("knowledge_keys") or [])[:8]:
         if key == "fee":
-            approved.append({"key": key, "text": fees.live_quote(arrangement)[:220]})
+            approved.append(
+                {
+                    "key": key,
+                    "text": fees.live_quote(
+                        arrangement,
+                        insurance=fact_value(session.get("facts") or {}, "insurance"),
+                    )[:220],
+                }
+            )
         elif key in REGISTER:
             approved.append({"key": key, "text": lookup(key)[:220]})
     recent = []
@@ -445,7 +462,12 @@ def node_knowledge(state: TurnState) -> dict:
     if keys:
         for key in keys:
             if key == "fee":
-                bits.append(fees.live_quote(arrangement))
+                bits.append(
+                    fees.live_quote(
+                        arrangement,
+                        insurance=fact_value(state["session"].get("facts") or {}, "insurance"),
+                    )
+                )
             else:
                 bits.append(lookup(key))
     else:
@@ -632,16 +654,33 @@ def node_execute(state: TurnState) -> dict:
             proposal["next_field"] = "phone"
             result["message"] = lookup("call_me")
             return {"proposal": proposal, "action_result": result, **_trace("execute", action="callback_wait_phone")}
+        missing_cb = []
+        if not fact_value(session["facts"], "callbackTime"):
+            missing_cb.append("preferred time")
+        if not fact_value(session["facts"], "callbackTimezone"):
+            missing_cb.append("timezone")
+        if missing_cb:
+            proposal["next_field"] = "phone"
+            result["message"] = (
+                f"I have your number ending in {str(fact_value(session['facts'], 'phone'))[-4:]}. "
+                f"Which {' and '.join(missing_cb)} should the manager use?"
+            )
+            return {"proposal": proposal, "action_result": result, **_trace("execute", action="callback_wait_schedule")}
         persist_human_task(session, "callback", "callback_requested", "Human or voice worker returns the call", "Callback recorded")
         session["handed_over"] = True
         session["conversation_state"] = "handed_over"
         session["channel"] = "callback_pending"
         session["identity_confirmed"] = True
+        when = fact_value(session["facts"], "callbackTime")
+        zone = fact_value(session["facts"], "callbackTimezone")
         result.update(
             {
                 "saved": True,
                 "verified": False,
-                "message": "I've noted the callback for our onboarding manager. Nobody has dialed yet.",
+                "message": (
+                    f"I've noted the callback for {when} ({zone}). "
+                    "Our onboarding manager hasn't dialed yet."
+                ),
             }
         )
         return {"session": session, "action_result": result, **_trace("execute", action="callback", case_id=session.get("case_id"))}
@@ -734,7 +773,7 @@ def node_reply(state: TurnState) -> dict:
         _commit_delivered_question(session, None)
         return {
             "reply_text": text,
-            "chips": _api_chips(None, CHIPS["handoff"][:1]),
+            "chips": _api_chips(None, CHIPS["handoff"][:1], session.get("facts")),
             "session": session,
             **_trace("reply", composed="decline"),
         }
@@ -744,7 +783,7 @@ def node_reply(state: TurnState) -> dict:
         _commit_delivered_question(session, None)
         return {
             "reply_text": text,
-            "chips": _api_chips(None, _chips(session, proposal)),
+            "chips": _api_chips(None, _chips(session, proposal), session.get("facts")),
             "session": session,
             **_trace("reply", composed="takeover"),
         }
@@ -757,7 +796,7 @@ def node_reply(state: TurnState) -> dict:
             _commit_delivered_question(session, None)
             return {
                 "reply_text": text,
-                "chips": _api_chips(None, CHIPS["handoff"]),
+                "chips": _api_chips(None, CHIPS["handoff"], session.get("facts")),
                 "session": session,
                 **_trace("reply", composed="manager_requested"),
             }
@@ -792,7 +831,7 @@ def node_reply(state: TurnState) -> dict:
         _commit_delivered_question(session, None)
         return {
             "reply_text": text,
-            "chips": _api_chips(None, _chips(session, proposal)),
+            "chips": _api_chips(None, _chips(session, proposal), session.get("facts")),
             "session": session,
             **_trace("reply", composed="status"),
         }
@@ -854,7 +893,7 @@ def node_reply(state: TurnState) -> dict:
         session["conversation_state"] = "assess_fit"
     return {
         "reply_text": text,
-        "chips": _api_chips(ask, chips),
+        "chips": _api_chips(ask, chips, session.get("facts")),
         "session": session,
         **_trace("reply", composed="playbook", second_pass=reason, delivered_question=ask),
     }

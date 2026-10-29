@@ -66,8 +66,9 @@ def _ensure_onboarding_case(session: dict) -> dict:
     from app.rules import arrangement_of, task_for
     from app.tasks import persist_human_task
 
-    arrangement = arrangement_of(session.get("facts") or {})
-    task = task_for(arrangement, "onboard") or "setup_packet"
+    facts = session.get("facts") or {}
+    arrangement = arrangement_of(facts)
+    task = task_for(arrangement, "onboard", facts) or "setup_packet"
     return persist_human_task(
         session,
         task,

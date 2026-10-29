@@ -179,9 +179,11 @@ STAGES = {
     "callback": "Callback Requested",
     "setup_packet": "Onboarding",
     "lease_agreement": "Onboarding",
+    "insurance_quote": "Onboarding",
     "clarification": "Needs Clarification",
     "operations_support": "Operations",
     "human_takeover": "Human Takeover",
+    "manager_requested": "Onboarding",
     "talk_here": "Qualification",
     "packet_sent": "Packet Sent",
     "received": "Documents Received",
@@ -192,10 +194,27 @@ STAGES = {
     "decline": "Closed Lost",
 }
 
+# Fact updates must not pull a handoff deal back to Qualification.
+STAGE_RANK = {
+    "Qualification": 1,
+    "Needs Clarification": 2,
+    "Callback Requested": 3,
+    "Onboarding": 4,
+    "Packet Sent": 5,
+    "Documents Received": 6,
+    "Corrections Requested": 6,
+    "Human Takeover": 7,
+    "Approved for Handoff": 8,
+    "Production Accepted": 9,
+    "Closed Lost": 10,
+    "Operations": 4,
+}
+
 FOLLOW_UP_DAYS = {
     "callback": 1,
     "setup_packet": 2,
     "lease_agreement": 2,
+    "insurance_quote": 2,
     "clarification": 1,
     "operations_support": 1,
     "human_takeover": 0,
@@ -225,13 +244,67 @@ def _due(kind: str) -> str | None:
     return (datetime.now(timezone.utc) + timedelta(days=days)).date().isoformat()
 
 
-def _needs(session: dict) -> str:
-    from app.playbook import fit_summary
-    from app.rules import arrangement_of
+def _is_handoff_scenario(scenario: str, task: str | None, status: str | None) -> bool:
+    if scenario in {
+        "callback",
+        "setup_packet",
+        "lease_agreement",
+        "insurance_quote",
+        "clarification",
+        "human_takeover",
+        "manager_requested",
+        "operations_support",
+    }:
+        return True
+    if status in {"manager_requested", "callback_requested", "awaiting_human_action", "human_takeover"}:
+        return True
+    if task in {"callback", "setup_packet", "lease_agreement", "insurance_quote", "clarification"}:
+        return True
+    return False
+
+
+def _resolve_stage(scenario: str, task: str | None, status: str | None, act: str | None, opportunity_id: str | None) -> str:
+    key = act or task or scenario
+    if status == "manager_requested":
+        key = "manager_requested"
+    proposed = STAGES.get(key, "Qualification")
+    stored = db.get_mirror(opportunity_id) if opportunity_id else None
+    existing = (stored or {}).get("stage")
+    if not existing:
+        return proposed
+    # Fit / inquiry / talk_here must not regress a handoff or onboarding stage.
+    if scenario in {"fit_update", "inquiry", "talk_here"} and STAGE_RANK.get(existing, 0) >= STAGE_RANK.get(
+        proposed, 0
+    ):
+        return existing
+    # Callback is a contact method — do not demote an Onboarding deal.
+    if scenario == "callback" and STAGE_RANK.get(existing, 0) > STAGE_RANK.get(proposed, 0):
+        return existing
+    if STAGE_RANK.get(existing, 0) > STAGE_RANK.get(proposed, 0) and scenario in {"fit_update", "inquiry", "talk_here"}:
+        return existing
+    return proposed
+
+
+def _description(session: dict, extra: dict, arrangement: str | None) -> str:
+    from app.playbook import fit_summary, handoff_brief
 
     facts = session.get("facts") or {}
+    task = extra.get("task")
+    status = extra.get("status")
+    scenario = extra.get("scenario") or ""
     try:
-        return fit_summary(facts, arrangement_of(facts))
+        if _is_handoff_scenario(scenario, task, status):
+            return handoff_brief(
+                facts,
+                arrangement,
+                task=task,
+                status=status,
+                next_action=extra.get("next_action"),
+                related_tasks=extra.get("related_tasks") or session.get("related_tasks"),
+                opportunity_id=session.get("opportunity_id"),
+                reason=extra.get("reason"),
+            )
+        return fit_summary(facts, arrangement)
     except Exception:
         return ""
 
@@ -239,6 +312,7 @@ def _needs(session: dict) -> str:
 def record(scenario: str, session: dict, extra: dict | None = None) -> dict:
     extra = extra or {}
     facts = session.get("facts") or {}
+    from app.playbook import deal_title
     from app.rules import arrangement_of
 
     arrangement = extra.get("arrangement") or arrangement_of(facts)
@@ -246,7 +320,20 @@ def record(scenario: str, session: dict, extra: dict | None = None) -> dict:
     status = extra.get("status") or session.get("conversation_state")
     owner = extra.get("owner") or "Unassigned desk"
     follow = extra.get("follow_up_due") or _due(task or scenario)
-    stage = STAGES.get(extra.get("act") or task or scenario, "Qualification")
+    stage = _resolve_stage(scenario, task, status, extra.get("act"), session.get("opportunity_id"))
+    extra_for_desc = {**extra, "scenario": scenario, "task": task, "status": status}
+    description = _description(session, extra_for_desc, arrangement)
+    title = deal_title(facts, arrangement, task=task, opportunity_id=session.get("opportunity_id"))
+    zoho_fields = {
+        "Deal_Name": title,
+        "Stage": stage,
+        "Phone": _val(facts, "phone"),
+        "Description": description,
+    }
+    # Follow-up timing belongs in the brief / Next Step — not Closing Date.
+    next_step = extra.get("next_action")
+    if next_step:
+        zoho_fields["Description"] = f"{description}\n\nNext Step: {next_step}"
     payload = {
         "scenario": scenario,
         "module": extra.get("module") or "Deals",
@@ -256,28 +343,36 @@ def record(scenario: str, session: dict, extra: dict | None = None) -> dict:
         "state_version": session.get("state_version"),
         "human_version": int(extra.get("human_version") or 0),
         "channel": session.get("channel") or "chat",
-        "zoho": {
-            "Deal_Name": f"Ayyan fit check {(session.get('opportunity_id') or '')[-8:]}",
-            "Stage": stage,
-            "Phone": _val(facts, "phone"),
-            "Closing_Date": follow,
-            "Description": _needs(session),
-        },
+        "follow_up_due": follow,
+        "zoho": zoho_fields,
         "crm": {
+            "inquiry_id": session.get("opportunity_id"),
             "arrangement": arrangement,
             "equipment": _val(facts, "equipment"),
+            "trailer_length": _val(facts, "trailerLength"),
             "fleet_size": _val(facts, "fleetSize"),
             "lanes": _val(facts, "lanes") or _val(facts, "operatingArea"),
+            "operating_mode": _val(facts, "operatingMode"),
+            "miles_per_day": _val(facts, "milesPerDay"),
+            "weekday_schedule": _val(facts, "weekdaySchedule"),
+            "insurance": _val(facts, "insurance"),
+            "insurance_route": _val(facts, "insuranceRoute"),
+            "coverage_types": _val(facts, "coverageTypes"),
+            "callback_phone": _val(facts, "phone"),
+            "callback_time": _val(facts, "callbackTime"),
+            "callback_timezone": _val(facts, "callbackTimezone"),
             "support_need": _val(facts, "supportNeed") or _val(facts, "primaryProblem"),
             "start_date": _val(facts, "startDate"),
             "mc_status": _val(facts, "mcOwnership"),
             "name": _val(facts, "name"),
-            "needs_summary": _needs(session),
+            "needs_summary": description,
+            "handoff_status": status,
             "unresolved_objections": _objections(extra.get("blocked"), extra.get("intent")),
-            "next_action": extra.get("next_action"),
+            "next_action": next_step,
             "owner": owner,
             "follow_up_due": follow,
             "task": task,
+            "related_tasks": extra.get("related_tasks") or session.get("related_tasks") or [],
             "status": status,
             "outcome": extra.get("outcome"),
             "lost_reason": extra.get("lost_reason"),
@@ -307,6 +402,7 @@ def queue_inquiry(session: dict, page: str | None = None) -> dict:
 
 def queue_fit(session: dict, proposal: dict | None = None) -> dict:
     proposal = proposal or {}
+    # Stable action id per opportunity version — updates the same Deal via mirror id.
     return queue(
         "fit_update",
         session,
@@ -314,6 +410,7 @@ def queue_fit(session: dict, proposal: dict | None = None) -> dict:
             "blocked": proposal.get("blocked"),
             "intent": proposal.get("intent"),
             "arrangement": proposal.get("arrangement"),
+            "action_id": f"{session.get('opportunity_id')}:fit:{session.get('state_version')}",
         },
     )
 
@@ -324,15 +421,28 @@ def queue_handoff(session: dict, task: str, status: str, next_action: str) -> di
         scenario = "operations_support"
     if status == "human_takeover":
         scenario = "human_takeover"
+    if status == "manager_requested":
+        scenario = "manager_requested"
+    related = list(session.get("related_tasks") or [])
+    case = db.get_case(session["case_id"]) if session.get("case_id") else None
+    purpose = (case or {}).get("task")
+    # Brief should show purpose (e.g. insurance_quote) even when this event is a callback.
+    brief_task = purpose if purpose and task == "callback" else task
+    if purpose and purpose != task and purpose not in related:
+        related = [purpose, *related]
+    if task == "callback" and "callback" not in related and purpose and purpose != "callback":
+        related = list(dict.fromkeys([*related, "callback"]))
     return queue(
         scenario,
         session,
         {
-            "task": task,
+            "task": brief_task,
             "status": status,
             "next_action": next_action,
-            "outcome": "qualified" if task in {"setup_packet", "lease_agreement", "callback"} else status,
-            "action_id": f"{session['id']}:{task}:{session['state_version']}",
+            "related_tasks": related,
+            "outcome": status,
+            # Opportunity-scoped id so retries update one Deal, not one Deal per browser session.
+            "action_id": f"{session.get('opportunity_id')}:{task}:{status}:{session.get('state_version')}",
         },
     )
 
@@ -428,6 +538,24 @@ def _human_newer(payload: dict) -> dict | None:
     return None
 
 
+def _parse_zoho_record(response: httpx.Response, existing_id: str | None) -> str:
+    """HTTP 200 is not enough — Zoho may return per-record errors in the body."""
+    response.raise_for_status()
+    rows = response.json().get("data") or []
+    if not rows:
+        raise RuntimeError("Zoho returned an empty data array")
+    row = rows[0] or {}
+    code = str(row.get("code") or "").upper()
+    status = str(row.get("status") or "").lower()
+    if status == "error" or code in {"INVALID_DATA", "DUPLICATE_DATA", "MANDATORY_NOT_FOUND", "AUTHORIZATION_ERROR"}:
+        raise RuntimeError(f"Zoho record rejected: {row.get('message') or code or row}")
+    details = row.get("details") or {}
+    zoho_id = str(details.get("id") or existing_id or "").strip()
+    if not zoho_id:
+        raise RuntimeError("Zoho response omitted Deal id — leaving sync unresolved")
+    return zoho_id
+
+
 def _submit_live(payload: dict, existing_id: str | None) -> str:
     token = access_token()
     if not token:
@@ -435,23 +563,25 @@ def _submit_live(payload: dict, existing_id: str | None) -> str:
     headers = {"Authorization": f"Zoho-oauthtoken {token}"}
     body = {"data": [payload.get("zoho") or {}]}
     base = api_base()
-    if existing_id and not str(existing_id).startswith("zcrm_local_"):
-        url = f"{base}/Deals/{existing_id}"
+    real_existing = existing_id if existing_id and not str(existing_id).startswith("zcrm_local_") else None
+    if real_existing:
+        url = f"{base}/Deals/{real_existing}"
         response = httpx.put(url, headers=headers, json=body, timeout=20.0)
-    else:
-        url = f"{base}/Deals"
-        response = httpx.post(url, headers=headers, json=body, timeout=20.0)
-    response.raise_for_status()
-    data = response.json().get("data") or [{}]
-    return str(data[0].get("details", {}).get("id") or existing_id or "")
+        return _parse_zoho_record(response, real_existing)
+    url = f"{base}/Deals"
+    response = httpx.post(url, headers=headers, json=body, timeout=20.0)
+    return _parse_zoho_record(response, None)
 
 
-def _submit_offline(payload: dict) -> str:
+def _submit_offline(payload: dict, zoho_id: str | None = None) -> str:
     stored = db.get_mirror(payload.get("opportunity_id"))
-    zoho_id = (stored or {}).get("id") or f"zcrm_local_{payload.get('opportunity_id')}"
+    resolved = db.prefer_zoho_id(
+        zoho_id or payload.get("zoho_id"),
+        (stored or {}).get("id") or f"zcrm_local_{payload.get('opportunity_id')}",
+    )
     db.upsert_mirror(
         {
-            "id": zoho_id,
+            "id": resolved,
             "module": payload.get("module") or "Deals",
             "opportunity_id": payload.get("opportunity_id"),
             "case_id": payload.get("case_id"),
@@ -461,7 +591,7 @@ def _submit_offline(payload: dict) -> str:
             "data": payload,
         }
     )
-    return zoho_id
+    return resolved
 
 
 def drain() -> list[dict]:
@@ -480,16 +610,16 @@ def drain() -> list[dict]:
             existing = (db.get_mirror(payload.get("opportunity_id")) or {}).get("id")
             if mode() == "live":
                 zoho_id = _submit_live(payload, existing)
-                # Keep a local copy even when live, for staff and recover-after-timeout.
                 payload["zoho_id"] = zoho_id
-                _submit_offline(payload)
+                # Persist the real Deal id so the next event updates instead of POSTing again.
+                _submit_offline(payload, zoho_id)
             else:
-                zoho_id = _submit_offline(payload)
+                zoho_id = _submit_offline(payload, existing)
             db.mark_outbox(row["action_id"], "synced")
             db.set_outbox_zoho(row["action_id"], zoho_id)
             db.add_event("Zoho sync", {"action_id": row["action_id"], "kind": row["kind"], "mode": mode(), "zoho_id": zoho_id})
             results.append({"action_id": row["action_id"], "status": "synced", "zoho_id": zoho_id})
         except Exception as exc:
             db.mark_outbox(row["action_id"], "failed", str(exc))
-            results.append({"action_id": row["action_id"], "status": "failed"})
+            results.append({"action_id": row["action_id"], "status": "failed", "error": str(exc)})
     return results

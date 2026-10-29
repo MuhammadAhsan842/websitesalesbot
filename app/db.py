@@ -16,10 +16,11 @@ def now():
 
 def connect():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 30000")
     return conn
 
 
@@ -203,6 +204,7 @@ def init():
             "ALTER TABLE case_files ADD COLUMN requirement_id TEXT",
             "ALTER TABLE hard_turns ADD COLUMN reviewed INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE outbox ADD COLUMN zoho_id TEXT",
+            "ALTER TABLE cases ADD COLUMN related_tasks_json TEXT NOT NULL DEFAULT '[]'",
             "ALTER TABLE sessions ADD COLUMN memory_json TEXT NOT NULL DEFAULT '{}'",
             "ALTER TABLE conversation_examples ADD COLUMN version INTEGER NOT NULL DEFAULT 1",
             "ALTER TABLE conversation_examples ADD COLUMN strategy TEXT",
@@ -351,6 +353,8 @@ def save_session(session: dict):
 def _case_from_row(row: dict) -> dict:
     row["facts"] = loads(row.pop("facts_json"), {})
     row["documents"] = loads(row.pop("documents_json"), [])
+    related_raw = row.pop("related_tasks_json", None) if "related_tasks_json" in row else "[]"
+    row["related_tasks"] = loads(related_raw or "[]", [])
     return row
 
 
@@ -370,9 +374,12 @@ def upsert_case(partial: dict) -> dict:
     ts = now()
     if existing:
         merged = {**existing, **partial, "id": case_id}
+        related = merged.get("related_tasks")
+        if related is None:
+            related = existing.get("related_tasks") or []
         execute(
             """UPDATE cases SET session_id=?, opportunity_id=?, task=?, status=?, owner=?,
-               summary=?, next_action=?, facts_json=?, documents_json=?, updated_at=?
+               summary=?, next_action=?, facts_json=?, documents_json=?, related_tasks_json=?, updated_at=?
                WHERE id=?""",
             (
                 merged.get("session_id"),
@@ -384,6 +391,7 @@ def upsert_case(partial: dict) -> dict:
                 merged.get("next_action"),
                 dumps(merged.get("facts") or {}),
                 dumps(merged.get("documents") or []),
+                dumps(related),
                 ts,
                 case_id,
             ),
@@ -391,8 +399,8 @@ def upsert_case(partial: dict) -> dict:
         return get_case(case_id)
     execute(
         """INSERT INTO cases (id, session_id, opportunity_id, task, status, owner, summary, next_action,
-           facts_json, documents_json, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           facts_json, documents_json, related_tasks_json, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             case_id,
             partial.get("session_id"),
@@ -404,6 +412,7 @@ def upsert_case(partial: dict) -> dict:
             partial.get("next_action"),
             dumps(partial.get("facts") or {}),
             dumps(partial.get("documents") or []),
+            dumps(partial.get("related_tasks") or []),
             ts,
             ts,
         ),
@@ -477,31 +486,67 @@ def get_mirror(opportunity_id: str | None) -> dict | None:
     return row
 
 
+def prefer_zoho_id(incoming: str | None, existing: str | None) -> str:
+    """Keep a real Zoho Deal ID once known — never let a synthetic local id replace it."""
+    inc = (incoming or "").strip()
+    ex = (existing or "").strip()
+    if inc and not inc.startswith("zcrm_local_"):
+        return inc
+    if ex and not ex.startswith("zcrm_local_"):
+        return ex
+    return inc or ex or uid("zcrm")
+
+
 def upsert_mirror(partial: dict) -> dict:
     existing = get_mirror(partial.get("opportunity_id"))
     ts = now()
     data = dumps(partial.get("data") or {})
+    zoho_id = prefer_zoho_id(partial.get("id"), (existing or {}).get("id"))
+    # Drop any stale row that already owns this Deal id under a different inquiry.
+    owner = execute("SELECT opportunity_id FROM zoho_mirror WHERE id = ?", (zoho_id,), fetch="one")
+    if owner and owner.get("opportunity_id") != partial.get("opportunity_id"):
+        execute("DELETE FROM zoho_mirror WHERE id = ?", (zoho_id,))
     if existing:
-        execute(
-            """UPDATE zoho_mirror SET module=?, case_id=?, session_id=?, human_version=?, stage=?, data_json=?, updated_at=?
-               WHERE opportunity_id=?""",
-            (
-                partial.get("module") or existing.get("module"),
-                partial.get("case_id") or existing.get("case_id"),
-                partial.get("session_id") or existing.get("session_id"),
-                int(partial.get("human_version") or existing.get("human_version") or 0),
-                partial.get("stage") or existing.get("stage"),
-                data,
-                ts,
-                partial.get("opportunity_id"),
-            ),
-        )
+        old_id = existing.get("id")
+        if old_id and old_id != zoho_id:
+            # Primary-key change: replace the row so UNIQUE(id) stays consistent.
+            execute("DELETE FROM zoho_mirror WHERE opportunity_id = ?", (partial.get("opportunity_id"),))
+            execute(
+                """INSERT INTO zoho_mirror (id, module, opportunity_id, case_id, session_id, human_version, stage, data_json, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    zoho_id,
+                    partial.get("module") or existing.get("module") or "Deals",
+                    partial.get("opportunity_id"),
+                    partial.get("case_id") or existing.get("case_id"),
+                    partial.get("session_id") or existing.get("session_id"),
+                    int(partial.get("human_version") or existing.get("human_version") or 0),
+                    partial.get("stage") or existing.get("stage"),
+                    data,
+                    ts,
+                ),
+            )
+        else:
+            execute(
+                """UPDATE zoho_mirror SET module=?, case_id=?, session_id=?, human_version=?, stage=?, data_json=?, updated_at=?
+                   WHERE opportunity_id=?""",
+                (
+                    partial.get("module") or existing.get("module"),
+                    partial.get("case_id") or existing.get("case_id"),
+                    partial.get("session_id") or existing.get("session_id"),
+                    int(partial.get("human_version") or existing.get("human_version") or 0),
+                    partial.get("stage") or existing.get("stage"),
+                    data,
+                    ts,
+                    partial.get("opportunity_id"),
+                ),
+            )
         return get_mirror(partial.get("opportunity_id"))
     execute(
         """INSERT INTO zoho_mirror (id, module, opportunity_id, case_id, session_id, human_version, stage, data_json, updated_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
-            partial.get("id") or uid("zcrm"),
+            zoho_id,
             partial.get("module") or "Deals",
             partial.get("opportunity_id"),
             partial.get("case_id"),
