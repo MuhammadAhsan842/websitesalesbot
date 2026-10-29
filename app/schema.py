@@ -217,12 +217,58 @@ CHIP_VALUES: dict[str, dict] = {
     "otr": {"operatingMode": "otr"},
     "local work": {"operatingMode": "local"},
     "i have my own insurance": {"insurance": "own_insurance"},
+    "yes, i have insurance": {"insurance": "own_insurance"},
+    "yes i have insurance": {"insurance": "own_insurance"},
     "i need insurance": {"insurance": "needs_insurance"},
     "i have my own mc": {"mcOwnership": "own_mc", "requestedArrangement": "dispatch_service"},
     "i want to lease on": {"mcOwnership": "no_own_mc", "requestedArrangement": "lease_on"},
     "not sure about my mc": {"mcOwnership": "unclear", "requestedArrangement": "needs_clarification"},
     "home weekends": {"stayOutDuration": "home_weekends", "weekdaySchedule": "flexible"},
     "1-2 weeks out": {"stayOutDuration": "1-2 weeks"},
+}
+
+# Widget / model may send legacy field names; map to FACT_KEYS.
+CHIP_FIELD_ALIASES = {
+    "authority": "mcOwnership",
+    "mc": "mcOwnership",
+    "trailerLengthFt": "trailerLength",
+    "trailer_length": "trailerLength",
+    "length": "trailerLength",
+    "coverage": "coverageTypes",
+    "local_or_otr": "operatingMode",
+    "truck_age_years": "authorityAgeMonths",
+}
+
+# Soft chip values → canonical fact values.
+CHIP_VALUE_NORMALIZE = {
+    "insurance": {
+        "yes": "own_insurance",
+        "y": "own_insurance",
+        "true": "own_insurance",
+        "own": "own_insurance",
+        "have": "own_insurance",
+        "own_insurance": "own_insurance",
+        "no": "needs_insurance",
+        "n": "needs_insurance",
+        "false": "needs_insurance",
+        "need": "needs_insurance",
+        "needs_insurance": "needs_insurance",
+    },
+    "mcOwnership": {
+        "yes": "own_mc",
+        "own": "own_mc",
+        "own_mc": "own_mc",
+        "no": "no_own_mc",
+        "lease": "no_own_mc",
+        "lease_on": "no_own_mc",
+        "no_own_mc": "no_own_mc",
+        "unclear": "unclear",
+    },
+    "operatingMode": {
+        "local": "local",
+        "otr": "otr",
+        "over the road": "otr",
+    },
 }
 
 

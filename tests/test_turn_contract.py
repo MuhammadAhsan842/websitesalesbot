@@ -242,6 +242,60 @@ class TypedChips(unittest.TestCase):
         self.assertEqual(rows[0]["value"], "400-500")
 
 
+class QualifyOrder(unittest.TestCase):
+    def test_model_cannot_skip_trailer_length(self):
+        from app import plan
+
+        session = {
+            "facts": facts(equipment="hotshot", equipmentSupport="in_scope"),
+            "memory": {"answered": ["equipment", "equipmentSupport"], "follow_up": "assistant"},
+        }
+        validated = plan.validate_plan(
+            "hotshot",
+            session,
+            {
+                "intent": "general",
+                "answer_topics": [],
+                "next_question_id": "mcOwnership",
+                "action": "none",
+                "facts": [],
+            },
+        )
+        self.assertEqual(validated["next_question_id"], "trailerLength")
+        self.assertIn("qualify_order", validated["fallbacks"])
+
+    def test_insurance_yes_chip_normalizes(self):
+        items = {
+            i["key"]: i["value"]
+            for i in rules.facts_from_chip(
+                {"label": "Yes, I have insurance", "field": "insurance", "value": "yes"}
+            )
+        }
+        self.assertEqual(items.get("insurance"), "own_insurance")
+
+    def test_authority_alias_chip(self):
+        items = {
+            i["key"]: i["value"]
+            for i in rules.facts_from_chip(
+                {"label": "I have my own MC", "field": "authority", "value": "own_mc"}
+            )
+        }
+        self.assertEqual(items.get("mcOwnership"), "own_mc")
+
+    def test_polluted_mc_draft_replaced(self):
+        text, ask, chips = playbook.align_delivery(
+            "Got it—a hotshot. That's a 30 or 40-foot box truck. I can't set up a case for that yet. "
+            "Do you currently have your own MC, or are you looking to lease on?",
+            "trailerLength",
+            facts(equipment="hotshot", equipmentSupport="in_scope"),
+        )
+        self.assertEqual(ask, "trailerLength")
+        self.assertIn("length", text.lower())
+        self.assertNotIn("box truck", text.lower())
+        self.assertNotIn("can't set up", text.lower())
+        self.assertEqual(chips, CHIPS["trailerLength"])
+
+
 class RegisterVersion(unittest.TestCase):
     def test_v12(self):
         self.assertEqual(knowledge.REGISTER["version"], "ayyan_sales_v12")

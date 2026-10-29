@@ -763,18 +763,27 @@ def _asks_about(text: str, ask: str | None) -> bool:
     return bool(re.search(marker, text, re.I))
 
 
+_POLLUTED_DELIVERY = re.compile(
+    r"fit already|future purchase|current setup|current mc status|"
+    r"i don'?t have that answer|can'?t set up a case|cannot set up a case|"
+    r"i'?ll keep the door open|outside our current|don'?t provide dispatch|"
+    r"30 or 40-foot box truck|switch to a supported",
+    re.I,
+)
+
+
 def align_delivery(text: str, ask: str | None, facts: dict) -> tuple[str, str | None, list[str]]:
     """Force wording, pending question, and chips to agree before the customer sees them."""
     spoken = (text or "").strip()
     chips = CHIPS.get(ask) if ask and ask in CHIPS else None
     if ask and QUESTIONS.get(ask):
-        if not _asks_about(spoken, ask) or re.search(
-            r"fit already|future purchase|current setup|current mc status|"
-            r"i don'?t have that answer",
-            spoken,
-            re.I,
-        ):
-            equip = fact_value(facts, "equipment")
+        equip = fact_value(facts, "equipment")
+        # Model sometimes swaps hotshot ↔ box truck while still naming the ask.
+        wrong_equip = bool(
+            (str(equip) == "hotshot" and re.search(r"\bbox\s*truck\b", spoken, re.I))
+            or (str(equip) == "box_truck" and re.search(r"\bhotshot\b", spoken, re.I))
+        )
+        if not _asks_about(spoken, ask) or _POLLUTED_DELIVERY.search(spoken) or wrong_equip:
             length = fact_value(facts, "trailerLength")
             ack = ""
             if equip:

@@ -835,6 +835,27 @@ def _short_answer_facts(text: str, memory: dict | None) -> list[dict]:
     return items
 
 
+def _normalize_chip_field_value(field: str | None, value):
+    """Map legacy chip field names and soft values onto canonical facts."""
+    from app.schema import CHIP_FIELD_ALIASES, CHIP_VALUE_NORMALIZE, FACT_KEYS
+
+    if not field:
+        return None, value
+    key = CHIP_FIELD_ALIASES.get(field, field)
+    if key not in FACT_KEYS and key != "_unknown":
+        return None, value
+    if isinstance(value, str):
+        soft = value.strip().lower()
+        mapped = (CHIP_VALUE_NORMALIZE.get(key) or {}).get(soft)
+        if mapped is not None:
+            value = mapped
+        elif key == "trailerLength" and re.fullmatch(r"\d+", soft):
+            value = f"{soft}ft"
+        elif key == "trailerLength" and re.fullmatch(r"\d+\s*ft", soft):
+            value = soft.replace(" ", "")
+    return key, value
+
+
 def facts_from_chip(chip: dict | None) -> list[dict]:
     """Typed chip submission from the widget — authoritative for that field."""
     if not isinstance(chip, dict):
@@ -843,19 +864,20 @@ def facts_from_chip(chip: dict | None) -> list[dict]:
     value = chip.get("value")
     label = (chip.get("label") or "").strip().lower()
     items: list[dict] = []
-    if field and value not in (None, ""):
-        items.append({"key": field, "value": value, "status": "user_stated"})
-    for key in ("autoLiabilityCoverage", "cargoCoverage", "requestedArrangement"):
-        if key in chip and chip[key] not in (None, ""):
-            items.append({"key": key, "value": chip[key], "status": "user_stated"})
+    key, value = _normalize_chip_field_value(field, value)
+    if key and value not in (None, ""):
+        items.append({"key": key, "value": value, "status": "user_stated"})
+    for extra in ("autoLiabilityCoverage", "cargoCoverage", "requestedArrangement"):
+        if extra in chip and chip[extra] not in (None, ""):
+            items.append({"key": extra, "value": chip[extra], "status": "user_stated"})
     if label:
         from app.schema import CHIP_VALUES
 
         mapped = CHIP_VALUES.get(label) or {}
         have = {item["key"] for item in items}
-        for key, val in mapped.items():
-            if key not in have:
-                items.append({"key": key, "value": val, "status": "user_stated"})
+        for map_key, map_val in mapped.items():
+            if map_key not in have:
+                items.append({"key": map_key, "value": map_val, "status": "user_stated"})
     return items
 
 

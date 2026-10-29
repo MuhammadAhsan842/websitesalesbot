@@ -678,22 +678,20 @@ def search(text: str, limit: int = 2, tags: list[str] | None = None) -> list[dic
         return []
     from app import embed
 
-    q_vec = None
-    if any(embed.get_cached("example", row["id"]) for row in rows):
-        q_vec = embed.embed(text)
-    vec_scores = {row["id"]: embed.cosine(q_vec, embed.get_cached("example", row["id"])) for row in rows}
-    vec_ranked = [row for row in sorted(rows, key=lambda row: vec_scores[row["id"]], reverse=True) if vec_scores[row["id"]] > 0]
-    if q_vec and vec_ranked:
+    by_id = {row["id"]: row for row in rows}
+    pine_hits = embed.query_similar("example", text, top_k=max(8, limit * 4))
+    vec_scores = {doc_id: score for doc_id, score in pine_hits if doc_id in by_id}
+    vec_ranked = [row for row in sorted(rows, key=lambda row: vec_scores.get(row["id"], 0.0), reverse=True) if vec_scores.get(row["id"], 0.0) > 0]
+    if vec_ranked:
         lex_rank = {row["id"]: i for i, row in enumerate(lex_ranked)}
         vec_rank = {row["id"]: i for i, row in enumerate(vec_ranked)}
         keys = list(dict.fromkeys([row["id"] for row in lex_ranked] + [row["id"] for row in vec_ranked]))
         order = [key for key, _ in embed.rrf(lex_rank, vec_rank, keys)]
-        ranked = [{**next(row for row in rows if row["id"] == key)} for key in order]
+        ranked = [{**by_id[key]} for key in order if key in by_id]
     else:
         ranked = lex_ranked
     picked = []
     picked_tokens: set[str] = set()
-    by_id = {row["id"]: row for row in rows}
     for row in ranked:
         row = by_id[row["id"]]
         if lex_scores[row["id"]] <= 0 and vec_scores[row["id"]] <= 0:

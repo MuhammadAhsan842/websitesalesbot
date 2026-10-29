@@ -91,13 +91,32 @@ def build_index() -> int:
 
 
 def status() -> dict:
+    docs = {}
+    try:
+        from app import docindex, vectorstore
+
+        docs = {
+            "namespace": docindex.KIND,
+            "files_discoverable": len(docindex.iter_files()),
+            "pinecone": vectorstore.status(),
+        }
+    except Exception:
+        docs = {"namespace": "docs"}
     return {
         "indexed": len(_INDEX),
         "source": REGISTER.get("version"),
         "packets_indexed": False,
         "keys": [row["key"] for row in _INDEX],
         "embed": embed.status(),
+        "docs": docs,
     }
+
+
+def search_docs(query: str, limit: int = 4) -> list[dict]:
+    """Vector search over chunked project documents in Pinecone."""
+    from app import docindex
+
+    return docindex.search(query, top_k=limit)
 
 
 def search(query: str, limit: int = 2) -> list[dict]:
@@ -105,11 +124,11 @@ def search(query: str, limit: int = 2) -> list[dict]:
         rows = _rows()
         _INDEX[:] = rows
     q_tokens = query_tokens(query)
-    q_vec = embed.embed(query) if any(embed.get_cached("register", row["key"]) for row in _INDEX) else None
+    pine_hits = {doc_id: score for doc_id, score in embed.query_similar("register", query, top_k=12)}
     scored = []
     for item in _INDEX:
         lexical = _lex(q_tokens, item["tokens"])
-        vector = embed.cosine(q_vec, embed.get_cached("register", item["key"]))
+        vector = pine_hits.get(item["key"], 0.0)
         if lexical <= 0 and vector <= 0:
             continue
         scored.append({"key": item["key"], "text": item["text"], "lexical": lexical, "vector": vector})

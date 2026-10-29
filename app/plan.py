@@ -430,6 +430,26 @@ def validate_plan(user_text: str, session: dict, proposal: dict) -> dict:
         else:
             next_q = next_ask(facts, mem, intent, repair)
 
+    # Model must not skip ahead of the playbook qualify order (e.g. MC before trailer length).
+    if (
+        not paused
+        and not unsupported
+        and not driver_asked
+        and repair
+        not in {
+            "leave_sales",
+            "authority_uncertain",
+            "email_delivery",
+            "equip_ambiguous",
+            "repetition_unverified",
+        }
+        and action != "callback"
+    ):
+        canonical = next_ask(facts, mem, intent, repair)
+        if canonical and next_q != canonical:
+            next_q = canonical
+            fallbacks.append("qualify_order")
+
     if action == "create_case":
         task = proposal.get("task")
         if task not in CATALOGUE:
