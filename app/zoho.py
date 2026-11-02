@@ -292,9 +292,14 @@ def _description(session: dict, extra: dict, arrangement: str | None) -> str:
     task = extra.get("task")
     status = extra.get("status")
     scenario = extra.get("scenario") or ""
+    case = db.get_case(session["case_id"]) if session.get("case_id") else None
+    if case and scenario in {"fit_update", "inquiry", "talk_here"}:
+        task = case.get("task")
+        status = case.get("status")
+        extra = {**extra, "next_action": case.get("next_action"), "related_tasks": case.get("related_tasks")}
     try:
-        if _is_handoff_scenario(scenario, task, status):
-            return handoff_brief(
+        if case or _is_handoff_scenario(scenario, task, status):
+            brief = handoff_brief(
                 facts,
                 arrangement,
                 task=task,
@@ -304,6 +309,14 @@ def _description(session: dict, extra: dict, arrangement: str | None) -> str:
                 opportunity_id=session.get("opportunity_id"),
                 reason=extra.get("reason"),
             )
+            from app import workflows
+
+            callback = workflows.public_state(session).get("callback")
+            if callback:
+                brief += f" Callback request status: {callback['status']}."
+                if callback["status"] == "cancelled":
+                    brief += " Do not call; the driver cancelled this request."
+            return brief
         return fit_summary(facts, arrangement)
     except Exception:
         return ""
@@ -432,6 +445,8 @@ def queue_handoff(session: dict, task: str, status: str, next_action: str) -> di
         related = [purpose, *related]
     if task == "callback" and "callback" not in related and purpose and purpose != "callback":
         related = list(dict.fromkeys([*related, "callback"]))
+    workflow = db.get_workflow(session["id"], "callback") if task == "callback" else None
+    revision = f":workflow:{workflow['version']}" if workflow else ""
     return queue(
         scenario,
         session,
@@ -442,7 +457,7 @@ def queue_handoff(session: dict, task: str, status: str, next_action: str) -> di
             "related_tasks": related,
             "outcome": status,
             # Opportunity-scoped id so retries update one Deal, not one Deal per browser session.
-            "action_id": f"{session.get('opportunity_id')}:{task}:{status}:{session.get('state_version')}",
+            "action_id": f"{session.get('opportunity_id')}:{task}:{status}:{session.get('state_version')}{revision}",
         },
     )
 
@@ -486,13 +501,18 @@ def sync_status(session_id: str | None = None, case_id: str | None = None, oppor
     rows = db.list_outbox(session_id=session_id, case_id=case_id, opportunity_id=opportunity_id)
     pending = [row for row in rows if row["status"] == "queued"]
     failed = [row for row in rows if row["status"] in {"failed", "timeout"}]
-    synced = [row for row in rows if row["status"] in {"synced", "synced_note"}]
     latest = rows[0] if rows else None
-    verified = bool(latest) and latest["status"] in {"synced", "synced_note"} and not pending
+    remote_id = (latest or {}).get("zoho_id")
+    verified = bool(
+        latest and latest["status"] in {"synced", "synced_note"} and not pending
+        and remote_id and not str(remote_id).startswith("zcrm_local_")
+    )
     return {
         "mode": mode(),
         "verified": verified,
-        "assigned": False if not verified else bool((latest or {}).get("zoho_id")),
+        # A Deal write receipt is not evidence of task ownership or acceptance.
+        "assigned": False,
+        "assignment_verified": False,
         "pending": len(pending),
         "failed": len(failed),
         "latest": {
@@ -602,10 +622,11 @@ def drain() -> list[dict]:
         try:
             stored = _human_newer(payload)
             if stored:
-                db.mark_outbox(row["action_id"], "synced_note", "Human decision is newer; stage was not overwritten")
+                status = "synced_note" if mode() == "live" else "local_only"
+                db.mark_outbox(row["action_id"], status, "Human decision is newer; stage was not overwritten")
                 db.set_outbox_zoho(row["action_id"], stored.get("id"))
                 db.add_event("Zoho skipped newer human decision", {"action_id": row["action_id"]})
-                results.append({"action_id": row["action_id"], "status": "synced_note"})
+                results.append({"action_id": row["action_id"], "status": status})
                 continue
             existing = (db.get_mirror(payload.get("opportunity_id")) or {}).get("id")
             if mode() == "live":
@@ -613,12 +634,14 @@ def drain() -> list[dict]:
                 payload["zoho_id"] = zoho_id
                 # Persist the real Deal id so the next event updates instead of POSTing again.
                 _submit_offline(payload, zoho_id)
+                status = "synced"
             else:
                 zoho_id = _submit_offline(payload, existing)
-            db.mark_outbox(row["action_id"], "synced")
+                status = "local_only"
+            db.mark_outbox(row["action_id"], status)
             db.set_outbox_zoho(row["action_id"], zoho_id)
             db.add_event("Zoho sync", {"action_id": row["action_id"], "kind": row["kind"], "mode": mode(), "zoho_id": zoho_id})
-            results.append({"action_id": row["action_id"], "status": "synced", "zoho_id": zoho_id})
+            results.append({"action_id": row["action_id"], "status": status, "zoho_id": zoho_id})
         except Exception as exc:
             db.mark_outbox(row["action_id"], "failed", str(exc))
             results.append({"action_id": row["action_id"], "status": "failed", "error": str(exc)})

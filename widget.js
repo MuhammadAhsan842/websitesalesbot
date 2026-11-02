@@ -3,6 +3,7 @@
   const STORE = "agoc_session_v2";
   let sessionId = sessionStorage.getItem(STORE);
   let channel = "chat";
+  let workflows = {};
   const pageEquipment = () => document.body.dataset.equipment || "";
 
   function el(tag, attrs = {}, html = "") {
@@ -44,9 +45,11 @@
   const channelLabel = panel.querySelector("[data-channel]");
 
   function channelText() {
-    if (channel === "browser_voice") return "Talk here · same fit check, voice reserved";
-    if (channel === "callback_pending") return "Call me · callback on this opportunity";
-    return "Chat · Talk here keeps this case; Call me is a callback";
+    const callback = workflows.callback;
+    if (callback?.status === "collecting") return "Chat · collecting callback details";
+    if (callback?.status === "requested") return "Chat · callback requested, time unconfirmed";
+    if (callback?.status === "cancelled") return "Chat · callback cancelled";
+    return "Chat · browser voice unavailable; callbacks can be requested";
   }
 
   function normalizeChip(item) {
@@ -66,7 +69,7 @@
 
   function addMsg(role, text, pending = false) {
     const msg = el("div", { class: `agoc-msg ${role}${pending ? " pending" : ""}` });
-    msg.innerHTML = String(text).replace(/\n/g, "<br>");
+    msg.textContent = String(text);
     log.appendChild(msg);
     log.scrollTop = log.scrollHeight;
     return msg;
@@ -99,6 +102,7 @@
   function renderHistory(data) {
     log.innerHTML = "";
     channel = data.channel || channel;
+    workflows = data.workflows || {};
     channelLabel.textContent = channelText();
     (data.messages || []).forEach((item) => {
       addMsg(item.role === "user" ? "user" : "bot", item.text);
@@ -189,8 +193,9 @@
         return;
       }
       channel = data.channel || channel;
+      workflows = data.workflows || {};
       channelLabel.textContent = channelText();
-      pending.innerHTML = String(data.text || "I do not have an approved answer for that.").replace(/\n/g, "<br>");
+      pending.textContent = String(data.text || "I do not have an approved answer for that.");
       if (data.fit_summary) pending.classList.add("fit");
       renderChips(data.chips || []);
     } catch {
@@ -205,6 +210,7 @@
     log.innerHTML = "";
     chips.innerHTML = "";
     channel = "chat";
+    workflows = {};
   });
   launcher.addEventListener("click", async () => {
     panel.classList.add("open");

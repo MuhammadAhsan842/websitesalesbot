@@ -284,8 +284,12 @@ def handoff_brief(
     support = fact_value(facts, "equipmentSupport")
 
     if not reason:
-        if status == "manager_requested" or task in {"clarification", "insurance_quote"}:
+        if status == "manager_requested":
             reason = "Driver explicitly requested an onboarding manager."
+        elif task == "insurance_quote":
+            reason = "Insurance assistance and pricing review needed."
+        elif task == "clarification":
+            reason = "Arrangement or eligibility needs clarification."
         elif task == "callback":
             reason = "Driver requested a callback."
         elif task in {"lease_agreement", "setup_packet", "insurance_quote"}:

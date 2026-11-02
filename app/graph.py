@@ -15,7 +15,7 @@ def merge_traces(left: list, right: list) -> list:
         return [item for item in right if not item.get("_reset")]
     return (left or []) + right
 
-from app import db, examples, fees, media, memory, plan, playbook, qwen, requirements as reqmod, rules, second_pass, variants, zoho
+from app import db, examples, fees, media, memory, plan, playbook, qwen, requirements as reqmod, rules, second_pass, variants, workflows, zoho
 from app.knowledge import BLOCKED_CLAIMS, REGISTER, lookup
 from app.schema import ANSWER_TOPICS, CATALOGUE, CHIPS, FACT_KEYS, INTENTS, MOVES, QUESTIONS, VARIANTS, chip_options
 from app.tasks import fact_value, persist_human_task
@@ -287,14 +287,30 @@ async def node_propose(state: TurnState) -> dict:
     session = state["session"]
     text = state["user_text"]
     ruled = rules.propose(text, session["facts"], session.get("memory"), chip=state.get("chip"))
+    pending_callback = workflows.callback_context(session)
+    timezone_answer = False
+    if pending_callback or ruled.get("intent") == "call_me":
+        contact_facts = workflows.callback_facts(text, pending_callback)
+        timezone_answer = bool(
+            pending_callback and workflows.next_callback_field(pending_callback["data"]) == "callbackTimezone"
+            and any(item["key"] == "callbackTimezone" for item in contact_facts)
+            and not re.search(r"based|operat|start|live|from", text, re.I)
+        )
+        if timezone_answer:
+            ruled["facts"] = [item for item in ruled["facts"] if item["key"] not in {"operatingArea", "lanes"}]
+        by_key = {item["key"]: item for item in ruled["facts"]}
+        by_key.update({item["key"]: item for item in contact_facts})
+        ruled["facts"] = list(by_key.values())
+        if workflows.resumes_callback(session, ruled, text):
+            ruled["action"] = "callback"
     mem = session.get("memory") or {}
     tags = [
         tag
         for tag in (ruled.get("repair"), mem.get("concern"), mem.get("goal"), mem.get("last_blocker"))
         if tag
     ]
-    # Dual-load of nomic embed + 4B chat thrash this laptop; skip example RAG while on agoc-qwen4b.
-    if (os.getenv("QWEN_MODEL") or "").startswith("agoc-qwen4b") or os.getenv("AGOC_SKIP_EXAMPLES", "").strip() in {
+    # Retrieval is an explicit operator setting, never inferred from a model name.
+    if os.getenv("AGOC_SKIP_EXAMPLES", "").strip().lower() in {
         "1",
         "true",
         "yes",
@@ -354,6 +370,8 @@ async def node_propose(state: TurnState) -> dict:
             ),
         }
     merged = _from_qwen(model, ruled, text, session.get("facts"))
+    if timezone_answer:
+        merged["facts"] = [item for item in merged["facts"] if item["key"] not in {"operatingArea", "lanes"}]
     merged["retrieved"] = hits
     if not merged.get("answer_topics"):
         merged["answer_topics"] = plan.detect_topics(text, merged.get("intent"), None, ruled.get("repair"))
@@ -527,7 +545,7 @@ def node_plan(state: TurnState) -> dict:
         proposal["task"] = "setup_packet"
     elif mc == "no_own_mc":
         proposal["arrangement"] = "lease_on"
-        proposal["task"] = "lease_agreement"
+        proposal["task"] = rules.task_for("lease_on", proposal.get("intent"), session["facts"])
     elif mc == "unclear":
         proposal["arrangement"] = "needs_clarification"
         proposal["task"] = "clarification"
@@ -637,52 +655,47 @@ def node_execute(state: TurnState) -> dict:
     proposal = state["proposal"]
     action = proposal.get("action") or "none"
     result = {"verified": False, "saved": False, "message": None}
+    if workflows.cancellation_requested(state.get("user_text") or ""):
+        callback = workflows.cancel_callback(session)
+        result.update({"saved": bool(callback), "workflow_reply": True,
+                       "message": "Your callback request is cancelled." if callback else "There is no saved callback request to cancel."})
+        if callback and session.get("case_id"):
+            current = db.get_case(session["case_id"])
+            if current and current.get("task") == "callback":
+                db.upsert_case({"id": current["id"], "status": "callback_cancelled", "next_action": "Do not call — callback cancelled"})
+            from app.tasks import refresh_case_context
+
+            refresh_case_context(session)
+            # Reconciliation updates the same inquiry; cancellation does not cancel insurance/onboarding review.
+            zoho.queue_handoff(session, "callback", "callback_cancelled", "Do not call — driver cancelled the callback.")
+        return {"action_result": result, **_trace("execute", action="callback_cancelled")}
     # Only an accepted desk takeover freezes automation; a pending request does not.
     if session.get("manager_accepted") and action != "none":
         return {"action_result": result, **_trace("execute", skipped="manager_accepted")}
     if action == "talk_here":
-        if session["channel"] != "browser_voice":
-            session["channel"] = "browser_voice"
-            session["identity_confirmed"] = True
-            session["state_version"] += 1
-            db.add_event("Channel chat → browser_voice", {"sessionId": session["id"]})
-        result["message"] = lookup("talk_here")
-        zoho.queue("talk_here", session, {"status": "talk_here", "next_action": "Same session; voice audio is not live"})
+        prior = db.get_workflow(session["id"], "browser_voice")
+        if not prior:
+            db.save_workflow(session["id"], "browser_voice", "unavailable", {"requested_channel": "browser_voice"})
+        result.update({"workflow_reply": True, "message": lookup("talk_here")})
         return {"session": session, "action_result": result, **_trace("execute", action="talk_here")}
     if action == "callback":
-        if not fact_value(session["facts"], "phone"):
-            proposal["next_field"] = "phone"
-            result["message"] = lookup("call_me")
-            return {"proposal": proposal, "action_result": result, **_trace("execute", action="callback_wait_phone")}
-        missing_cb = []
-        if not fact_value(session["facts"], "callbackTime"):
-            missing_cb.append("preferred time")
-        if not fact_value(session["facts"], "callbackTimezone"):
-            missing_cb.append("timezone")
-        if missing_cb:
-            proposal["next_field"] = "phone"
+        callback = workflows.update_callback(session, state.get("user_text") or "")
+        missing = workflows.next_callback_field(callback["data"])
+        result.update({"workflow_reply": True, "next_field": missing, "saved": True})
+        if missing:
+            result["message"] = workflows.QUESTIONS[missing]
+        else:
+            # Reconcile on retry even if a previous attempt saved the workflow but
+            # failed before creating the case/outbox. Their keys are stable.
+            persist_human_task(session, "callback", "callback_requested", "Manager to review requested callback time and validate contact details", "Callback requested")
+            data = callback["data"]
             result["message"] = (
-                f"I have your number ending in {str(fact_value(session['facts'], 'phone'))[-4:]}. "
-                f"Which {' and '.join(missing_cb)} should the manager use?"
+                f"Your callback request is saved for {data['local_date']} at {data['local_time']} ({data['timezone']}). "
+                "The requested time is not confirmed, and nobody has dialed yet."
             )
-            return {"proposal": proposal, "action_result": result, **_trace("execute", action="callback_wait_schedule")}
-        persist_human_task(session, "callback", "callback_requested", "Human or voice worker returns the call", "Callback recorded")
-        session["handed_over"] = True
-        session["conversation_state"] = "handed_over"
-        session["channel"] = "callback_pending"
-        session["identity_confirmed"] = True
-        when = fact_value(session["facts"], "callbackTime")
-        zone = fact_value(session["facts"], "callbackTimezone")
-        result.update(
-            {
-                "saved": True,
-                "verified": False,
-                "message": (
-                    f"I've noted the callback for {when} ({zone}). "
-                    "Our onboarding manager hasn't dialed yet."
-                ),
-            }
-        )
+        from app.tasks import refresh_case_context
+
+        refresh_case_context(session)
         return {"session": session, "action_result": result, **_trace("execute", action="callback", case_id=session.get("case_id"))}
     if action == "takeover":
         session["manager_requested"] = True
@@ -768,6 +781,11 @@ def node_reply(state: TurnState) -> dict:
     proposal = state["proposal"]
     bits = list(state.get("knowledge_bits") or [])
     action_result = state.get("action_result") or {}
+    if action_result.get("workflow_reply"):
+        ask = action_result.get("next_field")
+        _commit_delivered_question(session, ask)
+        return {"reply_text": action_result["message"], "chips": [], "session": session,
+                **_trace("reply", composed="workflow", delivered_question=ask)}
     if proposal.get("intent") == "decline":
         text = action_result.get("message") or lookup("commit")
         _commit_delivered_question(session, None)

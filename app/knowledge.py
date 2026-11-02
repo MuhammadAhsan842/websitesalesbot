@@ -67,7 +67,7 @@ REGISTER = {
     "support": "If you're already running with us, that's operations, not this sales chat. I can note it for them.",
     "payment_support": "I understand this is about payment. Which load or invoice does it relate to? Operations owns settlement status — I won't promise a payday from chat.",
     "unknown": "I don't have that answer. I can note it for our onboarding manager instead of guessing.",
-    "talk_here": "Talk here keeps this same fit check and uses the website microphone. It isn't a phone callback. Browser voice audio is reserved, not live in this build.",
+    "talk_here": "Browser voice isn't available in this build yet. We can continue this same inquiry in chat, or you can request a callback.",
     "call_me": "What number should our onboarding manager call? Please include the country code if you have one, plus a preferred time and timezone. This records a callback request — nobody has dialed yet.",
     "home_time": "Daily home time is on file as a hard constraint. I won't swap that for weekends-only. If the lanes can't support it, onboarding has to say so.",
     "commit": "You're not committing by talking here. Next step is a packet, a lease review, or a callback — and only if you ask.",

@@ -52,13 +52,16 @@ def persist_human_task(session: dict, task: str, status: str, next_action: str, 
 
     existing = db.get_case(session["case_id"]) if session.get("case_id") else None
     primary, related = _merge_tasks(existing, task)
+    # Contact method is independent of the purpose and its review stage.
+    case_status = existing["status"] if existing and task in CONTACT_TASKS and primary in PURPOSE_TASKS else status
+    case_next_action = existing.get("next_action") if existing and task in CONTACT_TASKS and primary in PURPOSE_TASKS else next_action
     arrangement = arrangement_of(session["facts"])
     narrative = handoff_brief(
         session["facts"],
         arrangement,
         task=primary,
-        status=status,
-        next_action=next_action,
+        status=case_status,
+        next_action=case_next_action,
         related_tasks=related + ([task] if task != primary and task not in related else []),
         opportunity_id=session.get("opportunity_id"),
         reason=(
@@ -75,10 +78,10 @@ def persist_human_task(session: dict, task: str, status: str, next_action: str, 
             "opportunity_id": session["opportunity_id"],
             "task": primary,
             "related_tasks": related,
-            "status": status,
+            "status": case_status,
             "facts": session["facts"],
             "summary": narrative,
-            "next_action": next_action,
+            "next_action": case_next_action,
         }
     )
     session["case_id"] = saved["id"]
@@ -98,3 +101,25 @@ def persist_human_task(session: dict, task: str, status: str, next_action: str, 
     # while the local case keeps the purpose task primary.
     zoho.queue_handoff(session, task, status, next_action)
     return saved
+
+
+def refresh_case_context(session: dict) -> None:
+    """Refresh contact progress without changing the purpose, review stage or owner."""
+    from app import workflows
+    from app.playbook import handoff_brief
+    from app.rules import arrangement_of
+
+    case = db.get_case(session["case_id"]) if session.get("case_id") else None
+    if not case:
+        return
+    narrative = handoff_brief(
+        session["facts"], arrangement_of(session["facts"]), task=case.get("task"),
+        status=case["status"], next_action=case.get("next_action"), related_tasks=case.get("related_tasks"),
+        opportunity_id=session.get("opportunity_id"),
+    )
+    callback = workflows.public_state(session).get("callback")
+    if callback:
+        narrative += f" Callback request status: {callback['status']}."
+        if callback["status"] == "cancelled":
+            narrative += " Do not call; the driver cancelled this request."
+    db.upsert_case({"id": case["id"], "facts": session["facts"], "summary": narrative})
