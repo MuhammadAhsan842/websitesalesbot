@@ -186,4 +186,10 @@ def public_state(session: dict) -> dict:
         }
     if voice:
         result["browser_voice"] = {"id": voice["id"], "status": voice["status"], "connected": False}
+    # Media connection state is owned by trusted worker events, not model output.
+    with db.connect() as conn:
+        current = conn.execute("SELECT * FROM voice_connections WHERE session_id=? ORDER BY rowid DESC LIMIT 1", (session["id"],)).fetchone()
+    if current:
+        from app.voice import public_connection
+        result["browser_voice"] = public_connection(dict(current))
     return result

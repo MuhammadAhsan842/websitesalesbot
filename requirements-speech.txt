@@ -1,0 +1,6 @@
+# Separate speech-service environment. Does not install the voice worker.
+fastapi==0.115.13
+uvicorn==0.34.2
+python-multipart==0.0.33
+faster-whisper==1.2.1
+piper-tts==1.4.1

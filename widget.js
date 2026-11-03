@@ -2,6 +2,12 @@
   const API = "";
   const STORE = "agoc_session_v2";
   let sessionId = sessionStorage.getItem(STORE);
+  const VOICE_STORE = "agoc_voice_access_v1";
+  let voiceClient = null;
+  let voiceRequest = 0;
+  let voiceState = "idle";
+  let voiceAvailable = false;
+  let muted = false;
   let channel = "chat";
   let workflows = {};
   const pageEquipment = () => document.body.dataset.equipment || "";
@@ -28,6 +34,13 @@
     </div>
     <div class="agoc-log" id="agoc-log"></div>
     <div class="agoc-chips" id="agoc-chips"></div>
+    <div class="agoc-voice" aria-label="Voice controls">
+      <span data-voice-status role="status" aria-live="polite">Checking voice availability…</span>
+      <div><button type="button" data-voice-start disabled>Talk here</button>
+      <button type="button" data-voice-mute hidden>Mute</button>
+      <button type="button" data-voice-audio hidden>Enable audio</button>
+      <button type="button" data-voice-end hidden>Return to chat</button></div>
+    </div>
     <form class="agoc-form" id="agoc-form">
       <label class="agoc-attach" title="Add a photo. Stored unverified — not approval.">
         <input type="file" name="photo" accept="image/*,.pdf" hidden />
@@ -45,11 +58,12 @@
   const channelLabel = panel.querySelector("[data-channel]");
 
   function channelText() {
+    if (voiceState !== "idle" && voiceState !== "error") return "Voice · same inquiry";
     const callback = workflows.callback;
     if (callback?.status === "collecting") return "Chat · collecting callback details";
     if (callback?.status === "requested") return "Chat · callback requested, time unconfirmed";
     if (callback?.status === "cancelled") return "Chat · callback cancelled";
-    return "Chat · browser voice unavailable; callbacks can be requested";
+    return "Chat · " + (voiceAvailable ? "voice available by choice" : "callbacks can be requested");
   }
 
   function normalizeChip(item) {
@@ -80,6 +94,7 @@
     (list || []).map(normalizeChip).forEach((chip) => {
       if (!chip.label) return;
       const btn = el("button", { type: "button" }, chip.label);
+      btn.disabled = !["idle", "error"].includes(voiceState);
       btn.addEventListener("click", () => send(chip.label, chip));
       chips.appendChild(btn);
     });
@@ -143,6 +158,7 @@
       const data = await response.json();
       sessionId = data.session_id;
       sessionStorage.setItem(STORE, sessionId);
+      if (data.voice_access_token) sessionStorage.setItem(VOICE_STORE, JSON.stringify({sessionId, token: data.voice_access_token}));
       showIntro(data.text, data.chips);
     } catch {
       addMsg("bot", "The fit check is not reachable. Start the API, then open this again.");
@@ -151,6 +167,8 @@
 
   async function send(text, chip = null) {
     const value = String(text || "").trim();
+    if (value.toLowerCase() === "talk here" && voiceAvailable) return startVoice();
+    if (!["idle", "error"].includes(voiceState)) return;
     if (!value) return;
     await ensureSession();
     addMsg("user", value);
@@ -204,7 +222,91 @@
     }
   }
 
-  window.addEventListener("agoc-reset", () => {
+  const voiceStatus = panel.querySelector("[data-voice-status]");
+  const startButton = panel.querySelector("[data-voice-start]");
+  const muteButton = panel.querySelector("[data-voice-mute]");
+  const endButton = panel.querySelector("[data-voice-end]");
+  const audioButton = panel.querySelector("[data-voice-audio]");
+  function updateVoice(state, message) {
+    voiceState = state;
+    const active = !["idle", "error"].includes(state);
+    startButton.hidden = active;
+    startButton.disabled = !voiceAvailable;
+    endButton.hidden = !active;
+    muteButton.hidden = !["connected", "playback_blocked"].includes(state);
+    audioButton.hidden = state !== "playback_blocked";
+    form.querySelectorAll("input, button").forEach(node => { node.disabled = active; });
+    chips.querySelectorAll("button").forEach(node => { node.disabled = active; });
+    voiceStatus.textContent = message || ({connecting: "Connecting microphone…", connected: "AI voice connected · you can interrupt",
+      playback_blocked: "Enable audio to hear the AI assistant",
+      idle: voiceAvailable ? "Microphone starts only when you choose Talk here." : "Voice unavailable · continue in chat",
+      error: "Voice unavailable · continue in chat"}[state] || state);
+    channelLabel.textContent = channelText();
+  }
+  async function checkVoice() {
+    try {
+      const response = await fetch("/v1/voice/capabilities");
+      if (!response.ok) throw new Error("voice");
+      const capability = await response.json();
+      voiceAvailable = capability.available;
+      startButton.textContent = capability.profile === "demo" ? "Talk here · demo voice" : "Talk here";
+    } catch { voiceAvailable = false; }
+    if (["idle", "error"].includes(voiceState)) updateVoice("idle");
+  }
+  let sdkPromise;
+  function loadVoice() {
+    if (!sdkPromise) sdkPromise = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = "/voice-client.js";
+      script.onload = resolve;
+      script.onerror = () => { sdkPromise = null; reject(new Error("Voice client could not load. Continue in chat.")); };
+      document.head.append(script);
+    });
+    return sdkPromise;
+  }
+  async function startVoice() {
+    if (!["idle", "error"].includes(voiceState)) return;
+    const request = ++voiceRequest;
+    updateVoice("connecting");
+    await ensureSession();
+    if (request !== voiceRequest) return;
+    let access;
+    try { access = JSON.parse(sessionStorage.getItem(VOICE_STORE) || "null"); } catch {}
+    if (!access || access.sessionId !== sessionId) {
+      updateVoice("error", "Voice needs a newly started chat in this browser. Your existing chat remains available.");
+      return;
+    }
+    try {
+      await loadVoice();
+      if (request !== voiceRequest) return;
+      voiceClient = new window.AyyanVoice.VoiceClient({sessionId, accessToken: access.token,
+        onStatus: updateVoice, onHistory: async () => {
+          if (!sessionId) return;
+          const response = await fetch(`/v1/session/${sessionId}`);
+          if (response.ok) {
+            const history = await response.json();
+            renderHistory(history);
+            if (history.manager_accepted && voiceClient?.room) await voiceClient.stop();
+          }
+        }});
+      await voiceClient.start();
+    } catch (error) { updateVoice("error", error.message); }
+  }
+  startButton.addEventListener("click", startVoice);
+  endButton.addEventListener("click", () => { ++voiceRequest; if (voiceClient) void voiceClient.stop(); else updateVoice("idle"); });
+  muteButton.addEventListener("click", async () => {
+    muted = !muted;
+    try { await voiceClient?.mute(muted); muteButton.textContent = muted ? "Unmute" : "Mute"; }
+    catch { await voiceClient?.stop(); }
+  });
+  audioButton.addEventListener("click", () => voiceClient?.enableAudio());
+  window.addEventListener("pagehide", () => { void voiceClient?.stop(); });
+  void checkVoice();
+
+  window.addEventListener("agoc-reset", async () => {
+    ++voiceRequest;
+    await voiceClient?.stop();
+    sessionStorage.removeItem(VOICE_STORE);
     sessionId = null;
     sessionStorage.removeItem(STORE);
     log.innerHTML = "";
@@ -215,8 +317,14 @@
   launcher.addEventListener("click", async () => {
     panel.classList.add("open");
     if (!log.children.length) await ensureSession();
+    await checkVoice();
   });
-  panel.querySelector("[data-close]").addEventListener("click", () => panel.classList.remove("open"));
+  panel.querySelector("[data-close]").addEventListener("click", async () => {
+    ++voiceRequest;
+    await voiceClient?.stop();
+    if (!voiceClient) updateVoice("idle");
+    panel.classList.remove("open");
+  });
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     send(form.message.value);

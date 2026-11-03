@@ -8,3 +8,8 @@ data/attachments/
 __pycache__/
 *.pyc
 .venv/
+
+node_modules/
+.env.voice
+data/voices/
+data/voice-models/

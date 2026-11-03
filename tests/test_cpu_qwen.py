@@ -190,14 +190,14 @@ class Inference(unittest.IsolatedAsyncioTestCase):
         from app import db
 
         qwen._gate.pending = self.cfg.parallel + self.cfg.max_waiting
+        session = db.create_session()
         with (
-            patch.object(db, "get_session", return_value={"id": "synthetic", "facts": {}, "conversation_state": "fit_check"}),
             patch.object(db, "add_message"),
             patch.object(app.state, "graph", create=True) as graph,
         ):
             graph.ainvoke.side_effect = qwen.InferenceBusy("Qwen queue is full")
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as api:
-                result = await api.post("/v1/turn", json={"session_id": "synthetic", "text": "Own MC"})
+                result = await api.post("/v1/turn", json={"session_id": session["id"], "text": "Own MC"})
                 self.assertEqual(result.status_code, 503)
                 self.assertEqual(result.headers["retry-after"], "2")
 
