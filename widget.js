@@ -192,6 +192,17 @@
       channelLabel.textContent = channelText();
       pending.innerHTML = String(data.text || "I do not have an approved answer for that.").replace(/\n/g, "<br>");
       if (data.fit_summary) pending.classList.add("fit");
+      if (data.thinking) {
+        const details = el("details", { class: "agoc-think" });
+        details.innerHTML = `<summary>Model thinking</summary><pre></pre>`;
+        details.querySelector("pre").textContent = data.thinking;
+        if (data.model_wording && data.model_wording !== data.text) {
+          const draft = el("div", { class: "agoc-think-draft" });
+          draft.textContent = `Model wording (pre-align): ${data.model_wording}`;
+          details.appendChild(draft);
+        }
+        pending.appendChild(details);
+      }
       renderChips(data.chips || []);
     } catch {
       pending.classList.remove("pending");

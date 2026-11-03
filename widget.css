@@ -28,6 +28,10 @@
 .agoc-msg.pending { opacity: 0.7; font-style: italic; }
 .agoc-msg.fit { border-color: #c9a227; }
 .agoc-msg.user { background: #16324f; color: #fff; margin-left: auto; }
+.agoc-think { margin-top: 8px; font-size: 12px; color: #4a5d73; border-top: 1px dashed #d7e0ea; padding-top: 6px; }
+.agoc-think summary { cursor: pointer; font-weight: 600; }
+.agoc-think pre { white-space: pre-wrap; margin: 6px 0 0; max-height: 220px; overflow: auto; background: #f4f7fb; padding: 8px; border-radius: 8px; }
+.agoc-think-draft { margin-top: 6px; font-style: italic; }
 .agoc-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 12px 8px; background: #f6f8fb; }
 .agoc-chips button {
   border: 1px solid #d7e0ea; background: #fff; border-radius: 999px;

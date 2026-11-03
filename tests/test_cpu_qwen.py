@@ -54,8 +54,18 @@ class PortableCPU(unittest.TestCase):
         self.assertEqual(user["text"], "Actually three trucks")
         self.assertNotIn("previous", json.dumps(user))
         self.assertLess(len(json.dumps(user)), len(json.dumps({"text": user["text"], "facts": facts, "conversation_state": "fit_check"})))
-        self.assertFalse(payload["think"])
-        self.assertNotIn("num_gpu", payload["options"])
+        with patch.dict(qwen.os.environ, {"QWEN_THINK": "0"}, clear=False):
+            payload_off = qwen.request_payload("Actually three trucks", facts, "fit_check")
+            self.assertFalse(payload_off["think"])
+            self.assertIn("/no_think", payload_off["messages"][0]["content"])
+        with patch.dict(qwen.os.environ, {"QWEN_THINK": "1"}, clear=False):
+            payload_on = qwen.request_payload("Actually three trucks", facts, "fit_check")
+            self.assertTrue(payload_on["think"])
+            self.assertNotIn("/no_think", payload_on["messages"][0]["content"])
+        if qwen.CONFIG.num_gpu < 0:
+            self.assertNotIn("num_gpu", payload["options"])
+        else:
+            self.assertEqual(payload["options"].get("num_gpu"), qwen.CONFIG.num_gpu)
         self.assertEqual(payload["format"]["type"], "object")
 
     def test_bad_configuration_fails_early(self):

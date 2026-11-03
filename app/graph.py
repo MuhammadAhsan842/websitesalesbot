@@ -293,12 +293,7 @@ async def node_propose(state: TurnState) -> dict:
         for tag in (ruled.get("repair"), mem.get("concern"), mem.get("goal"), mem.get("last_blocker"))
         if tag
     ]
-    # Dual-load of nomic embed + 4B chat thrash this laptop; skip example RAG while on agoc-qwen4b.
-    if (os.getenv("QWEN_MODEL") or "").startswith("agoc-qwen4b") or os.getenv("AGOC_SKIP_EXAMPLES", "").strip() in {
-        "1",
-        "true",
-        "yes",
-    }:
+    if os.getenv("AGOC_SKIP_EXAMPLES", "").strip().lower() in {"1", "true", "yes"}:
         hits = []
     else:
         hits = examples.search(text, tags=tags, limit=3)
@@ -370,6 +365,9 @@ async def node_propose(state: TurnState) -> dict:
             conversation_move=merged.get("conversation_move"),
             reply_variant_id=merged.get("reply_variant_id"),
             route=qwen.last_route,
+            think=bool(model.get("_think")),
+            thinking=(model.get("_thinking") or "")[:4000] or None,
+            wording=(merged.get("wording") or "")[:500] or None,
         ),
     }
 

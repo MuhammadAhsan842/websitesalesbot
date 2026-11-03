@@ -280,7 +280,11 @@ def parse_content(content: str) -> Proposal:
     return Proposal.model_validate(_sanitize(json.loads(content or "{}")))
 
 
-SYSTEM = """Ayyan Group AI sales assistant. Human, warm, clear — like a sharp ops person, not a script bot. JSON only. /no_think
+def think_enabled() -> bool:
+    return os.getenv("QWEN_THINK", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+SYSTEM_BASE = """Ayyan Group AI sales assistant. Human, warm, clear — like a sharp ops person, not a script bot. JSON only.
 You write the COMPLETE customer reply in "wording" (also accept "reply"). Code validates; it will not append sales paragraphs when wording is valid.
 Output: {"intent":"...","facts":[{"key":"...","value":"...","evidence":"..."}],"answer_topics":[],"conversation_move":"qualify","next_question_id":"mcOwnership","action":"none","wording":"Will you run under your own MC, or are you looking to lease on?"}
 Rules:
@@ -313,6 +317,21 @@ Rules:
 - A sale is not required for success — respectful closure is a valid outcome."""
 
 
+def system_prompt(*, think: bool | None = None) -> str:
+    use_think = think_enabled() if think is None else bool(think)
+    if use_think:
+        return (
+            SYSTEM_BASE
+            + "\nThinking is on: reason privately about pending question, saved facts, and policy before answering. "
+            "Put the customer-facing reply only in wording JSON — never dump chain-of-thought into wording."
+        )
+    return SYSTEM_BASE + "\n/no_think"
+
+
+# Backward-compatible alias (tests / callers that read SYSTEM at import time get no-think default).
+SYSTEM = SYSTEM_BASE + "\n/no_think"
+
+
 def request_payload(
     user_text: str,
     facts: dict,
@@ -323,6 +342,8 @@ def request_payload(
     model: str | None = None,
     recent: list | None = None,
     approved: list | None = None,
+    *,
+    think: bool | None = None,
 ) -> dict:
     cfg = settings or CONFIG
     current = {
@@ -361,16 +382,21 @@ def request_payload(
             for row in recent[:6]
         ]
     user = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    thinking = think_enabled() if think is None else bool(think)
+    # Thinking tokens compete with JSON output — raise the ceiling when think is on.
+    predict = cfg.output
+    if thinking:
+        predict = max(predict, min(768, max(cfg.output, 384)))
     return {
         "model": model or cfg.model,
-        "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}],
+        "messages": [{"role": "system", "content": system_prompt(think=thinking)}, {"role": "user", "content": user}],
         "stream": False,
         "format": OUTPUT_SCHEMA,
-        "think": False,
+        "think": thinking,
         "keep_alive": cfg.keep_alive,
         "options": {
             "temperature": 0.2,
-            "num_predict": cfg.output,
+            "num_predict": predict,
             # Respect QWEN_NUM_CTX — forcing 3072+ on CPU RAM thrashing made browser turns 60–120s.
             "num_ctx": cfg.context,
             "num_thread": cfg.threads,
@@ -409,6 +435,7 @@ def status() -> dict:
         "max_waiting": CONFIG.max_waiting,
         "router": router.mode(),
         "qwen_model": MODEL,
+        "think": think_enabled(),
         "gemma_model": GEMMA_MODEL,
         "gemma_ready": gemma_ready,
         "vision_ready": vision_ready,
@@ -520,6 +547,8 @@ async def _infer(
     queue_ms: float,
     recent: list | None = None,
     approved: list | None = None,
+    *,
+    think: bool | None = None,
 ) -> dict[str, Any]:
     global last_error, ready
     started = perf_counter()
@@ -534,6 +563,7 @@ async def _infer(
             model=model,
             recent=recent,
             approved=approved,
+            think=think,
         ),
     )
     response.raise_for_status()
@@ -542,13 +572,13 @@ async def _infer(
         raise ValueError("model output truncated; increase QWEN_NUM_PREDICT")
     message = body.get("message") or {}
     content = (message.get("content") or "").strip()
+    thinking_text = (message.get("thinking") or "").strip()
     if not content:
-        # Qwen 3.5 may put JSON in thinking when think mode slips through.
-        thinking = (message.get("thinking") or "").strip()
-        if thinking.startswith("{") or '"intent"' in thinking:
-            start = thinking.find("{")
-            end = thinking.rfind("}")
-            content = thinking[start : end + 1] if start >= 0 and end > start else thinking
+        # Qwen 3.5 may put JSON in thinking when think mode is on or slips through.
+        if thinking_text.startswith("{") or '"intent"' in thinking_text:
+            start = thinking_text.find("{")
+            end = thinking_text.rfind("}")
+            content = thinking_text[start : end + 1] if start >= 0 and end > start else thinking_text
     if not content:
         raise ValueError("model returned empty content")
     parsed = parse_content(content)
@@ -563,7 +593,7 @@ async def _infer(
     for key in ("prompt_eval_count", "eval_count"):
         if isinstance(body.get(key), int):
             timing[key] = body[key]
-    result.update(_source=family, _model=model, _timing=timing)
+    result.update(_source=family, _model=model, _timing=timing, _thinking=thinking_text or None, _think=think_enabled())
     last_error = None
     ready = True
     log.info("%s timing %s", family, timing)
@@ -580,10 +610,30 @@ async def propose(
     repair: str | None = None,
     recent: list | None = None,
     approved: list | None = None,
+    *,
+    think: bool | None = None,
 ) -> dict[str, Any]:
     global last_error, ready, last_route
     choice = router.pick(user_text, intent, repair, memory, gemma_ready=gemma_ready)
     last_route = choice
+    if choice.get("family") == "gemini":
+        from app import gemini as geminimod
+
+        try:
+            return await geminimod.propose(
+                user_text,
+                facts,
+                conversation_state,
+                memory=memory,
+                examples=examples,
+                recent=recent,
+                approved=approved,
+            )
+        except Exception as exc:
+            last_error = f"gemini_failed:{exc}"
+            ready = False
+            log.warning("gemini inference failed: %s", exc)
+            return {}
     async with _gate.enter() as queue_ms:
         try:
             return await _infer(
@@ -597,6 +647,7 @@ async def propose(
                 queue_ms,
                 recent,
                 approved,
+                think=think,
             )
         except (httpx.HTTPError, ValidationError, ValueError, TypeError, AttributeError) as first:
             # Always fall over to Qwen when Gemma is down — forced gemma with a dead host
@@ -614,6 +665,7 @@ async def propose(
                         queue_ms,
                         recent,
                         approved,
+                        think=think,
                     )
                     last_route = {"model": MODEL, "family": "qwen", "reason": "gemma_failover_qwen"}
                     return result
@@ -628,23 +680,30 @@ async def propose(
 async def warmup() -> None:
     global ready, last_error, gemma_ready
     await refresh_installed()
+    # Warmup stays fast — do not enable thinking here even when QWEN_THINK=1.
     if router.mode() == "gemma":
-        result = await propose("I need dispatch", {}, "understand_request", intent="dispatch_inquiry")
+        result = await propose(
+            "I need dispatch", {}, "understand_request", intent="dispatch_inquiry", think=False
+        )
         if result and last_route.get("family") == "gemma":
             log.info("gemma ready: %s; cpu threads=%s", GEMMA_MODEL, CONFIG.threads)
         else:
             log.warning("gemma warmup failed: %s", last_error)
         return
-    result = await propose("I need dispatch", {}, "understand_request", intent="dispatch_inquiry")
+    result = await propose(
+        "I need dispatch", {}, "understand_request", intent="dispatch_inquiry", think=False
+    )
     if result:
-        log.info("primary ready: %s; cpu threads=%s", MODEL, CONFIG.threads)
+        log.info("primary ready: %s; cpu threads=%s; think_live=%s", MODEL, CONFIG.threads, think_enabled())
     else:
         log.warning("primary warmup failed: %s", last_error)
         return
     if not gemma_ready:
         return
     qwen_ready, qwen_error = ready, last_error
-    gemma = await propose("I don't want to sign for nothing", {}, "understand_request", intent="commit")
+    gemma = await propose(
+        "I don't want to sign for nothing", {}, "understand_request", intent="commit", think=False
+    )
     if gemma and last_route.get("family") == "gemma":
         log.info("gemma warmup ok: %s", GEMMA_MODEL)
         return

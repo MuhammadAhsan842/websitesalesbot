@@ -126,6 +126,7 @@ def health():
         "qwen_error": qwen.last_error,
         "last_route": qwen.last_route,
         "qwen_runtime": qwen.status(),
+        "gemini": __import__("app.gemini", fromlist=["status"]).status(),
         "retrieve": retrieve.status(),
         "embed": embed.status(),
         "image_embed": vision.status(),
@@ -262,6 +263,10 @@ async def turn(body: TurnIn, background: BackgroundTasks):
         "desk": playbook.desk_card(session),
         "zoho": zoho.sync_status(session_id=session["id"], case_id=session.get("case_id"), opportunity_id=session.get("opportunity_id")),
     }
+    propose = next((t for t in (result.get("traces") or []) if t.get("stage") == "propose"), {})
+    if propose.get("thinking"):
+        payload["thinking"] = propose["thinking"]
+        payload["model_wording"] = propose.get("wording")
     if body.turn_id:
         db.save_turn(body.turn_id, session["id"], body.text, payload)
     background.add_task(zoho.drain)

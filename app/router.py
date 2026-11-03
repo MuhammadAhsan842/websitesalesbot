@@ -41,7 +41,7 @@ GEMMA_TEXT = re.compile(
 
 def mode() -> str:
     value = (os.getenv("MODEL_ROUTER") or "auto").strip().lower()
-    if value not in {"auto", "qwen", "gemma"}:
+    if value not in {"auto", "qwen", "gemma", "gemini"}:
         return "auto"
     return value
 
@@ -55,6 +55,14 @@ def pick(
 ) -> dict:
     """Return {model, family, reason}. One inference; failover is the caller's job."""
     forced = mode()
+    if forced == "gemini":
+        from app import gemini as geminimod
+
+        return {
+            "model": geminimod.model_name(),
+            "family": "gemini",
+            "reason": "forced_gemini",
+        }
     if forced == "qwen" or not gemma_ready:
         return {"model": QWEN_MODEL, "family": "qwen", "reason": "forced_qwen" if forced == "qwen" else "gemma_unavailable"}
     if forced == "gemma":
