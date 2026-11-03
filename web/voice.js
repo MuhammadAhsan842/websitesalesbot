@@ -2,7 +2,7 @@ import { Room, RoomEvent, Track } from 'livekit-client';
 
 // No provider credentials or reference recordings are shipped to the browser.
 export class VoiceClient {
-  constructor({sessionId, accessToken, onStatus, onHistory, fetcher = fetch,
+  constructor({sessionId, accessToken, onStatus, onHistory, fetcher = (...args) => fetch(...args),
                roomFactory = () => new Room({adaptiveStream: true}), audioRoot = document.body}) {
     Object.assign(this, {sessionId, accessToken, onStatus, onHistory, fetcher, roomFactory, audioRoot});
     this.generation = 0;
