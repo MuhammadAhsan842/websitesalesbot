@@ -257,11 +257,24 @@ def outstanding(case_id: str) -> list[dict]:
 
 
 def ready_for_handoff(case_id: str) -> tuple[bool, list[str]]:
-    """All applicable requirements must be approved or waived. Ack/flag alone is not enough."""
+    """An onboarding packet can clear review; quote intake cannot authorize dispatch."""
+    case = db.get_case(case_id) or {}
+    task = case.get("task")
+    blockers = []
+    if task not in {"setup_packet", "lease_agreement"}:
+        blockers.append("insurance_quote_only" if task == "insurance_quote" else "not_onboarding_workflow")
+    from app.tasks import fact_value
+
+    if fact_value(case.get("facts") or {}, "insurance") == "needs_insurance":
+        blockers.append("insurance_not_approved")
     rows = db.list_requirements(case_id)
     if not rows:
-        return False, ["no_requirements_issued"]
-    blockers = []
+        return False, blockers + ["no_requirements_issued"]
+    issued = {row["doc_type"] for row in rows}
+    # A task/fact change must not reuse the smaller quote checklist as a full packet.
+    for doc_type, _ in catalog_for(task, case.get("facts") or {}):
+        if doc_type not in issued:
+            blockers.append(f"{doc_type}:not_issued")
     for row in rows:
         status = row.get("status")
         doc_type = row.get("doc_type")

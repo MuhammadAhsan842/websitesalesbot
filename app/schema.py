@@ -49,6 +49,7 @@ FACT_KEYS = QUAL_FIELDS + [
     "requestedArrangement",
     "callbackTime",
     "callbackTimezone",
+    "callbackDate",
 ] + EXTRA_FIELDS
 
 MOVES = (

@@ -132,13 +132,10 @@ function continueFromState(session) {
 }
 
 function handleTalkHere(session) {
-  switchChannel(session, "browser_voice", "visitor_requested_talk_here");
-  session.identityConfirmedForVoice = true;
-  const remainder = continueFromState(session);
   return {
-    text: `Talk here uses this same inquiry. I will not re-ask confirmed details.\n\n${remainder}\n\nBrowser voice audio is not live in this build; the case and channel are already switched so the voice agent can attach here.`,
+    text: "Browser voice isn't available in this build yet. We can continue this same inquiry in chat, or you can request a callback.",
     chips: chipsFor(session),
-    mode: "browser_voice",
+    mode: session.channel,
   };
 }
 

@@ -10,6 +10,10 @@ DB_PATH = Path(__file__).resolve().parent.parent / "data" / "ayyan.db"
 _lock = threading.Lock()
 
 
+class WorkflowConflict(ValueError):
+    """A concurrent writer updated a workflow after the caller read it."""
+
+
 def now():
     return datetime.now(timezone.utc).isoformat()
 
@@ -50,6 +54,17 @@ def init():
               role TEXT NOT NULL,
               text TEXT NOT NULL,
               created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS inquiry_workflows (
+              id TEXT PRIMARY KEY,
+              session_id TEXT NOT NULL REFERENCES sessions(id),
+              kind TEXT NOT NULL,
+              status TEXT NOT NULL,
+              version INTEGER NOT NULL DEFAULT 1,
+              data_json TEXT NOT NULL DEFAULT '{}',
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              UNIQUE(session_id, kind)
             );
             CREATE TABLE IF NOT EXISTS cases (
               id TEXT PRIMARY KEY,
@@ -268,17 +283,20 @@ def add_message(session_id: str, role: str, text: str):
     )
 
 
-def get_turn(turn_id: str | None) -> dict | None:
+def get_turn(turn_id: str | None, session_id: str) -> dict | None:
     if not turn_id:
         return None
-    row = execute("SELECT reply_json FROM turns WHERE turn_id = ?", (turn_id,), fetch="one")
+    row = execute(
+        "SELECT reply_json FROM turns WHERE session_id=? AND turn_id IN (?, ?)",
+        (session_id, dumps([session_id, turn_id]), turn_id), fetch="one",
+    )
     return loads(row["reply_json"], None) if row else None
 
 
 def save_turn(turn_id: str, session_id: str, user_text: str, reply: dict):
     execute(
         "INSERT OR REPLACE INTO turns (turn_id, session_id, user_text, reply_json, created_at) VALUES (?, ?, ?, ?, ?)",
-        (turn_id, session_id, user_text, dumps(reply), now()),
+        (dumps([session_id, turn_id]), session_id, user_text, dumps(reply), now()),
     )
 
 
@@ -321,6 +339,57 @@ def _session_from_row(row: dict) -> dict:
 def get_session(session_id: str) -> dict | None:
     row = execute("SELECT * FROM sessions WHERE id = ?", (session_id,), fetch="one")
     return _session_from_row(row) if row else None
+
+
+def get_workflow(session_id: str, kind: str) -> dict | None:
+    row = execute(
+        "SELECT * FROM inquiry_workflows WHERE session_id=? AND kind=?", (session_id, kind), fetch="one"
+    )
+    if row:
+        row["data"] = loads(row.pop("data_json"), {})
+    return row
+
+
+def save_workflow(session_id: str, kind: str, status: str, data: dict, expected_version: int = 0) -> dict:
+    """Atomically update one inquiry workflow and audit it; reject stale writers.
+
+    expected_version=0 means creation. The unique key protects concurrent creates.
+    Business workflows are independent of session channel and onboarding status.
+    """
+    with _lock:
+        conn = connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            old = conn.execute(
+                "SELECT * FROM inquiry_workflows WHERE session_id=? AND kind=?", (session_id, kind)
+            ).fetchone()
+            if (old["version"] if old else 0) != expected_version:
+                raise WorkflowConflict("workflow changed; reload before updating")
+            stamp = now()
+            workflow_id = old["id"] if old else uid("workflow")
+            if old:
+                conn.execute(
+                    "UPDATE inquiry_workflows SET status=?, data_json=?, version=version+1, updated_at=? WHERE id=?",
+                    (status, dumps(data), stamp, workflow_id),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO inquiry_workflows (id,session_id,kind,status,data_json,created_at,updated_at) "
+                    "VALUES (?,?,?,?,?,?,?)", (workflow_id, session_id, kind, status, dumps(data), stamp, stamp),
+                )
+            conn.execute(
+                "INSERT INTO events (message,extra_json,created_at) VALUES (?,?,?)",
+                ("Inquiry workflow updated", dumps({"sessionId": session_id, "workflowId": workflow_id,
+                 "kind": kind, "status": status, "version": expected_version + 1}), stamp),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+    return {"id": workflow_id, "session_id": session_id, "kind": kind, "status": status,
+            "version": expected_version + 1, "data": data, "updated_at": stamp}
 
 
 def save_session(session: dict):

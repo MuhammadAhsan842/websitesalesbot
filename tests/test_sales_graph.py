@@ -107,8 +107,11 @@ class SalesGraph(unittest.IsolatedAsyncioTestCase):
                                 keys = next(t["keys"] for t in outputs[-1]["traces"] if t["stage"] == "knowledge")
                                 self.assertTrue({"guarantee", "freight"}.issubset(keys))
                             elif number == 4:
-                                self.assertEqual(case["task"], "callback")
-                                self.assertIn("callback is noted", outputs[-1]["text"].lower())
+                                # A phone alone is an incomplete request, not a scheduled callback.
+                                self.assertIsNone(case)
+                                pending = db.get_workflow(sid, "callback")
+                                self.assertEqual(pending["status"], "collecting")
+                                self.assertIn("469", pending["data"]["phone_raw"])
                             elif number == 5:
                                 self.assertEqual(case["task"], "lease_agreement")
                                 self.assertEqual(stored["facts"]["fleetSize"]["value"], 1)

@@ -23,7 +23,7 @@
 .agoc-head span { font-size: 12px; opacity: 0.8; }
 .agoc-head button { background: transparent; border: 0; color: #fff; cursor: pointer; font-size: 18px; }
 .agoc-log { flex: 1; overflow: auto; padding: 12px; display: grid; gap: 10px; background: #f6f8fb; }
-.agoc-msg { max-width: 92%; padding: 10px 12px; border-radius: 14px; font-size: 14px; line-height: 1.45; }
+.agoc-msg { max-width: 92%; padding: 10px 12px; border-radius: 14px; font-size: 14px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
 .agoc-msg.bot { background: #fff; border: 1px solid #d7e0ea; }
 .agoc-msg.pending { opacity: 0.7; font-style: italic; }
 .agoc-msg.fit { border-color: #c9a227; }
