@@ -95,6 +95,13 @@ Existing transcript/API authorization limitations still apply.
 
 ## Voice target: next implementation boundary
 
+The owner-selected speaking voice is recorded in `config/voice.json`, with the
+original WhatsApp recording and prepared PCM reference in `assets/voices/owner/`.
+This is a selection manifest for future integration, not an active TTS setting.
+The future cloning-capable adapter should use profile `owner`; no cloned model
+or generated speech has been produced. See the asset README for provenance and
+limitations. Speaker references remain outside the public static-file allowlist.
+
 ```mermaid
 flowchart LR
     Audio[Browser WebRTC or telephone SIP] --> Runtime[Voice runtime]

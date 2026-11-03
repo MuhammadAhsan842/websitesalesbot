@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "selected_profile_id": "owner",
+  "display_name": "Owner-provided speaking voice",
+  "selection_source": "Explicit project owner request in chat",
+  "selected_on": "2026-11-03",
+  "intended_use": "Reference for the Ayyan AI assistant speaking voice",
+  "status": "reference_selected",
+  "tts_engine": null,
+  "cloned_voice_artifact": null,
+  "reference_audio": {
+    "path": "assets/voices/owner/reference-24k.wav",
+    "sha256": "7a32c273eda7c2ff6088e819f7526b4d2feb067c96ecacc3c710c6acfac21535",
+    "format": "PCM WAV",
+    "sample_rate_hz": 24000,
+    "channels": 1,
+    "sample_width_bits": 16,
+    "duration_seconds": 5.0535
+  },
+  "original_audio": {
+    "path": "assets/voices/owner/source-whatsapp.ogg",
+    "sha256": "253c1a6dfc7b774b1e50b2571ad148dd484a553592f553885fa3a6849f7403b4",
+    "format": "Ogg Opus",
+    "duration_seconds": 5.0665
+  },
+  "preparation": "Decoded and resampled to 24 kHz mono 16-bit PCM. No denoising or pitch modification.",
+  "implementation_note": "Selection manifest only. No current runtime loads this file; voice cloning and live speech remain to be implemented."
+}
