@@ -556,6 +556,11 @@ def node_plan(state: TurnState) -> dict:
         proposal["task"] = None
         proposal["action"] = "none"
     concern = memory.detect_concern(state.get("user_text") or "", proposal.get("intent") or "general")
+    # Seed concern before validate so next_ask can suppress qualify on concern turns.
+    if concern:
+        mem = dict(session.get("memory") or {})
+        mem["concern"] = concern
+        session["memory"] = mem
     if repair == "equip_ambiguous":
         proposal["action"] = "none"
         proposal["task"] = None
@@ -727,14 +732,21 @@ def node_execute(state: TurnState) -> dict:
             and task in {"setup_packet", "lease_agreement", "fit_check"}
         ):
             return {"action_result": result, **_trace("execute", blocked="out_of_scope_equipment")}
+        # Don't re-queue the same purpose review once the inquiry is already handed over.
+        if session.get("handed_over") and session.get("case_id"):
+            return {"session": session, "action_result": result, **_trace("execute", skipped="already_handed_over", task=task)}
         persist_human_task(session, task, "awaiting_human_action" if task != "operations_support" else "routed_support", task, "Human task queued")
         session["handed_over"] = True
         session["conversation_state"] = "handed_over"
+        if task == "setup_packet":
+            msg = lookup("own_mc_review_saved")
+        else:
+            msg = f"I've asked our onboarding manager to take the {task.replace('_', ' ')} from here. They haven't approved anything yet."
         result.update(
             {
                 "saved": True,
                 "verified": False,
-                "message": f"I've asked our onboarding manager to take the {task.replace('_', ' ')} from here. They haven't approved anything yet.",
+                "message": msg,
             }
         )
         return {"session": session, "action_result": result, **_trace("execute", action="create_case", task=task)}
@@ -830,8 +842,13 @@ def node_reply(state: TurnState) -> dict:
             current = db.get_case(session["case_id"])
             status_key = (current or {}).get("status") or "unknown"
             text = _case_say(status_key)
-            if session.get("manager_requested") and not session.get("manager_accepted"):
+            if (
+                session.get("manager_requested")
+                and not session.get("manager_accepted")
+                and not session.get("pending_status_shown")
+            ):
                 text = lookup("handoff_requested") + " " + text
+                session["pending_status_shown"] = True
             snap = reqmod.snapshot(session["case_id"])
             if snap["issued"]:
                 outstanding = snap.get("outstanding") or []

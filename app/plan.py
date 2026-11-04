@@ -97,7 +97,18 @@ MC_UNKNOWN_TALK = re.compile(
 
 HOME_TIME_ASKED = re.compile(r"home every night|daily home time|\bhome time\b", re.I)
 
+# City/ZIP is lease-on qualify evidence. Own-MC setup must not block on a missing city.
 PACKET_SLOTS = ("equipment", "mcOwnership", "operatingArea")
+OWN_MC_PACKET_SLOTS = ("equipment", "mcOwnership")
+
+
+def packet_slots_for(task: str | None, facts: dict | None = None) -> tuple[str, ...]:
+    from app.playbook import fact_value
+
+    facts = facts or {}
+    if task == "setup_packet" or fact_value(facts, "mcOwnership") == "own_mc":
+        return OWN_MC_PACKET_SLOTS
+    return PACKET_SLOTS
 
 
 def detect_topics(text: str, intent: str | None = None, concern: str | None = None, repair: str | None = None) -> list[str]:
@@ -462,7 +473,9 @@ def validate_plan(user_text: str, session: dict, proposal: dict) -> dict:
             # Eligibility must constrain execution, not only the spoken refusal.
             action = "none"
             fallbacks.append("out_of_scope_equipment")
-        elif task in {"setup_packet", "lease_agreement"} and any(not fact_value(facts, key) for key in PACKET_SLOTS):
+        elif task in {"setup_packet", "lease_agreement"} and any(
+            not fact_value(facts, key) for key in packet_slots_for(task, facts)
+        ):
             action = "none"
             fallbacks.append("underspecified_packet")
     if action == "callback" and not fact_value(facts, "phone"):

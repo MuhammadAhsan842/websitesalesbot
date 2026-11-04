@@ -9,11 +9,13 @@ from app import db
 SLA_DAYS = 7
 
 # Always for own-MC setup. NOA / voided check are conditional on payment arrangement.
+# Customer-facing list: authority, W-9, COI, truck photos (+ conditional NOA / voided check).
 CORE_SETUP = [
     ("setup", "Dispatch setup agreement"),
     ("authority", "MC authority sheet"),
     ("w9", "W-9"),
     ("coi", "Certificate of insurance"),
+    ("equipment_photos", "Truck photos"),
 ]
 
 CORE_LEASE = [
@@ -81,6 +83,49 @@ def catalog_for(task: str | None, facts: dict | None = None) -> list[tuple[str, 
         rows.append(("voided_check", "Voided check"))
     # Unknown payment: do not auto-demand NOA or voided check.
     return rows
+
+
+# Staff-only rows omitted from the customer document follow-up sentence.
+_CUSTOMER_DOC_SKIP = frozenset({"setup"})
+
+
+def customer_doc_labels(task: str | None = "setup_packet", facts: dict | None = None) -> list[str]:
+    """Labels the driver should hear — kept in sync with catalog_for."""
+    return [label for doc, label in catalog_for(task, facts) if doc not in _CUSTOMER_DOC_SKIP]
+
+
+def customer_docs_sentence(task: str | None = "setup_packet", facts: dict | None = None) -> str:
+    """Own-MC / lease document follow-up generated from the live requirements catalog."""
+    labels = customer_doc_labels(task, facts)
+    if not labels:
+        return "Onboarding will confirm the live document list when they send the packet."
+    payment = (_payment_arrangement(facts) or "").lower()
+    core = [label for label in labels if label not in {"Notice of assignment", "Voided check"}]
+    extras = []
+    if "Notice of assignment" in labels:
+        extras.append("a notice of assignment applies when you use factoring")
+    elif payment != "factoring":
+        extras.append("a notice of assignment applies if you use factoring")
+    if "Voided check" in labels:
+        extras.append("a voided check applies for quick-pay or factoring setups")
+    elif payment not in {"quick_pay", "factoring"}:
+        extras.append("a voided check applies where quick-pay or factoring requires it")
+    if len(core) == 1:
+        joined = core[0]
+    elif len(core) == 2:
+        joined = f"{core[0]} and {core[1]}"
+    else:
+        joined = ", ".join(core[:-1]) + f", and {core[-1]}"
+    lead = (
+        "For own-MC, onboarding usually asks for"
+        if task == "setup_packet"
+        else "Onboarding usually asks for"
+    )
+    sentence = f"{lead} the {joined}."
+    if extras:
+        sentence += " " + "; ".join(extras).capitalize() + "."
+    sentence += " Files here stay unverified until they look — they'll confirm the live list with the packet."
+    return sentence
 
 
 def issue(case_id: str, task: str | None, due_at: str | None = None, facts: dict | None = None) -> list[dict]:

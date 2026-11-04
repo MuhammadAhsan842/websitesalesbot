@@ -1,6 +1,7 @@
 """Moves, extra facts, repair edges, example bank, and session restore."""
 
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -37,12 +38,17 @@ class ExtraFacts(unittest.TestCase):
         self.assertEqual(items["payload"], "10000")
         self.assertEqual(items["commitmentStance"], "wont_sign")
 
-    def test_qualify_follows_truck_trailer_mc_insurance(self):
+    def test_qualify_follows_truck_trailer_mc_authority_for_own_mc(self):
         state = facts(equipment="box_truck")
         self.assertEqual(playbook.next_ask(state, memory.empty()), "trailerLength")
         state["trailerLength"] = {"value": "26ft", "status": "user_stated"}
         self.assertEqual(playbook.next_ask(state, memory.empty()), "mcOwnership")
         state["mcOwnership"] = {"value": "own_mc", "status": "user_stated"}
+        self.assertEqual(playbook.next_ask(state, memory.empty()), "authorityAgeMonths")
+        self.assertNotEqual(playbook.next_ask(state, memory.empty()), "insurance")
+
+    def test_lease_on_still_asks_insurance_after_mc(self):
+        state = facts(equipment="box_truck", trailerLength="26ft", mcOwnership="no_own_mc")
         self.assertEqual(playbook.next_ask(state, memory.empty()), "insurance")
         items = {item["key"]: item["value"] for item in rules.extract_facts("I have my own insurance")}
         self.assertEqual(items["insurance"], "own_insurance")
@@ -199,6 +205,7 @@ class SessionRestore(unittest.IsolatedAsyncioTestCase):
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as model_client:
             with (
                 tempfile.TemporaryDirectory() as temporary,
+                patch.dict(os.environ, {"MODEL_ROUTER": "qwen"}),
                 patch.object(db, "DB_PATH", Path(temporary) / "test.db"),
                 patch.object(zoho, "access_token", return_value=None),
                 patch.object(retrieve, "search", return_value=[]),

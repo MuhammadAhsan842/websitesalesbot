@@ -1044,6 +1044,23 @@ def propose(text: str, facts: dict, memory: dict | None = None, chip: dict | Non
         )
         if support != "out_of_scope":
             action = "create_case"
+    elif arrangement == "dispatch_service" and equip:
+        # Own-MC: completing start date opens the setup review — no "I'm ready" required.
+        from app.playbook import fact_value as _fact
+
+        support = (
+            preview.get("equipmentSupport", {}).get("value")
+            if isinstance(preview.get("equipmentSupport"), dict)
+            else None
+        )
+        start_just_set = any(item.get("key") == "startDate" for item in items)
+        if (
+            support != "out_of_scope"
+            and start_just_set
+            and _fact(preview, "startDate")
+            and not next_ask(preview, memory, intent, repair)
+        ):
+            action = "create_case"
     if repair == "authority_uncertain":
         action = "none"
     if repair == "equip_ambiguous":

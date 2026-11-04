@@ -22,6 +22,7 @@ def missing_core(facts: dict, memory: dict | None = None) -> list[str]:
     mode = fact_value(facts, "operatingMode")
     insurance = fact_value(facts, "insurance")
     mc = fact_value(facts, "mcOwnership")
+    own = mc == "own_mc"
     missing = []
     for key in ASK_ORDER:
         if key in answered:
@@ -37,20 +38,36 @@ def missing_core(facts: dict, memory: dict | None = None) -> list[str]:
             continue
         if constraint == "home_every_night" and key in {"supportNeed", "primaryProblem", "weekdaySchedule"}:
             continue
-        # Coverage follow-up only after they say they have insurance.
+        # Own-MC: insurance questionnaire is out — COI stays in document review.
+        if own and key in {"insurance", "coverageTypes"}:
+            continue
+        # Coverage follow-up only after they say they have insurance (lease-on path).
         if key == "coverageTypes" and insurance != "own_insurance":
             continue
         # MC age only for own-MC path.
-        if key == "authorityAgeMonths" and mc != "own_mc":
+        if key == "authorityAgeMonths" and not own:
+            continue
+        # City/ZIP is not an own-MC qualify slot — only when they ask for load options.
+        if own and key == "operatingArea":
             continue
         # OTR vs local first — then one branch only (never regional).
         if key in {"milesPerDay", "stayOutDuration", "weekdaySchedule"} and mode in (None, "unclear"):
             continue
-        # Local: miles/day → Monday–Friday → city/ZIP. Skip OTR stay-out.
-        if mode == "local" and key == "stayOutDuration":
-            continue
-        if mode == "otr" and key in {"milesPerDay", "weekdaySchedule"}:
-            continue
+        if own:
+            # Own-MC local: miles/day → Monday–Friday → start date.
+            # Own-MC OTR: Monday–Friday → start date (no stay-out / hours).
+            if key == "stayOutDuration":
+                continue
+            if mode == "otr" and key == "milesPerDay":
+                continue
+            if mode == "local" and key == "stayOutDuration":
+                continue
+        else:
+            # Lease-on / unclear: local skips stay-out; OTR skips miles + weekday.
+            if mode == "local" and key == "stayOutDuration":
+                continue
+            if mode == "otr" and key in {"milesPerDay", "weekdaySchedule"}:
+                continue
         missing.append(key)
     return missing
 
@@ -59,9 +76,9 @@ UNBLOCK_ORDER = [
     "equipment",
     "trailerLength",
     "mcOwnership",
+    "authorityAgeMonths",
     "insurance",
     "coverageTypes",
-    "authorityAgeMonths",
     "operatingMode",
     "milesPerDay",
     "stayOutDuration",
@@ -89,6 +106,8 @@ def next_ask(facts: dict, memory: dict | None = None, intent: str | None = None,
         "expired_demand",
         "existing_dispatcher",
         "privacy_boundary",
+        "repetition",
+        "missing_equipment",
     }:
         return None
     if repair == "leave_sales" or intent == "existing_customer":
@@ -109,23 +128,28 @@ def next_ask(facts: dict, memory: dict | None = None, intent: str | None = None,
     if fact_value(facts, "deadline"):
         missing = [key for key in missing if key != "startDate"]
     mode = fact_value(facts, "operatingMode")
+    mc = fact_value(facts, "mcOwnership")
+    own = mc == "own_mc"
     if mode == "local" or mem.get("hard_constraint") == "home_every_night":
         # Keep weekdaySchedule for local; only drop support/problem and OTR stay-out.
         missing = [key for key in missing if key not in {"supportNeed", "primaryProblem", "stayOutDuration"}]
     if mode == "otr":
-        missing = [key for key in missing if key not in {"milesPerDay", "weekdaySchedule"}]
-    # After "yes I have insurance", ask coverages before OTR/local.
-    if fact_value(facts, "insurance") == "own_insurance" and not fact_value(facts, "coverageTypes"):
-        if "coverageTypes" in missing:
-            return "coverageTypes"
-    # After own MC + insurance path, ask MC age before lanes when still open.
-    if (
-        fact_value(facts, "mcOwnership") == "own_mc"
-        and fact_value(facts, "insurance")
-        and not fact_value(facts, "authorityAgeMonths")
-        and "authorityAgeMonths" in missing
-    ):
+        if own:
+            # Own-MC OTR still needs Monday–Friday; never stay-out or miles.
+            missing = [key for key in missing if key not in {"milesPerDay", "stayOutDuration"}]
+        else:
+            missing = [key for key in missing if key not in {"milesPerDay", "weekdaySchedule"}]
+    # After own MC, authority maturity comes before OTR/local (no insurance questionnaire).
+    if own and not fact_value(facts, "authorityAgeMonths") and "authorityAgeMonths" in missing:
         return "authorityAgeMonths"
+    # Lease-on: after "yes I have insurance", ask coverages before OTR/local.
+    if (
+        not own
+        and fact_value(facts, "insurance") == "own_insurance"
+        and not fact_value(facts, "coverageTypes")
+        and "coverageTypes" in missing
+    ):
+        return "coverageTypes"
     for key in UNBLOCK_ORDER:
         if key in missing:
             return key
@@ -241,17 +265,21 @@ def fit_summary(facts: dict, arrangement: str | None) -> str:
     unresolved = []
     if mode == "local" and not weekday:
         unresolved.append("Monday–Friday availability")
-    if not area:
+    # Own-MC does not collect city during qualify — only when they ask for load options.
+    if not area and arrangement != "dispatch_service":
         unresolved.append("starting city/ZIP")
     if not fact_value(facts, "startDate"):
         unresolved.append("start timing")
     if arrangement == "needs_clarification" or not fact_value(facts, "mcOwnership"):
         unresolved.append("MC arrangement")
-    if insurance == "needs_insurance":
+    if insurance == "needs_insurance" and arrangement == "lease_on":
         unresolved.append("insurance options/quote")
     open_bits = f" Still open: {', '.join(unresolved)}." if unresolved else ""
+    title = "Own-MC setup" if arrangement == "dispatch_service" else (
+        "Lease-on review" if arrangement == "lease_on" else "Fit check"
+    )
     return (
-        f"{'Lease-on review' if arrangement == 'lease_on' else 'Fit check'}: {count}{area_bit}{ops_bit}. "
+        f"{title}: {count}{area_bit}{ops_bit}. "
         f"{scope_bit}{ins_bit} {path}{callback_bit}{open_bits} "
         "No live freight from this chat, and nothing's approved yet."
     )
@@ -284,21 +312,28 @@ def handoff_brief(
     support = fact_value(facts, "equipmentSupport")
 
     if not reason:
+        fee_pct = fact_value(facts, "requestedFeePercent")
         if status == "manager_requested":
-            reason = "Driver explicitly requested an onboarding manager."
+            reason = "Manager request — driver asked for an onboarding manager (not assigned/accepted yet)."
         elif task == "insurance_quote":
-            reason = "Insurance assistance and pricing review needed."
+            reason = "Pricing / insurance quote review — coverage still needs arranging."
+        elif fee_pct and task in {"clarification", "setup_packet", "lease_agreement", "fit_check"}:
+            reason = f"Pricing exception review — driver proposed {fee_pct}% (not approved)."
         elif task == "clarification":
-            reason = "Arrangement or eligibility needs clarification."
+            reason = "Pricing clarification / eligibility — arrangement or facts need a human look."
         elif task == "callback":
-            reason = "Driver requested a callback."
-        elif task in {"lease_agreement", "setup_packet", "insurance_quote"}:
-            reason = "Driver readiness / onboarding packet request."
+            reason = "Callback request — contact timing recorded, not dialed."
+        elif task == "setup_packet":
+            reason = "Own-MC setup review — qualification complete; documents pending human review."
+        elif task == "lease_agreement":
+            reason = "Lease-on setup review — agreement and papers pending human review."
         elif insurance == "needs_insurance":
-            reason = "Insurance assistance and pricing review needed."
+            reason = "Pricing / insurance quote review — coverage still needs arranging."
         else:
             reason = "Fit / qualification update."
 
+    authority_age = fact_value(facts, "authorityAgeMonths")
+    start = fact_value(facts, "startDate")
     confirmed = []
     if equip and length:
         confirmed.append(f"{length} {equip}")
@@ -308,11 +343,13 @@ def handoff_brief(
         confirmed.append("wants to lease on")
     elif arrangement == "dispatch_service":
         confirmed.append("own MC")
+        if authority_age is not None:
+            confirmed.append(f"authority ~{authority_age} months")
     if insurance == "needs_insurance":
         confirmed.append("needs insurance")
         if route == "company_arranged":
             confirmed.append("prefers company-arranged insurance")
-    elif insurance == "own_insurance":
+    elif insurance == "own_insurance" and arrangement != "dispatch_service":
         cov = fact_value(facts, "coverageTypes")
         confirmed.append(f"own insurance ({cov})" if cov else "own insurance stated")
     if mode:
@@ -321,15 +358,18 @@ def handoff_brief(
         confirmed.append(f"comfortable with {miles} miles/day")
     if weekday:
         confirmed.append(f"schedule {str(weekday).replace('_', ' ')}")
+    if start:
+        confirmed.append(f"wants to start {start}")
     if area:
         confirmed.append(f"operating from {area}")
 
     outstanding = []
-    if insurance == "needs_insurance":
+    if insurance == "needs_insurance" and arrangement != "dispatch_service":
         outstanding.append("insurance arrangement and applicable charges")
     if mode == "local" and not weekday:
         outstanding.append("Monday–Friday availability")
-    if not area:
+    # Missing city must not block own-MC review — only note when they asked for loads or lease-on still needs it.
+    if not area and arrangement != "dispatch_service":
         outstanding.append("starting city/ZIP")
     if phone and (not cb_time or not cb_tz):
         outstanding.append("callback schedule completion")
@@ -339,8 +379,10 @@ def handoff_brief(
         outstanding.append("callback date")
     if support == "out_of_scope":
         outstanding.append("equipment catalog fit")
-    if not fact_value(facts, "startDate") and status in {"manager_requested", "awaiting_human_action", "callback_requested"}:
+    if not start and status in {"manager_requested", "awaiting_human_action", "callback_requested"}:
         outstanding.append("preferred start timing")
+    if arrangement == "dispatch_service" and task == "setup_packet":
+        outstanding.append("document packet return (authority, W-9, COI, truck photos; NOA/voided check if payment requires)")
 
     callback_lines = []
     if phone or cb_time or cb_tz:
@@ -679,7 +721,12 @@ def compose(
 
     if intent == "onboard" and arrangement in {"dispatch_service", "lease_on"} and not saved:
         if arrangement == "dispatch_service":
+            from app import requirements as reqmod
+
             parts.append(lookup("ready_own_next"))
+            docs = reqmod.customer_docs_sentence("setup_packet", facts)
+            if docs and docs not in parts:
+                parts.append(docs)
         elif fact_value(facts, "insurance") == "needs_insurance":
             parts.append(lookup("ready_lease_needs_insurance"))
         else:
@@ -692,18 +739,41 @@ def compose(
         spoken = ""
         validated = {**validated, "wording": None}
 
+    # Concern turns own the reply — don't let free model wording skip honesty/register lines.
+    concern_owns_reply = concern in {
+        "repetition",
+        "packet_progress",
+        "commitment",
+        "pause",
+        "privacy_boundary",
+        "expired_demand",
+        "existing_dispatcher",
+        "missing_equipment",
+        "negotiation",
+        "fuel_requirement",
+        "insurance_affordability",
+        "payment_support",
+    }
+
     # Model-authored path: deliver the validated full reply without concatenating register paragraphs.
     if (
         spoken
         and len(spoken) >= 12
+        and not concern_owns_reply
         and intent not in {"existing_customer"}
-        and repair not in {"leave_sales", "email_delivery"}
+        and repair not in {"leave_sales", "email_delivery", "repetition_unverified"}
         and (unsupported or _covers(spoken, topics))
     ):
         parts.append(spoken)
-        # Chips alone are not enough — the spoken line must ask the same pending question.
+        # One question only: replace a wrong/missing ask with the playbook question.
         if ask and QUESTIONS.get(ask) and not unsupported and not _asks_about(" ".join(parts), ask):
-            parts.append(QUESTIONS[ask])
+            joined = " ".join(parts)
+            if _has_question(joined):
+                # Drop the model question; keep a short ack lead-in when safe.
+                lead = re.split(r"[?]", joined, maxsplit=1)[0].strip().rstrip(".,;:")
+                parts[:] = ([f"{lead}."] if lead and len(lead) <= 140 else []) + [QUESTIONS[ask]]
+            else:
+                parts.append(QUESTIONS[ask])
         # Never attach an onboarding receipt when the truck is out of scope.
         if receipt and not unsupported:
             parts.append(receipt)
@@ -884,10 +954,21 @@ def compose(
     if saved and fact_value(facts, "equipmentSupport") != "out_of_scope":
         if spoken:
             if not action_message:
-                parts.append("I've asked our onboarding manager to take this from here. They haven't approved anything yet.")
+                parts.append(
+                    lookup("own_mc_review_saved")
+                    if arrangement == "dispatch_service"
+                    else "I've asked our onboarding manager to take this from here. They haven't approved anything yet."
+                )
+            if arrangement == "dispatch_service" and not any("authority sheet" in (p or "").lower() or "w-9" in (p or "").lower() for p in parts):
+                from app import requirements as reqmod
+
+                parts.append(reqmod.customer_docs_sentence("setup_packet", facts))
             return " ".join(_dedupe(parts)), CHIPS["handoff"], summary
         if arrangement == "dispatch_service":
-            parts.append(lookup("docs_own"))
+            from app import requirements as reqmod
+
+            parts.append(lookup("own_mc_review_saved"))
+            parts.append(reqmod.customer_docs_sentence("setup_packet", facts))
         elif arrangement == "lease_on" and fact_value(facts, "insurance") == "needs_insurance":
             parts.append(lookup("docs_lease_needs_insurance"))
         elif arrangement == "lease_on":
@@ -1009,7 +1090,10 @@ def _ungrounded_equipment_claim(spoken: str, facts: dict) -> bool:
 
 
 def align_delivery(text: str, ask: str | None, facts: dict) -> tuple[str, str | None, list[str]]:
-    """Force wording, pending question, and chips to agree before the customer sees them."""
+    """Force wording, pending question, and chips to agree before the customer sees them.
+
+    The selected qualify question replaces any model question — never append a second ask.
+    """
     spoken = (text or "").strip()
     chips = _chips_for_ask(ask, facts) if ask else None
     if ask and QUESTIONS.get(ask):
@@ -1020,17 +1104,29 @@ def align_delivery(text: str, ask: str | None, facts: dict) -> tuple[str, str | 
             or (str(equip) == "box_truck" and re.search(r"\bhotshot\b", spoken, re.I))
         )
         invented = _ungrounded_equipment_claim(spoken, facts)
-        if not _asks_about(spoken, ask) or _POLLUTED_DELIVERY.search(spoken) or wrong_equip or invented:
+        wrong_or_polluted = (
+            not _asks_about(spoken, ask)
+            or _POLLUTED_DELIVERY.search(spoken)
+            or wrong_equip
+            or invented
+            or (_has_question(spoken) and not _asks_about(spoken, ask))
+        )
+        if wrong_or_polluted:
             length = fact_value(facts, "trailerLength")
             ack = ""
             # Only acknowledge facts that are actually saved — never invent a truck.
+            # Always replace a wrong model question; never keep its question text as the ack.
             if equip and ask != "equipment":
                 label = EQUIP_LABELS.get(str(equip), str(equip).replace("_", " "))
                 focus = f"{length} {label}" if length else label
                 ack = f"Got it — {focus}. "
             spoken = (ack + QUESTIONS[ask]).strip()
         elif not _has_question(spoken):
+            # No question yet — attach the canonical ask (still exactly one question).
             spoken = f"{spoken} {QUESTIONS[ask]}".strip()
+        else:
+            # Model already asks the right slot — drop any trailing second question.
+            spoken = re.sub(r"\?\s+.*\?", "?", spoken).strip()
         return spoken, ask, list(chips or _chips_for_ask(ask, facts))
     # No pending question — strip stuck qualify loops.
     if re.search(r"fit already|future purchase|current setup|current mc status", spoken, re.I):

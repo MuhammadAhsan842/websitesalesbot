@@ -14,39 +14,57 @@ def facts(**kwargs):
 
 
 class OneQuestionFlow(unittest.TestCase):
-    def test_local_asks_miles_before_city(self):
+    def test_own_mc_local_asks_miles_then_weekday_not_city(self):
         state = facts(
             equipment="box_truck",
             trailerLength="26ft",
             mcOwnership="own_mc",
-            insurance="own_insurance",
-            coverageTypes="auto_and_cargo",
+            authorityAgeMonths=5,
             operatingMode="local",
             equipmentSupport="in_scope",
         )
         answered = [
-            "equipment", "trailerLength", "mcOwnership", "insurance", "coverageTypes",
-            "authorityAgeMonths", "operatingMode",
+            "equipment", "trailerLength", "mcOwnership", "authorityAgeMonths", "operatingMode",
         ]
         ask = playbook.next_ask(state, {"answered": answered})
         self.assertEqual(ask, "milesPerDay")
         self.assertNotEqual(ask, "stayOutDuration")
+        self.assertNotEqual(ask, "operatingArea")
+        state["milesPerDay"] = {"value": "500-600", "status": "user_stated"}
+        answered = answered + ["milesPerDay"]
+        ask = playbook.next_ask(state, {"answered": answered})
+        self.assertEqual(ask, "weekdaySchedule")
 
-    def test_otr_asks_stay_out_not_miles(self):
+    def test_own_mc_otr_asks_weekday_not_stay_out(self):
         state = facts(
             equipment="box_truck",
             trailerLength="26ft",
             mcOwnership="own_mc",
-            insurance="own_insurance",
-            coverageTypes="auto_and_cargo",
+            authorityAgeMonths=5,
             operatingMode="otr",
             equipmentSupport="in_scope",
         )
         answered = [
-            "equipment", "trailerLength", "mcOwnership", "insurance", "coverageTypes",
-            "authorityAgeMonths", "operatingMode",
+            "equipment", "trailerLength", "mcOwnership", "authorityAgeMonths", "operatingMode",
         ]
         ask = playbook.next_ask(state, {"answered": answered})
+        self.assertEqual(ask, "weekdaySchedule")
+        self.assertNotEqual(ask, "stayOutDuration")
+        self.assertNotEqual(ask, "milesPerDay")
+
+    def test_lease_otr_still_asks_stay_out(self):
+        state = facts(
+            equipment="box_truck",
+            trailerLength="26ft",
+            mcOwnership="no_own_mc",
+            insurance="needs_insurance",
+            operatingMode="otr",
+            equipmentSupport="in_scope",
+        )
+        ask = playbook.next_ask(
+            state,
+            {"answered": ["equipment", "trailerLength", "mcOwnership", "insurance", "operatingMode"]},
+        )
         self.assertEqual(ask, "stayOutDuration")
         self.assertNotEqual(ask, "milesPerDay")
 

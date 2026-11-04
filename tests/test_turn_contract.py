@@ -76,11 +76,33 @@ class AlignDelivery(unittest.TestCase):
         self.assertNotIn("future purchase", text.lower())
         self.assertEqual(chips, CHIPS["coverageTypes"])
 
-    def test_insurance_answer_advances_to_coverage_question(self):
+    def test_own_mc_skips_insurance_questionnaire(self):
         state = facts(
             equipment="hotshot",
             trailerLength="30ft",
             mcOwnership="own_mc",
+            equipmentSupport="in_scope",
+        )
+        ask = playbook.next_ask(
+            state,
+            {"answered": ["equipment", "trailerLength", "mcOwnership"]},
+        )
+        self.assertEqual(ask, "authorityAgeMonths")
+        self.assertNotEqual(ask, "insurance")
+        text, delivered, chips = playbook.align_delivery(
+            "I don't have that answer. I can note it for our onboarding manager instead of guessing.",
+            ask,
+            state,
+        )
+        self.assertEqual(delivered, "authorityAgeMonths")
+        self.assertIn("how old", text.lower())
+        self.assertNotIn("don't have that answer", text.lower())
+
+    def test_lease_insurance_answer_advances_to_coverage_question(self):
+        state = facts(
+            equipment="hotshot",
+            trailerLength="30ft",
+            mcOwnership="no_own_mc",
             insurance="own_insurance",
             equipmentSupport="in_scope",
         )
@@ -142,29 +164,17 @@ class HotshotReplay(unittest.TestCase):
 
         text, delivered, chips, ask = apply("I have my own mc")
         self.assertEqual(state["mcOwnership"]["value"], "own_mc")
-        self.assertEqual(ask, "insurance")
-        self.assertEqual(delivered, "insurance")
-        self.assertIn("insurance", text.lower())
-        self.assertEqual(chips, CHIPS["insurance"])
-
-        text, delivered, chips, ask = apply("I have my own insurance")
-        self.assertEqual(state["insurance"]["value"], "own_insurance")
-        self.assertEqual(ask, "coverageTypes")
-        self.assertEqual(delivered, "coverageTypes")
-        self.assertIn("coverage", text.lower())
-        self.assertNotIn("don't have that answer", text.lower())
-        self.assertNotIn("future purchase", text.lower())
-
-        text, delivered, chips, ask = apply("Auto + cargo")
-        self.assertEqual(state["coverageTypes"]["value"], "auto_and_cargo")
-        self.assertIn(ask, {"authorityAgeMonths", "operatingMode"})
-        self.assertEqual(delivered, ask)
-        self.assertTrue(playbook._asks_about(text, ask))
+        self.assertEqual(ask, "authorityAgeMonths")
+        self.assertEqual(delivered, "authorityAgeMonths")
+        self.assertIn("how old", text.lower())
+        self.assertNotIn("insurance", text.lower())
+        self.assertEqual(chips, CHIPS["authorityAgeMonths"])
 
         text, delivered, chips, ask = apply("About 5 months")
         self.assertEqual(state.get("authorityAgeMonths", {}).get("value"), 5)
-        self.assertNotEqual(delivered, "authorityAgeMonths")  # age filled; next slot
-        self.assertTrue(playbook._asks_about(text, delivered) or delivered is None)
+        self.assertEqual(ask, "operatingMode")
+        self.assertEqual(delivered, "operatingMode")
+        self.assertTrue(playbook._asks_about(text, delivered))
 
         text, delivered, chips, ask = apply("I want local loads")
         # free text should set local when extract runs
@@ -172,6 +182,10 @@ class HotshotReplay(unittest.TestCase):
         for item in ruled["facts"]:
             state[item["key"]] = {"value": item["value"], "status": "user_stated"}
         self.assertEqual(state.get("operatingMode", {}).get("value"), "local")
+        ask = playbook.next_ask(state, mem)
+        self.assertEqual(ask, "milesPerDay")
+        self.assertNotEqual(ask, "operatingArea")
+        self.assertNotEqual(ask, "insurance")
 
 
 class DryVanReplay(unittest.TestCase):
