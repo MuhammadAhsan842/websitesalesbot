@@ -60,13 +60,30 @@ class OwnerSpeech:
         return output.getvalue()
 
 
+class GeminiSpeech:
+    profile = "gemini"
+    def __init__(self):
+        from app import gemini
+        if not gemini.is_configured():
+            raise RuntimeError("GEMINI_API_KEY is not configured for Gemini speech")
+        self.gemini = gemini
+
+    def generate(self, text):
+        return self.gemini.generate_speech(text)
+
+
 @asynccontextmanager
 async def lifespan(app):
     from faster_whisper import WhisperModel
     profile = os.getenv("VOICE_PROFILE", "owner")
-    if profile not in {"owner", "demo"}:
+    if profile not in {"owner", "demo", "gemini"}:
         raise RuntimeError("Unknown voice profile")
-    app.state.tts = OwnerSpeech() if profile == "owner" else PiperSpeech()
+    if profile == "gemini":
+        app.state.tts = GeminiSpeech()
+    elif profile == "owner":
+        app.state.tts = OwnerSpeech()
+    else:
+        app.state.tts = PiperSpeech()
     app.state.asr = WhisperModel(os.getenv("VOICE_WHISPER_MODEL", "tiny.en"), device="cpu", compute_type="int8",
                                 cpu_threads=int(os.getenv("VOICE_SPEECH_THREADS", "2")))
     app.state.gate = asyncio.Semaphore(1)
@@ -92,7 +109,7 @@ class SpeechIn(BaseModel):
 
 @app.post("/v1/audio/speech")
 async def speech(body: SpeechIn):
-    if body.voice != app.state.tts.profile or body.response_format != "wav" or body.speed != 1.0:
+    if (body.voice != app.state.tts.profile and body.voice not in {"gemini", "owner", "demo"}) or body.response_format != "wav" or body.speed != 1.0:
         raise HTTPException(422, "Use the configured profile, WAV format and speed 1.0")
     async with app.state.gate:
         wav = await asyncio.to_thread(app.state.tts.generate, body.input)

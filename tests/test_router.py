@@ -23,9 +23,10 @@ class Router(unittest.TestCase):
             self.assertEqual(commit["family"], "gemma")
 
     def test_missing_gemma_stays_on_qwen(self):
-        choice = router.pick("What do you charge?", "fee", None, {}, gemma_ready=False)
-        self.assertEqual(choice["family"], "qwen")
-        self.assertEqual(choice["reason"], "gemma_unavailable")
+        with patch.dict(os.environ, {"MODEL_ROUTER": "auto"}):
+            choice = router.pick("What do you charge?", "fee", None, {}, gemma_ready=False)
+            self.assertEqual(choice["family"], "qwen")
+            self.assertEqual(choice["reason"], "gemma_unavailable")
 
     def test_forced_gemma(self):
         with patch.dict(os.environ, {"MODEL_ROUTER": "gemma"}):
