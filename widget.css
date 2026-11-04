@@ -46,3 +46,9 @@
   border: 1px solid #d7e0ea; background: #fff; border-radius: 12px;
   padding: 10px 8px; font-size: 12px; font-weight: 800; cursor: pointer; white-space: nowrap;
 }
+.agoc-voice { padding: 8px 12px; border-top: 1px solid #d7e0ea; font-size: 12px; }
+.agoc-voice [role="status"] { display: block; margin-bottom: 6px; color: #42566f; }
+.agoc-voice button { border: 1px solid #d7e0ea; border-radius: 10px; padding: 7px 10px; background: #fff; color: #16324f; cursor: pointer; }
+.agoc-voice button:disabled { opacity: .55; cursor: default; }
+.agoc-voice button:focus-visible { outline: 2px solid #16324f; outline-offset: 2px; }
+.agoc-voice [hidden] { display: none; }

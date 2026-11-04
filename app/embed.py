@@ -83,12 +83,22 @@ def rrf(lex_rank: dict[str, int], vec_rank: dict[str, int], keys: list[str]) -> 
 
 
 def _infer(text: str) -> list[float] | None:
-    if os.getenv("EMBED_MODEL", MODEL).strip().lower() in {"off", "none", "0"}:
+    current_model = os.getenv("EMBED_MODEL", MODEL).strip()
+    if current_model.lower() in {"off", "none", "0"}:
+        return None
+    from app import gemini
+    if gemini.is_configured() and (current_model.startswith("gemini") or os.getenv("EMBED_PROVIDER", "").lower() == "gemini"):
+        dims = int(os.getenv("PINECONE_DIMS", "768"))
+        vec = gemini.embed(clip(text), dims=dims)
+        if vec:
+            _last["error"] = None
+            return vec
+        _last["error"] = "gemini_embed_failed"
         return None
     try:
         response = httpx.post(
             f"{URL}/api/embeddings",
-            json={"model": MODEL, "prompt": clip(text)},
+            json={"model": current_model, "prompt": clip(text)},
             timeout=20.0,
         )
         response.raise_for_status()

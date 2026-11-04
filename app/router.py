@@ -56,13 +56,8 @@ def pick(
     """Return {model, family, reason}. One inference; failover is the caller's job."""
     forced = mode()
     if forced == "gemini":
-        from app import gemini as geminimod
-
-        return {
-            "model": geminimod.model_name(),
-            "family": "gemini",
-            "reason": "forced_gemini",
-        }
+        gemini_model = os.getenv("GEMINI_CHAT_MODEL", os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"))
+        return {"model": gemini_model, "family": "gemini", "reason": "forced_gemini"}
     if forced == "qwen" or not gemma_ready:
         return {"model": QWEN_MODEL, "family": "qwen", "reason": "forced_qwen" if forced == "qwen" else "gemma_unavailable"}
     if forced == "gemma":

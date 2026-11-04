@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from pydantic import BaseModel
 
-from app import db, docworker, embed, entities, examples, fees, ingest, media, playbook, qwen, requirements, retrieve, second_pass, vision, workflows, zoho
+from app import db, docworker, embed, entities, examples, fees, ingest, media, playbook, qwen, requirements, retrieve, second_pass, vision, workflows, zoho, voice
 from app.graph import _chips, build_graph
 from app.knowledge import EQUIP_KEYS, lookup
 from app.schema import CHIPS, STAFF_ACTS, chip_options
@@ -107,6 +107,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Ayyan sales assistant", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.include_router(voice.router)
 
 
 @app.exception_handler(qwen.InferenceBusy)
@@ -188,6 +189,7 @@ def open_session(body: SessionIn | None = None):
     db.save_session(session)
     return {
         "session_id": session["id"],
+        "voice_access_token": voice.issue_access(session["id"]),
         "opportunity_id": session["opportunity_id"],
         "channel": session["channel"],
         "text": text,
@@ -232,6 +234,13 @@ def session_history(session_id: str):
 
 @app.post("/v1/turn")
 async def turn(body: TurnIn, background: BackgroundTasks):
+    if not db.get_session(body.session_id):
+        raise HTTPException(404, "unknown session")
+    async with voice.conversation_lock(body.session_id):
+        return await _turn(body, background)
+
+
+async def _turn(body: TurnIn, background: BackgroundTasks):
     session = db.get_session(body.session_id)
     if not session:
         raise HTTPException(404, "unknown session")
@@ -541,7 +550,17 @@ def decide_requirement(case_id: str, doc_type: str, body: RequirementDecision):
 
 
 @app.post("/v1/cases/{case_id}/act")
-def case_act(case_id: str, body: StaffAct):
+async def case_act(case_id: str, body: StaffAct):
+    case = db.get_case(case_id)
+    if not case:
+        raise HTTPException(404, "unknown case")
+    if case.get("session_id"):
+        async with voice.conversation_lock(case["session_id"]):
+            return await asyncio.to_thread(_case_act, case_id, body)
+    return await asyncio.to_thread(_case_act, case_id, body)
+
+
+def _case_act(case_id: str, body: StaffAct):
     if body.act not in STAFF_ACTS:
         raise HTTPException(400, "unknown act")
     current = db.get_case(case_id)
@@ -591,6 +610,7 @@ def case_act(case_id: str, body: StaffAct):
             mem["manager_requested"] = True
             session["memory"] = mem
             db.save_session(session)
+            db.execute("UPDATE voice_connections SET status='ended',expires=0 WHERE session_id=? AND status IN ('connecting','connected')", (session["id"],))
     db.add_event(f"Staff: {body.act}", {"caseId": case_id})
     zoho.queue_stage(saved, body.act, status, next_action)
     zoho.drain()

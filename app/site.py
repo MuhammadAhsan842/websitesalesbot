@@ -5,7 +5,7 @@ from fastapi.staticfiles import StaticFiles
 
 PUBLIC_FILES = frozenset({
     "index.html", "services.html", "staff.html", "styles.css", "widget.css",
-    "widget.js", "staff.js", "store.js", "favicon.svg",
+    "widget.js", "voice-client.js", "staff.js", "store.js", "favicon.svg",
     "js/session.js", "js/graph.js", "js/knowledge.js",
 })
 

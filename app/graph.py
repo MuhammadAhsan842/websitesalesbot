@@ -681,6 +681,10 @@ def node_execute(state: TurnState) -> dict:
     if session.get("manager_accepted") and action != "none":
         return {"action_result": result, **_trace("execute", skipped="manager_accepted")}
     if action == "talk_here":
+        from app.voice import capabilities
+        if capabilities()["available"]:
+            result.update({"workflow_reply": True, "message": "Choose Talk here to connect your microphone and continue this inquiry with our AI assistant. You can return to chat at any time."})
+            return {"session": session, "action_result": result, **_trace("execute", action="talk_here_offered")}
         prior = db.get_workflow(session["id"], "browser_voice")
         if not prior:
             db.save_workflow(session["id"], "browser_voice", "unavailable", {"requested_channel": "browser_voice"})

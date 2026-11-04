@@ -424,6 +424,7 @@ async def close() -> None:
 
 
 def status() -> dict:
+    from app import gemini
     return {
         "profile": "portable_cpu",
         "threads": CONFIG.threads,
@@ -438,6 +439,8 @@ def status() -> dict:
         "think": think_enabled(),
         "gemma_model": GEMMA_MODEL,
         "gemma_ready": gemma_ready,
+        "gemini_configured": gemini.is_configured(),
+        "gemini_model": gemini.chat_model(),
         "vision_ready": vision_ready,
         "vision_model": VISION_MODEL,
         "vision_enabled": vision_enabled(),
@@ -552,6 +555,29 @@ async def _infer(
 ) -> dict[str, Any]:
     global last_error, ready
     started = perf_counter()
+    if family == "gemini":
+        from app import gemini
+        raw_proposal = await gemini.propose(
+            user_text=user_text,
+            facts=facts,
+            conversation_state=conversation_state,
+            memory=memory,
+            examples=examples,
+            recent=recent,
+            approved=approved,
+            system_prompt=SYSTEM,
+        )
+        parsed = Proposal.model_validate(_sanitize(raw_proposal))
+        result = parsed.model_dump()
+        for fact in result["facts"]:
+            fact["status"] = "user_stated"
+        timing = {"queue_ms": round(queue_ms, 2), "request_ms": round((perf_counter() - started) * 1000, 2)}
+        result.update(_source=family, _model=model, _timing=timing, _thinking=None, _think=False)
+        last_error = None
+        ready = True
+        log.info("%s timing %s", family, timing)
+        return result
+
     response = await client().post(
         f"{OLLAMA}/api/chat",
         json=request_payload(
@@ -616,24 +642,6 @@ async def propose(
     global last_error, ready, last_route
     choice = router.pick(user_text, intent, repair, memory, gemma_ready=gemma_ready)
     last_route = choice
-    if choice.get("family") == "gemini":
-        from app import gemini as geminimod
-
-        try:
-            return await geminimod.propose(
-                user_text,
-                facts,
-                conversation_state,
-                memory=memory,
-                examples=examples,
-                recent=recent,
-                approved=approved,
-            )
-        except Exception as exc:
-            last_error = f"gemini_failed:{exc}"
-            ready = False
-            log.warning("gemini inference failed: %s", exc)
-            return {}
     async with _gate.enter() as queue_ms:
         try:
             return await _infer(
@@ -650,9 +658,8 @@ async def propose(
                 think=think,
             )
         except (httpx.HTTPError, ValidationError, ValueError, TypeError, AttributeError) as first:
-            # Always fall over to Qwen when Gemma is down — forced gemma with a dead host
-            # was leaving every turn on rules_fallback (static canned replies).
-            if choice["family"] == "gemma" and MODEL != choice["model"]:
+            # Fall over to Qwen when Gemma/Gemini failover is needed
+            if choice["family"] in {"gemma", "gemini"} and MODEL != choice["model"]:
                 try:
                     result = await _infer(
                         MODEL,
@@ -667,13 +674,13 @@ async def propose(
                         approved,
                         think=think,
                     )
-                    last_route = {"model": MODEL, "family": "qwen", "reason": "gemma_failover_qwen"}
+                    last_route = {"model": MODEL, "family": "qwen", "reason": f"{choice['family']}_failover_qwen"}
                     return result
                 except (httpx.HTTPError, ValidationError, ValueError, TypeError, AttributeError):
                     pass
-            last_error = "qwen_timeout" if isinstance(first, httpx.TimeoutException) else "qwen_request_or_schema_failed"
+            last_error = f"{choice['family']}_timeout" if isinstance(first, httpx.TimeoutException) else f"{choice['family']}_request_or_schema_failed"
             ready = False
-            log.warning("local inference failed (transport, timeout, or invalid output)")
+            log.warning("inference failed for %s (transport, timeout, or invalid output)", choice["family"])
             return {}
 
 
@@ -681,6 +688,17 @@ async def warmup() -> None:
     global ready, last_error, gemma_ready
     await refresh_installed()
     # Warmup stays fast — do not enable thinking here even when QWEN_THINK=1.
+    if router.mode() == "gemini":
+        from app import gemini
+        if gemini.is_configured():
+            result = await propose("I need dispatch", {}, "understand_request", intent="dispatch_inquiry", think=False)
+            if result and last_route.get("family") == "gemini":
+                log.info("gemini ready: %s", gemini.chat_model())
+                ready = True
+                return
+            else:
+                log.warning("gemini warmup failed: %s", last_error)
+                return
     if router.mode() == "gemma":
         result = await propose(
             "I need dispatch", {}, "understand_request", intent="dispatch_inquiry", think=False

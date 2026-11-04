@@ -1,8 +1,9 @@
 # Local architecture and implementation roadmap
 
 Baseline: `lease-on-dynamic-behavior` at `4ec749d`. This branch builds a shared
-inquiry foundation. It does not implement a live voice runtime or certify the
-application for public production use.
+inquiry foundation and an opt-in browser voice pilot runtime. It does not certify
+the application for public production use. See BROWSER-VOICE.md for current setup
+and verification limits.
 
 ## Runtime boundaries
 
@@ -55,8 +56,9 @@ migration, not a capability inferred from the diagram.
 * Repeating a completed callback reconciles the case/outbox after a partial
   failure. Outbox keys include the callback workflow version. This is not a
   distributed exactly-once guarantee.
-* Browser voice records an unavailable request. It does not change chat channel
-  or set identity verified. A future trusted media-ready event must own activation.
+* Browser voice records an unavailable request when the runtime is not ready.
+  Trusted worker events own media connection state; browser tokens and model
+  output cannot set identity verified or claim a connection.
 * Insurance assistance routes to quote intake. Quote-only documents and an
   explicit unresolved insurance need block onboarding approval and production
   acceptance. A promoted task requires its full applicable checklist.
@@ -64,8 +66,8 @@ migration, not a capability inferred from the diagram.
   Local CRM mirrors are not verified remote writes, and a Deal ID does not
   establish staff assignment.
 * Turn retry lookup/storage is session-scoped. Legacy cached responses are read
-  only when their stored session matches. Concurrent turn execution still needs
-  an inquiry-level concurrency design.
+  only when their stored session matches. Turn admission now serializes chat/voice and staff case actions through
+  bounded SQLite leases; broader multi-session inquiry identity remains future work.
 * Example retrieval is controlled by `AGOC_SKIP_EXAMPLES`, not the model name.
 * Public static assets are allowlisted; runtime files and source code cannot be
   fetched through the root static mount. Widget messages render as text.
@@ -93,13 +95,13 @@ projection. Callback progress contains the last four phone digits, schedule
 preference, validation label and next missing field, not the internal full number.
 Existing transcript/API authorization limitations still apply.
 
-## Voice target: next implementation boundary
+## Browser voice pilot runtime
 
 The owner-selected speaking voice is recorded in `config/voice.json`, with the
 original WhatsApp recording and prepared PCM reference in `assets/voices/owner/`.
-This is a selection manifest for future integration, not an active TTS setting.
-The future cloning-capable adapter should use profile `owner`; no cloned model
-or generated speech has been produced. See the asset README for provenance and
+This remains a selection manifest, not an approved cloned model artifact.
+The optional Chatterbox adapter loads profile `owner` from that reference; its
+acoustic quality and deployment latency still require validation. See the asset README for provenance and
 limitations. Speaker references remain outside the public static-file allowlist.
 
 ```mermaid
@@ -114,7 +116,10 @@ flowchart LR
     Playback --> Runtime
 ```
 
-Candidate runtime: LiveKit Agents. Start with browser voice. Validate the telephone
+Implemented runtime adapter: LiveKit Agents, with local/OpenAI-compatible ASR and
+TTS endpoints, browser microphone controls and a shared graph response source.
+Voice admission remains unavailable until dependencies pass readiness checks.
+Start with browser voice. Validate the telephone
 provider separately; existing Google Voice integration remains unverified.
 Retain Ollama behind a provider-neutral model adapter. Compare streaming API
 speech recognition with an evaluated open candidate; compare API TTS with Kokoro
