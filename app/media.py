@@ -1,4 +1,4 @@
-"""Chat attachments: OCR + CLIP image index + optional background Qwen vision."""
+"""Chat attachments: OCR + CLIP image index + optional background Gemini vision."""
 
 from __future__ import annotations
 
@@ -107,15 +107,15 @@ def process(path: Path, session_id: str | None = None, case_id: str | None = Non
     if look and kind != "screenshot":
         row = interpret(row["id"])
     elif kind != "screenshot":
-        from app import qwen
+        from app import llm
 
-        if not qwen.vision_enabled():
+        if not llm.vision_enabled():
             row = db.save_attachment({**row, "vision_status": "skipped"})
     return {**public_row(row), "status": "processed", "attachment": row}
 
 
 def interpret(attachment_id: str) -> dict:
-    from app import qwen
+    from app import llm
 
     row = db.get_attachment(attachment_id)
     if not row:
@@ -124,10 +124,10 @@ def interpret(attachment_id: str) -> dict:
         return row
     if row.get("kind") == "screenshot":
         return db.save_attachment({**row, "vision_status": "skipped", "vision": {"kind": "screenshot", "skipped": "ocr_preferred"}})
-    looked = qwen.look(row.get("path") or "", kind=row.get("kind") or "photo")
+    looked = llm.look(row.get("path") or "", kind=row.get("kind") or "photo")
     if not looked:
-        return db.save_attachment({**row, "vision_status": "skipped" if not qwen.vision_enabled() else "failed"})
-    looked = qwen._sanitize_look(looked)
+        return db.save_attachment({**row, "vision_status": "skipped" if not llm.vision_enabled() else "failed"})
+    looked = llm._sanitize_look(looked)
     looked["unverified"] = True
     looked.pop("approved", None)
     # Proposed facts stay on the attachment. They are not session facts and are not approval.

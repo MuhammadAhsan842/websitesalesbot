@@ -42,7 +42,7 @@ class OwnMcAskOrder(unittest.TestCase):
         self.assertNotIn("stayOutDuration", playbook.missing_core(state))
         self.assertNotIn("insurance", playbook.missing_core(state))
 
-    def test_otr_weekday_then_start_no_stay_out(self):
+    def test_otr_goes_straight_to_start_no_weekday_or_miles(self):
         state = facts(
             equipment="hotshot",
             trailerLength="30ft",
@@ -52,12 +52,11 @@ class OwnMcAskOrder(unittest.TestCase):
             equipmentSupport="in_scope",
         )
         ask = playbook.next_ask(state)
-        self.assertEqual(ask, "weekdaySchedule")
-        state["weekdaySchedule"] = {"value": "monday_friday", "status": "user_stated"}
-        ask = playbook.next_ask(state)
         self.assertEqual(ask, "startDate")
-        self.assertNotIn("stayOutDuration", playbook.missing_core(state))
-        self.assertNotIn("milesPerDay", playbook.missing_core(state))
+        missing = playbook.missing_core(state)
+        self.assertNotIn("weekdaySchedule", missing)
+        self.assertNotIn("stayOutDuration", missing)
+        self.assertNotIn("milesPerDay", missing)
 
     def test_lease_on_path_unchanged_after_weekday_asks_city(self):
         ask = playbook.next_ask(
@@ -201,6 +200,40 @@ class OneQuestionReplace(unittest.TestCase):
         self.assertNotIn("city", low)
         self.assertNotIn("zip", low)
 
+    def test_otr_strips_weekday_and_miles_when_start_pending(self):
+        text, ask, _ = playbook.align_delivery(
+            "Got it, OTR. Do you normally run Monday through Friday, or are you open to weekends too?",
+            "startDate",
+            facts(
+                equipment="reefer",
+                trailerLength="53ft",
+                mcOwnership="own_mc",
+                authorityAgeMonths=5,
+                operatingMode="otr",
+                equipmentSupport="in_scope",
+            ),
+        )
+        self.assertEqual(ask, "startDate")
+        low = text.lower()
+        self.assertIn("when would you like to start", low)
+        self.assertNotIn("monday through friday", low)
+        self.assertNotIn("miles", low)
+
+        text2, ask2, _ = playbook.align_delivery(
+            "Got it, OTR. How many miles can you cover in a day?",
+            "startDate",
+            facts(
+                equipment="reefer",
+                trailerLength="53ft",
+                mcOwnership="own_mc",
+                operatingMode="otr",
+                equipmentSupport="in_scope",
+            ),
+        )
+        self.assertEqual(ask2, "startDate")
+        self.assertIn("when would you like to start", text2.lower())
+        self.assertNotIn("miles", text2.lower())
+
     def test_standalone_city_ask_stripped_when_no_pending(self):
         text, ask, _ = playbook.align_delivery(
             "Got it, starting today. What city or ZIP will you be heading out from?",
@@ -299,11 +332,16 @@ class ReadyComposeOneRoute(unittest.TestCase):
             {"answered": [], "follow_up": "assistant"},
             plan={"answer_topics": [], "next_question_id": None, "proposed_action": "create_case"},
             user_text="today",
+            wording="Got it, next week. What's the best email to send the packet to?",
         )
         low = reply.lower()
-        self.assertEqual(low.count("for own-mc, onboarding usually asks"), 1)
+        self.assertIn("setup review is saved", low)
+        self.assertIn("w-9", low)
+        self.assertIn("coi", low)
+        self.assertNotIn("email", low)
         self.assertNotIn("licence", low)
         self.assertNotIn("we only dispatch these types", low)
+        self.assertEqual(low.count("setup review is saved"), 1)
 
 
 class FreightOwnMcNoCity(unittest.TestCase):
@@ -476,6 +514,123 @@ class OwnMcReplay(unittest.TestCase):
         self.assertTrue("w-9" in low or "authority" in low)
         self.assertIn("truck photos", low)
         self.assertEqual(reply_chips, CHIPS["handoff"])
+
+
+class LengthBeforeReject(unittest.TestCase):
+    def test_flatbed_without_length_asks_length(self):
+        state = facts(equipment="flatbed", equipmentSupport="out_of_scope")
+        self.assertEqual(playbook.next_ask(state), "trailerLength")
+        reply, _, _ = playbook.compose(
+            "dispatch_inquiry",
+            state,
+            [],
+            None,
+            False,
+            None,
+            "trailerLength",
+            {"answered": ["equipment"], "follow_up": "assistant"},
+            plan={"answer_topics": [], "next_question_id": "trailerLength"},
+            user_text="Flatbed",
+            wording=knowledge.lookup("equip_unsupported"),
+        )
+        low = reply.lower()
+        self.assertIn("length", low)
+        self.assertIn("flatbed", low)
+        self.assertNotIn("outside what we dispatch", low)
+
+    def test_merge_blocks_model_out_of_scope_before_length(self):
+        from app import graph
+
+        merged = graph._merge_facts(
+            [{"key": "equipmentSupport", "value": "out_of_scope", "evidence": "outside"}],
+            [{"key": "equipment", "value": "flatbed", "status": "user_stated"},
+             {"key": "equipmentSupport", "value": "in_scope", "status": "user_stated"}],
+            "Flatbed",
+            {},
+        )
+        by_key = {item["key"]: item["value"] for item in merged}
+        self.assertEqual(by_key.get("equipment"), "flatbed")
+        self.assertEqual(by_key.get("equipmentSupport"), "in_scope")
+
+    def test_box_truck_without_length_asks_length(self):
+        text, ask, _ = playbook.align_delivery(
+            knowledge.lookup("equip_unsupported"),
+            None,
+            facts(equipment="box_truck", equipmentSupport="in_scope"),
+        )
+        self.assertEqual(ask, "trailerLength")
+        low = text.lower()
+        self.assertIn("box", low)
+        self.assertIn("length", low)
+        self.assertNotIn("outside what we dispatch", low)
+
+
+class ExclusiveLengthAsk(unittest.TestCase):
+    def test_double_length_phrasing_collapses_to_one(self):
+        text, ask, _ = playbook.align_delivery(
+            "What is the length of your reefer. What length trailer or box are you running?",
+            "trailerLength",
+            facts(equipment="reefer", equipmentSupport="in_scope"),
+        )
+        self.assertEqual(ask, "trailerLength")
+        self.assertEqual(text.count("?"), 1)
+        low = text.lower()
+        self.assertIn("reefer", low)
+        self.assertNotIn("trailer or box", low)
+        self.assertLessEqual(playbook._info_request_count(text), 1)
+
+
+class NoRepeatedEquipAck(unittest.TestCase):
+    def test_after_own_mc_age_ask_does_not_restamp_truck(self):
+        text, ask, _ = playbook.align_delivery(
+            "Got it — 48ft reefer. About how old is your MC or authority?",
+            "authorityAgeMonths",
+            facts(
+                equipment="reefer",
+                trailerLength="48ft",
+                mcOwnership="own_mc",
+                equipmentSupport="in_scope",
+            ),
+        )
+        self.assertEqual(ask, "authorityAgeMonths")
+        low = text.lower()
+        self.assertIn("how old", low)
+        self.assertNotIn("48ft reefer", low.replace(" ", ""))
+        self.assertNotIn("48 ft reefer", low)
+        # One short question — no truck stamp lead-in.
+        self.assertFalse(low.startswith("got it — 48"))
+
+    def test_length_and_mc_turns_still_ack_once(self):
+        length_text, _, _ = playbook.align_delivery(
+            "That equipment is outside what we dispatch.",
+            "trailerLength",
+            facts(equipment="flatbed", equipmentSupport="in_scope"),
+        )
+        self.assertIn("flatbed", length_text.lower())
+        mc_text, _, _ = playbook.align_delivery(
+            "random",
+            "mcOwnership",
+            facts(equipment="flatbed", trailerLength="53ft", equipmentSupport="in_scope"),
+        )
+        self.assertRegex(mc_text.lower(), r"got it.*,?\s*53\s*ft\s*flatbed")
+        self.assertIn("own mc", mc_text.lower())
+
+
+class StartDateTomorrow(unittest.TestCase):
+    def test_tommorow_fills_start_when_pending(self):
+        items = rules._short_answer_facts("tommorow", {"last_question_id": "startDate"})
+        self.assertTrue(any(i["key"] == "startDate" and i["value"] == "tomorrow" for i in items))
+
+    def test_tomorrow_in_free_text(self):
+        ruled = rules.propose("tommorow", {}, {"last_question_id": "startDate", "answered": [], "follow_up": "assistant"})
+        keys = {i["key"]: i["value"] for i in ruled["facts"] if i["key"] != "_unknown"}
+        self.assertEqual(keys.get("startDate"), "tomorrow")
+
+
+class HandoffCopy(unittest.TestCase):
+    def test_no_nobody_has_accepted(self):
+        self.assertNotIn("nobody has accepted", knowledge.lookup("handoff_requested").lower())
+        self.assertIn("callback", knowledge.lookup("handoff_requested").lower())
 
 
 if __name__ == "__main__":

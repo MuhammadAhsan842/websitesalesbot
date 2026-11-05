@@ -16,7 +16,7 @@ from time import perf_counter
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import httpx
-from app import qwen
+from app import llm
 from app.cpu import available_cpus
 
 
@@ -37,7 +37,7 @@ CASES = (
 )
 
 
-def correctness(proposal: qwen.Proposal, case: Case) -> list[str]:
+def correctness(proposal: llm.Proposal, case: Case) -> list[str]:
     facts = {fact.key: fact.value for fact in proposal.facts}
     errors = [f"missing/wrong fact: {key}" for key, expected in case.facts.items() if facts.get(key) != expected]
     errors += [f"missing knowledge: {key}" for key in case.keys if key not in proposal.knowledge_keys]
@@ -81,15 +81,15 @@ async def run(args) -> dict:
         except (httpx.HTTPError, ValueError):
             metadata["metadata_unavailable"] = True
         for threads in args.threads:
-            cfg = replace(qwen.CONFIG, model=args.model, url=args.url, threads=threads, num_gpu=0)
+            cfg = replace(llm.CONFIG, model=args.model, url=args.url, threads=threads, num_gpu=0)
             print(f"Warming model, threads={threads}", file=sys.stderr, flush=True)
             warm = await client.post(
                 f"{args.url}/api/chat",
-                json=qwen.request_payload("I need dispatch", {}, "understand_request", cfg),
+                json=llm.request_payload("I need dispatch", {}, "understand_request", cfg),
             )
             warm.raise_for_status()
             warm_body = warm.json()
-            qwen.parse_content(warm_body.get("message", {}).get("content", ""))
+            llm.parse_content(warm_body.get("message", {}).get("content", ""))
             rows = []
             for repeat in range(args.repeats):
                 for case in CASES:
@@ -98,13 +98,13 @@ async def run(args) -> dict:
                     try:
                         response = await client.post(
                             f"{args.url}/api/chat",
-                            json=qwen.request_payload(case.text, {}, "understand_request", cfg),
+                            json=llm.request_payload(case.text, {}, "understand_request", cfg),
                         )
                         response.raise_for_status()
                         body = response.json()
                         if body.get("done_reason") == "length":
                             raise ValueError("output truncated")
-                        proposal = qwen.parse_content(body.get("message", {}).get("content", ""))
+                        proposal = llm.parse_content(body.get("message", {}).get("content", ""))
                         errors = correctness(proposal, case)
                         row.update(schema_valid=True, canary_passed=not errors, errors=errors)
                         for key in (
@@ -138,9 +138,9 @@ async def run(args) -> dict:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--url", default=qwen.OLLAMA)
-    parser.add_argument("--model", default=qwen.MODEL)
-    parser.add_argument("--threads", default=str(qwen.CONFIG.threads), help="Comma-separated thread counts; only one tested at a time")
+    parser.add_argument("--url", default=llm.OLLAMA)
+    parser.add_argument("--model", default=llm.MODEL)
+    parser.add_argument("--threads", default=str(llm.CONFIG.threads), help="Comma-separated thread counts; only one tested at a time")
     parser.add_argument("--repeats", type=int, default=2)
     parser.add_argument("--timeout", type=float, default=120)
     parser.add_argument("--output", type=Path, help="Optional local JSON report")

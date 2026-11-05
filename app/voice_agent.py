@@ -27,8 +27,8 @@ def configuration():
     if len(os.environ["VOICE_WORKER_SECRET"]) < 32:
         raise RuntimeError("VOICE_WORKER_SECRET must contain at least 32 characters")
     profile = os.getenv("VOICE_PROFILE", "owner")
-    if profile not in {"owner", "demo", "gemini"}:
-        raise RuntimeError("Select the owner, demo, or gemini profile")
+    if profile not in {"owner", "demo", "gemini", "fish"}:
+        raise RuntimeError("Select the owner, demo, gemini, or fish profile")
     return profile
 
 

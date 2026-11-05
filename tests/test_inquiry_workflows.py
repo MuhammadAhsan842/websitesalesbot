@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 from langgraph.checkpoint.memory import InMemorySaver
 
-from app import db, examples, graph, main, qwen, requirements, retrieve, tasks, workflows, zoho
+from app import db, examples, graph, main, llm, requirements, retrieve, tasks, workflows, zoho
 
 
 def facts(**values):
@@ -26,7 +26,7 @@ class InquiryWorkflows(unittest.IsolatedAsyncioTestCase):
         self.stack.enter_context(patch.object(zoho, "drain", return_value=[]))
         self.stack.enter_context(patch.object(examples, "search", return_value=[]))
         self.stack.enter_context(patch.object(retrieve, "search", return_value=[]))
-        self.model = self.stack.enter_context(patch.object(qwen, "propose", new=AsyncMock(
+        self.model = self.stack.enter_context(patch.object(llm, "propose", new=AsyncMock(
             return_value={"intent": "general", "facts": [], "action": "none"})))
         self.stack.enter_context(patch.object(main.app.state, "graph", graph.build_graph(InMemorySaver()), create=True))
         db.init()
@@ -124,7 +124,7 @@ class InquiryWorkflows(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(history.json()["chips"], [])
 
     async def test_model_name_does_not_silently_disable_examples(self):
-        with patch.dict("os.environ", {"QWEN_MODEL": "agoc-qwen4b-test", "AGOC_SKIP_EXAMPLES": "0"}):
+        with patch.dict("os.environ", {"LLM_MODEL": "agoc-gemini-test", "AGOC_SKIP_EXAMPLES": "0"}):
             await self.say("What equipment do you support?")
             examples.search.assert_called_once()
 

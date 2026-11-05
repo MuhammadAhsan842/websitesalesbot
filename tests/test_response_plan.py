@@ -9,7 +9,7 @@ from unittest.mock import patch
 import httpx
 from langgraph.checkpoint.memory import InMemorySaver
 
-from app import db, examples, fees, graph, main, memory, plan, playbook, qwen, retrieve, zoho
+from app import db, examples, fees, graph, main, memory, plan, playbook, llm, retrieve, zoho
 from app.graph import build_graph
 
 
@@ -89,13 +89,13 @@ class PlanContract(unittest.TestCase):
         self.assertNotIn("booked", text.lower())
 
     def test_invalid_plan_does_not_copy_example_reply(self):
-        parsed = qwen.parse_content(json.dumps({
+        parsed = llm.parse_content(json.dumps({
             "intent": "general",
             "answer_topics": ["dispatch_fee"],
             "wording": "Packet emailed, you're booked Friday",
         }))
         self.assertIsNone(parsed.wording)
-        merged = graph._from_qwen(
+        merged = graph._from_model(
             {"intent": "general", "wording": None, "action": "none"},
             {"intent": "general", "knowledge_keys": [], "blocked": [], "facts": []},
             "I run reefer Friday",
@@ -231,7 +231,7 @@ class PlanContract(unittest.TestCase):
             facts(equipment="box_truck", trailerLength="26ft"),
         )
         self.assertFalse(any(item["key"] in {"equipment", "trailerLength"} for item in merged))
-        merged = graph._from_qwen(
+        merged = graph._from_model(
             {
                 "intent": "freight",
                 "facts": [{"key": "equipment", "value": "hotshot"}, {"key": "trailerLength", "value": "40ft"}],
@@ -490,8 +490,8 @@ class FeeCommitGraph(unittest.IsolatedAsyncioTestCase):
                 patch.object(db, "DB_PATH", Path(temporary) / "test.db"),
                 patch.object(zoho, "access_token", return_value=None),
                 patch.object(retrieve, "search", return_value=[]),
-                patch.object(qwen, "_client", model_client),
-                patch.object(qwen, "_gate", qwen.Admission(qwen.CONFIG)),
+                patch.object(llm, "_client", model_client),
+                patch.object(llm, "_gate", llm.Admission(llm.CONFIG)),
                 patch.object(main.app.state, "graph", build_graph(InMemorySaver()), create=True),
             ):
                 db.init()
@@ -567,8 +567,8 @@ class AfterHoursJourney(unittest.IsolatedAsyncioTestCase):
                 patch.object(db, "DB_PATH", Path(temporary) / "test.db"),
                 patch.object(zoho, "access_token", return_value=None),
                 patch.object(retrieve, "search", return_value=[]),
-                patch.object(qwen, "_client", model_client),
-                patch.object(qwen, "_gate", qwen.Admission(qwen.CONFIG)),
+                patch.object(llm, "_client", model_client),
+                patch.object(llm, "_gate", llm.Admission(llm.CONFIG)),
                 patch.object(main.app.state, "graph", build_graph(InMemorySaver()), create=True),
             ):
                 db.init()
@@ -643,8 +643,8 @@ class EquipmentAmbiguityGraph(unittest.IsolatedAsyncioTestCase):
                 patch.object(db, "DB_PATH", Path(temporary) / "test.db"),
                 patch.object(zoho, "access_token", return_value=None),
                 patch.object(retrieve, "search", return_value=[]),
-                patch.object(qwen, "_client", model_client),
-                patch.object(qwen, "_gate", qwen.Admission(qwen.CONFIG)),
+                patch.object(llm, "_client", model_client),
+                patch.object(llm, "_gate", llm.Admission(llm.CONFIG)),
                 patch.object(main.app.state, "graph", build_graph(InMemorySaver()), create=True),
             ):
                 db.init()

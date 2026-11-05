@@ -606,20 +606,33 @@ def topic_lines(topics: list[str], arrangement: str | None, bits: list[str], fac
                     approved = set()
                 offer_match = re.search(r"(\d+(?:\.\d+)?)\s*%", picked)
                 insurance = fact_value(facts, "insurance")
+                equip = fact_value(facts, "equipment")
                 if offer_match and approved and offer_match.group(1) not in approved and fact_value(facts, "mcOwnership"):
                     try:
-                        lines.append(fees.live_quote(arrangement, insurance=insurance))
+                        lines.append(
+                            fees.live_quote(arrangement, insurance=insurance, equipment=equip)
+                        )
                     except Exception:
                         lines.append(picked.rstrip(". ") + ". " + lookup("fee_route_manager"))
                 else:
                     if fact_value(facts, "mcOwnership") and "onboarding manager" not in picked.lower():
-                        lines.append(picked.rstrip(". ") + ". " + lookup("fee_route_manager"))
+                        # Replace invented/stale percents with the equipment schedule quote.
+                        try:
+                            lines.append(
+                                fees.live_quote(arrangement, insurance=insurance, equipment=equip)
+                            )
+                        except Exception:
+                            lines.append(picked.rstrip(". ") + ". " + lookup("fee_route_manager"))
                     else:
                         lines.append(picked)
             else:
                 try:
                     lines.append(
-                        fees.live_quote(arrangement, insurance=fact_value(facts, "insurance"))
+                        fees.live_quote(
+                            arrangement,
+                            insurance=fact_value(facts, "insurance"),
+                            equipment=fact_value(facts, "equipment"),
+                        )
                         if fact_value(facts, "mcOwnership")
                         else lookup("fee_need_arrangement")
                     )

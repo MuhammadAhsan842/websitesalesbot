@@ -1,4 +1,4 @@
-"""Named reply variants. Qwen may pick an id; code fills the approved sentence."""
+"""Named reply variants. The model may pick an id; code fills the approved sentence."""
 
 from app.knowledge import lookup
 from app.schema import VARIANTS

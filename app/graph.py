@@ -1,4 +1,4 @@
-"""LangGraph conversation runtime. Qwen proposes every turn; nodes execute that proposal."""
+"""LangGraph conversation runtime. Gemini proposes every turn; nodes execute that proposal."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ def merge_traces(left: list, right: list) -> list:
         return [item for item in right if not item.get("_reset")]
     return (left or []) + right
 
-from app import db, examples, fees, media, memory, plan, playbook, qwen, requirements as reqmod, rules, second_pass, variants, workflows, zoho
+from app import db, examples, fees, media, memory, plan, playbook, llm, requirements as reqmod, rules, second_pass, variants, workflows, zoho
 from app.knowledge import BLOCKED_CLAIMS, REGISTER, lookup
 from app.schema import ANSWER_TOPICS, CATALOGUE, CHIPS, FACT_KEYS, INTENTS, MOVES, QUESTIONS, VARIANTS, chip_options
 from app.tasks import fact_value, persist_human_task
@@ -99,7 +99,7 @@ CASE_SAY = {
     "approved_for_handoff": "Onboarding signed off for handoff to dispatch.",
     "production_accepted": "Dispatch has the truck.",
     "human_takeover": "Our onboarding manager is on this chat.",
-    "manager_requested": "I've saved your request for an onboarding manager. Nobody has accepted it yet.",
+    "manager_requested": "Your request is saved for our onboarding manager to review. Would you prefer a callback?",
     "callback_requested": "A callback is noted. Nobody has dialed yet.",
     "routed_support": "This went to operations.",
 }
@@ -180,10 +180,25 @@ def _merge_facts(
             continue
         if item.get("value") not in (None, False) or item["key"] not in by_key:
             by_key[item["key"]] = item
+    # Never accept a model out_of_scope flag while a catalog type still needs length.
+    from app.knowledge import EQUIPMENT_LENGTHS_FT
+
+    eq = (by_key.get("equipment") or {}).get("value") or (
+        (current_facts or {}).get("equipment") or {}
+    ).get("value")
+    length = (by_key.get("trailerLength") or {}).get("value") or (
+        (current_facts or {}).get("trailerLength") or {}
+    ).get("value")
+    if eq in EQUIPMENT_LENGTHS_FT and not length:
+        by_key["equipmentSupport"] = {
+            "key": "equipmentSupport",
+            "value": "in_scope",
+            "status": "user_stated",
+        }
     return list(by_key.values())
 
 
-def _from_qwen(model: dict, ruled: dict, user_text: str = "", current_facts: dict | None = None) -> dict:
+def _from_model(model: dict, ruled: dict, user_text: str = "", current_facts: dict | None = None) -> dict:
     intent = model.get("intent") if model.get("intent") in INTENTS else None
     ruled_intent = ruled["intent"]
     t = (user_text or "").lower()
@@ -267,7 +282,7 @@ def _from_qwen(model: dict, ruled: dict, user_text: str = "", current_facts: dic
         "wording": wording,
         "advertised_equipment": ruled.get("advertised_equipment"),
         "advertised_length": ruled.get("advertised_length"),
-        "_source": "qwen",
+        "_source": "gemini",
     }
 
 
@@ -329,6 +344,7 @@ async def node_propose(state: TurnState) -> dict:
                     "text": fees.live_quote(
                         arrangement,
                         insurance=fact_value(session.get("facts") or {}, "insurance"),
+                        equipment=fact_value(session.get("facts") or {}, "equipment"),
                     )[:220],
                 }
             )
@@ -342,7 +358,7 @@ async def node_propose(state: TurnState) -> dict:
         ]
     except Exception:
         recent = []
-    model = await qwen.propose(
+    model = await llm.propose(
         text,
         session["facts"],
         session["conversation_state"],
@@ -363,13 +379,13 @@ async def node_propose(state: TurnState) -> dict:
                 "propose",
                 source="rules_fallback",
                 intent=ruled["intent"],
-                model=(model or {}).get("_model") or qwen.last_route.get("model") or qwen.MODEL,
-                error=qwen.last_error,
-                route=qwen.last_route,
+                model=(model or {}).get("_model") or llm.last_route.get("model") or llm.MODEL,
+                error=llm.last_error,
+                route=llm.last_route,
                 examples=[hit["id"] for hit in hits],
             ),
         }
-    merged = _from_qwen(model, ruled, text, session.get("facts"))
+    merged = _from_model(model, ruled, text, session.get("facts"))
     if timezone_answer:
         merged["facts"] = [item for item in merged["facts"] if item["key"] not in {"operatingArea", "lanes"}]
     merged["retrieved"] = hits
@@ -379,15 +395,15 @@ async def node_propose(state: TurnState) -> dict:
         "proposal": merged,
         **_trace(
             "propose",
-            source=model.get("_source") or "qwen",
+            source=model.get("_source") or "gemini",
             intent=merged["intent"],
-            model=model.get("_model") or qwen.MODEL,
+            model=model.get("_model") or llm.MODEL,
             action=merged["action"],
             timing=model.get("_timing", {}),
             examples=[hit["id"] for hit in hits],
             conversation_move=merged.get("conversation_move"),
             reply_variant_id=merged.get("reply_variant_id"),
-            route=qwen.last_route,
+            route=llm.last_route,
             think=bool(model.get("_think")),
             thinking=(model.get("_thinking") or "")[:4000] or None,
             wording=(merged.get("wording") or "")[:500] or None,
@@ -487,6 +503,7 @@ def node_knowledge(state: TurnState) -> dict:
                     fees.live_quote(
                         arrangement,
                         insurance=fact_value(state["session"].get("facts") or {}, "insurance"),
+                        equipment=fact_value(state["session"].get("facts") or {}, "equipment"),
                     )
                 )
             else:
@@ -918,17 +935,26 @@ def node_reply(state: TurnState) -> dict:
             leaked = False
         else:
             text = lookup("unknown")
+    # Prefer live next_ask so length-before-reject wins over a stale/null model ask.
+    live_ask = playbook.next_ask(
+        session["facts"],
+        session.get("memory"),
+        proposal.get("intent"),
+        proposal.get("repair"),
+    )
+    if live_ask:
+        ask = live_ask
     text, ask, aligned_chips = playbook.align_delivery(text, ask, session["facts"])
     chips = aligned_chips or chips or _chips(session, {**proposal, "next_field": ask})
     traces = state.get("traces") or []
     knowledge = next((item for item in traces if item.get("stage") == "knowledge"), {})
     propose = next((item for item in traces if item.get("stage") == "propose"), {})
-    reason = second_pass.is_hard(proposal, bool(knowledge.get("hybrid_rerank")), leaked, propose.get("source") or "qwen")
+    reason = second_pass.is_hard(proposal, bool(knowledge.get("hybrid_rerank")), leaked, propose.get("source") or "gemini")
     if reason:
         text = second_pass.repair(text)
         text, ask, aligned_chips = playbook.align_delivery(text, ask, session["facts"])
         chips = aligned_chips or chips
-        second_pass.log(session["id"], state.get("user_text") or "", text, reason, propose.get("source") or "qwen")
+        second_pass.log(session["id"], state.get("user_text") or "", text, reason, propose.get("source") or "gemini")
     _commit_delivered_question(session, ask)
     session["fit_summary"] = summary
     if summary and session["conversation_state"] not in {"handed_over"}:

@@ -5,9 +5,15 @@
   "selection_source": "Explicit project owner request in chat",
   "selected_on": "2026-11-03",
   "intended_use": "Reference for the Ayyan AI assistant speaking voice",
-  "status": "reference_selected",
-  "tts_engine": null,
+  "status": "runtime_fish_oneshot",
+  "tts_engine": "fish_audio",
   "cloned_voice_artifact": null,
+  "fish": {
+    "model": "s2.1-pro-free",
+    "clone_mode": "oneshot_owner_reference",
+    "note": "Persistent Fish model creation needs API credit. One-shot cloning uses reference_audio + reference_transcript."
+  },
+  "reference_transcript": "I think it's so I should take in my call for credit, good? This is the end of the year dispatch.",
   "reference_audio": {
     "path": "assets/voices/owner/reference-24k.wav",
     "sha256": "7a32c273eda7c2ff6088e819f7526b4d2feb067c96ecacc3c710c6acfac21535",

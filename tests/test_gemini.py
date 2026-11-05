@@ -1,5 +1,5 @@
 import pytest
-from app import embed, gemini, qwen, router
+from app import embed, gemini, llm, router
 
 
 def test_gemini_configured():
@@ -38,14 +38,14 @@ def test_gemini_speech_generation():
 
 
 @pytest.mark.asyncio
-async def test_qwen_propose_with_gemini(monkeypatch):
+async def test_llm_propose_with_gemini(monkeypatch):
     monkeypatch.setenv("MODEL_ROUTER", "gemini")
-    res = await qwen.propose(
+    res = await llm.propose(
         user_text="I have a 26ft box truck in Dallas looking for loads under my own MC.",
         facts={},
         conversation_state="qualify",
     )
     assert res is not None
     assert res.get("_source") == "gemini"
-    assert res.get("intent") in qwen.INTENTS or res.get("intent") == "general"
+    assert res.get("intent") in llm.INTENTS or res.get("intent") == "general"
     assert "wording" in res

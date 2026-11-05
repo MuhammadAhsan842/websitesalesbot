@@ -1,4 +1,4 @@
-"""Deterministic guard. Qwen proposes every turn; these rules only constrain and fill gaps."""
+"""Deterministic guard. Gemini proposes every turn; these rules only constrain and fill gaps."""
 
 from __future__ import annotations
 
@@ -648,8 +648,15 @@ def extract_facts(text: str) -> list[dict]:
         items.append({"key": "primaryProblem", "value": "freight", "status": "user_stated"})
     if re.search(r"expensive|too much|cheaper|rates", t):
         items.append({"key": "primaryProblem", "value": "rates", "status": "user_stated"})
-    if re.search(r"start (next week|immediately|asap|monday)", t):
-        items.append({"key": "startDate", "value": re.search(r"next week|immediately|asap|monday", t).group(0), "status": "user_stated"})
+    if re.search(r"\b(tom+or+ow|tommorow|tomorow|tomorrow)\b", t):
+        items.append({"key": "startDate", "value": "tomorrow", "status": "user_stated"})
+    if re.search(r"start (next week|immediately|asap|monday|tomorrow|tommorow)", t):
+        raw_start = re.search(r"next week|immediately|asap|monday|tomorrow|tommorow|tomorow", t)
+        if raw_start:
+            val = raw_start.group(0)
+            if val.startswith("tom"):
+                val = "tomorrow"
+            items.append({"key": "startDate", "value": val, "status": "user_stated"})
     if re.search(r"\bnext week\b", t) and "start" not in t:
         items.append({"key": "startDate", "value": "next week", "status": "user_stated"})
     # Keep full local numbers (10–15 digits). Do not glue timezone/time digits onto the phone.
@@ -941,6 +948,16 @@ def _short_answer_facts(text: str, memory: dict | None) -> list[dict]:
             items.append({"key": "milesPerDay", "value": f"{m.group(1)}-{m.group(2)}", "status": "user_stated"})
         elif re.fullmatch(r"\d{2,4}", t):
             items.append({"key": "milesPerDay", "value": t, "status": "user_stated"})
+    elif pending == "startDate":
+        if re.search(r"\b(tom+or+ow|tommorow|tomorow|tomorrow)\b", t):
+            items.append({"key": "startDate", "value": "tomorrow", "status": "user_stated"})
+        elif re.search(r"\bnext week\b", t):
+            items.append({"key": "startDate", "value": "next week", "status": "user_stated"})
+        elif re.search(r"\b(asap|immediately|today|monday|this week)\b", t):
+            items.append({"key": "startDate", "value": re.search(r"asap|immediately|today|monday|this week", t).group(0), "status": "user_stated"})
+        elif t and len(t) <= 40 and not re.search(r"\?", t):
+            # Terse timing answers while start is pending — preserve original phrasing.
+            items.append({"key": "startDate", "value": raw[:80], "status": "user_stated"})
     elif pending == "stayOutDuration":
         items.append({"key": "stayOutDuration", "value": raw[:80], "status": "user_stated"})
     return items

@@ -72,14 +72,29 @@ class GeminiSpeech:
         return self.gemini.generate_speech(text)
 
 
+class FishSpeech:
+    """Owner WhatsApp voice via Fish Audio one-shot (or FISH_REFERENCE_ID)."""
+    profile = "fish"
+    def __init__(self):
+        from app import fish_audio
+        if not fish_audio.is_configured():
+            raise RuntimeError("FISH_API_KEY is not configured for Fish speech")
+        self.fish = fish_audio
+
+    def generate(self, text):
+        return self.fish.generate_speech(text, format="wav")
+
+
 @asynccontextmanager
 async def lifespan(app):
     from faster_whisper import WhisperModel
     profile = os.getenv("VOICE_PROFILE", "owner")
-    if profile not in {"owner", "demo", "gemini"}:
+    if profile not in {"owner", "demo", "gemini", "fish"}:
         raise RuntimeError("Unknown voice profile")
     if profile == "gemini":
         app.state.tts = GeminiSpeech()
+    elif profile == "fish":
+        app.state.tts = FishSpeech()
     elif profile == "owner":
         app.state.tts = OwnerSpeech()
     else:
@@ -109,7 +124,7 @@ class SpeechIn(BaseModel):
 
 @app.post("/v1/audio/speech")
 async def speech(body: SpeechIn):
-    if (body.voice != app.state.tts.profile and body.voice not in {"gemini", "owner", "demo"}) or body.response_format != "wav" or body.speed != 1.0:
+    if body.voice != app.state.tts.profile or body.response_format != "wav" or body.speed != 1.0:
         raise HTTPException(422, "Use the configured profile, WAV format and speed 1.0")
     async with app.state.gate:
         wav = await asyncio.to_thread(app.state.tts.generate, body.input)

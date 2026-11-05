@@ -249,6 +249,7 @@ def init():
             "ALTER TABLE conversation_examples ADD COLUMN pattern TEXT",
             "ALTER TABLE conversation_examples ADD COLUMN situation TEXT",
             "ALTER TABLE conversation_examples ADD COLUMN applicability_json TEXT NOT NULL DEFAULT '[]'",
+            "ALTER TABLE fee_schedule ADD COLUMN equipment TEXT",
         ):
             try:
                 conn.execute(stmt)

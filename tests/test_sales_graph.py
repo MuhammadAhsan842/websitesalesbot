@@ -1,4 +1,4 @@
-"""Real graph/database regressions with schema-valid, synthetic Qwen responses."""
+"""Real graph/database regressions with schema-valid, synthetic Gemini responses."""
 
 import json
 from pathlib import Path
@@ -9,7 +9,7 @@ from unittest.mock import patch
 import httpx
 from langgraph.checkpoint.memory import InMemorySaver
 
-from app import db, main, qwen, retrieve, zoho
+from app import db, main, llm, retrieve, zoho
 from app.graph import build_graph
 from scripts.five_scenarios import SCENARIOS
 
@@ -58,7 +58,7 @@ PROPOSALS = {
 
 
 class SalesGraph(unittest.IsolatedAsyncioTestCase):
-    async def test_five_flows_keep_qwen_and_correct_case_branch(self):
+    async def test_five_flows_keep_gemini_and_correct_case_branch(self):
         calls = []
 
         def model(request):
@@ -73,8 +73,8 @@ class SalesGraph(unittest.IsolatedAsyncioTestCase):
                 patch.object(db, "DB_PATH", Path(temporary) / "test.db"),
                 patch.object(zoho, "access_token", return_value=None),
                 patch.object(retrieve, "search", return_value=[{"key": "unknown", "text": "Ask the team", "hybrid": 0}]),
-                patch.object(qwen, "_client", model_client),
-                patch.object(qwen, "_gate", qwen.Admission(qwen.CONFIG)),
+                patch.object(llm, "_client", model_client),
+                patch.object(llm, "_gate", llm.Admission(llm.CONFIG)),
                 patch.object(main.app.state, "graph", build_graph(InMemorySaver()), create=True),
             ):
                 db.init()
@@ -91,7 +91,7 @@ class SalesGraph(unittest.IsolatedAsyncioTestCase):
                                 output = reply.json()
                                 outputs.append(output)
                                 trace = next(t for t in output["traces"] if t["stage"] == "propose")
-                                self.assertIn(trace["source"], {"qwen", "gemma"})
+                                self.assertIn(trace["source"], {"gemini"})
                                 self.assertIn("request_ms", trace["timing"])
                                 self.assertNotIn("6%", output["text"])
                                 self.assertNotIn("$10,000", output["text"])

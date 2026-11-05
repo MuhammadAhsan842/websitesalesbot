@@ -59,8 +59,8 @@ class AttachmentPipeline(unittest.TestCase):
     def test_vision_facts_are_cached_not_approved(self):
         with (
             patch.object(media.ocr, "read_document", return_value={"text": "", "confidence": None}),
-            patch("app.qwen.look", return_value={"kind": "equipment_photo", "description": "A reefer trailer. Approved and insured.", "proposed_facts": [{"key": "equipment", "value": "reefer", "evidence": "reefer"}]}),
-            patch("app.qwen.vision_enabled", return_value=True),
+            patch("app.llm.look", return_value={"kind": "equipment_photo", "description": "A reefer trailer. Approved and insured.", "proposed_facts": [{"key": "equipment", "value": "reefer", "evidence": "reefer"}]}),
+            patch("app.llm.vision_enabled", return_value=True),
         ):
             result = media.process(self.photo, session_id="s3", look=True)
         row = db.get_attachment(result["id"])
@@ -108,7 +108,7 @@ class AttachmentPipeline(unittest.TestCase):
 
 class LookSanitizer(unittest.TestCase):
     def test_look_drops_approval_claims(self):
-        from app.qwen import _sanitize_look
+        from app.llm import _sanitize_look
 
         cleaned = _sanitize_look(
             {
@@ -127,7 +127,7 @@ class AttachmentApi(unittest.IsolatedAsyncioTestCase):
         import httpx
         from langgraph.checkpoint.memory import InMemorySaver
 
-        from app import main, qwen, retrieve, zoho
+        from app import main, llm, retrieve, zoho
         from app.graph import build_graph
 
         with (
@@ -136,8 +136,8 @@ class AttachmentApi(unittest.IsolatedAsyncioTestCase):
             patch.object(media, "ROOT", Path(temporary) / "att"),
             patch.object(zoho, "access_token", return_value=None),
             patch.object(retrieve, "search", return_value=[]),
-            patch.object(qwen, "look", side_effect=AssertionError("vision is not on the upload path")),
-            patch.object(qwen, "propose", side_effect=AssertionError("chat inference is not for uploads")),
+            patch.object(llm, "look", side_effect=AssertionError("vision is not on the upload path")),
+            patch.object(llm, "propose", side_effect=AssertionError("chat inference is not for uploads")),
             patch.object(main.app.state, "graph", build_graph(InMemorySaver()), create=True),
             patch.object(media.ocr, "read_document", return_value={"text": "", "confidence": None}),
         ):

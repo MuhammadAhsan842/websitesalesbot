@@ -1,4 +1,4 @@
-"""One bounded local model invocation per accepted turn. The model cannot execute."""
+"""Gemini chat proposal per accepted turn. The model cannot execute."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from typing import Any
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-# Load .env before router/settings so QWEN_MODEL and timeouts stick even if
+# Load .env before router/settings so Gemini/timeouts stick even if
 # another module has not imported dotenv yet.
 _ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 if _ENV_PATH.exists():
@@ -33,7 +33,7 @@ from app import router
 from app.cpu import default_threads
 from app.schema import ANSWER_TOPICS, CATALOGUE, FACT_KEYS, INTENTS, MOVES, VARIANTS
 
-log = logging.getLogger("ayyan.qwen")
+log = logging.getLogger("ayyan.llm")
 
 
 def _integer(name: str, default: int, minimum: int, maximum: int) -> int:
@@ -45,7 +45,7 @@ def _integer(name: str, default: int, minimum: int, maximum: int) -> int:
 
 @dataclass(frozen=True)
 class Settings:
-    model: str = "qwen3.5:0.8b"
+    model: str = "gemini-3.5-flash-lite"
     url: str = "http://127.0.0.1:11434"
     threads: int = 4
     context: int = 2048
@@ -60,33 +60,32 @@ class Settings:
     @classmethod
     def from_env(cls) -> Settings:
         return cls(
-            model=os.getenv("QWEN_MODEL", "qwen3.5:0.8b"),
+            model=os.getenv("GEMINI_CHAT_MODEL", os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")),
             url=os.getenv("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/"),
-            threads=_integer("QWEN_NUM_THREAD", default_threads(), 1, 1024),
-            context=_integer("QWEN_NUM_CTX", 2048, 1024, 131072),
-            output=_integer("QWEN_NUM_PREDICT", 384, 64, 2048),
-            parallel=_integer("QWEN_MAX_INFLIGHT", 1, 1, 16),
-            max_waiting=_integer("QWEN_MAX_WAITING", 8, 0, 1024),
-            queue_timeout=_integer("QWEN_QUEUE_TIMEOUT_SEC", 15, 1, 300),
-            request_timeout=_integer("QWEN_TIMEOUT_SEC", 90, 1, 600),
-            keep_alive=os.getenv("QWEN_KEEP_ALIVE", "30m"),
-            num_gpu=_integer("QWEN_NUM_GPU", -1, -1, 1024),
+            threads=_integer("LLM_NUM_THREAD", default_threads(), 1, 1024),
+            context=_integer("LLM_NUM_CTX", 2048, 1024, 131072),
+            output=_integer("LLM_MAX_OUTPUT", 384, 64, 2048),
+            parallel=_integer("LLM_MAX_INFLIGHT", 1, 1, 16),
+            max_waiting=_integer("LLM_MAX_WAITING", 8, 0, 1024),
+            queue_timeout=_integer("LLM_QUEUE_TIMEOUT_SEC", 15, 1, 300),
+            request_timeout=_integer("LLM_TIMEOUT_SEC", 90, 1, 600),
+            keep_alive=os.getenv("OLLAMA_KEEP_ALIVE", "30m"),
+            num_gpu=_integer("OLLAMA_NUM_GPU", -1, -1, 1024),
         )
 
 
 CONFIG = Settings.from_env()
 MODEL = CONFIG.model
-GEMMA_MODEL = router.GEMMA_MODEL
 OLLAMA = CONFIG.url
 _client: httpx.AsyncClient | None = None
 ready = False
-gemma_ready = False
+gemma_ready = False  # legacy flag; always False (Gemini-only chat)
 vision_ready = False
 last_error: str | None = None
-last_route: dict = {"model": MODEL, "family": "qwen", "reason": "default"}
+last_route: dict = {"model": MODEL, "family": "gemini", "reason": "default"}
 _installed: set[str] = set()
 _look_lock = threading.Lock()
-VISION_MODEL = os.getenv("QWEN_VISION_MODEL", MODEL)
+VISION_MODEL = os.getenv("OLLAMA_VISION_MODEL", "").strip()
 LOOK_SCHEMA = {
     "type": "object",
     "properties": {
@@ -109,7 +108,7 @@ LOOK_SCHEMA = {
 
 
 class InferenceBusy(RuntimeError):
-    """Turn was not accepted for inference; retry rather than silently skipping Qwen."""
+    """Turn was not accepted for inference; retry rather than silently skipping."""
 
 
 class Admission:
@@ -122,7 +121,7 @@ class Admission:
     @asynccontextmanager
     async def enter(self):
         if self.pending >= self.settings.parallel + self.settings.max_waiting:
-            raise InferenceBusy("Qwen queue is full")
+            raise InferenceBusy("LLM queue is full")
         self.pending += 1
         acquired = False
         started = perf_counter()
@@ -131,7 +130,7 @@ class Admission:
                 await asyncio.wait_for(self.slots.acquire(), self.settings.queue_timeout)
                 acquired = True
             except TimeoutError as exc:
-                raise InferenceBusy("Qwen queue wait expired") from exc
+                raise InferenceBusy("LLM queue wait expired") from exc
             self.active += 1
             yield (perf_counter() - started) * 1000
         finally:
@@ -281,7 +280,7 @@ def parse_content(content: str) -> Proposal:
 
 
 def think_enabled() -> bool:
-    return os.getenv("QWEN_THINK", "").strip().lower() in {"1", "true", "yes", "on"}
+    return False  # Gemini path does not use local think tokens
 
 
 SYSTEM_BASE = """Ayyan Group AI sales assistant. Human, warm, clear — like a sharp ops person, not a script bot. JSON only.
@@ -297,14 +296,17 @@ Rules:
 - Success = accurate progress (clear no, honest blocker, respected pause, clarified concern) — not pushing every driver to sign.
 - next_question_id is the question inside wording, or null. conversation_move: acknowledge|answer|clarify|qualify|explain_objection|offer_handoff|pause.
 - Use approved_info for fees/docs/support. Never invent percents, paydays, load offers, emails, or approvals.
-- Equipment catalog only: box 24/26/28 ft; hotshot 30/40 ft; dry van/reefer/flatbed/step deck 48/53 ft; power only. Any other type or non-catalog length => out of scope; stop qualifying that vehicle. Sprinter/cargo van => don't dispatch. If they also name a supported truck, switch to it without replaying the greeting.
+- Equipment catalog only: box 24/26/28 ft; hotshot 30/40 ft; dry van/reefer/flatbed/step deck 48/53 ft; power only. Supported type with unknown length => ask length only (never refuse, never list the catalog as a rejection). Non-catalog type or wrong length after length is known => out of scope. Sprinter/cargo van => don't dispatch. If they also name a supported truck, switch to it without replaying the greeting.
+- Exactly one length question, equipment-specific (e.g. "What length is your reefer trailer?"). Never pair it with a second generic "What length trailer or box…" line.
+- After own-MC start date is saved, do not ask for email. Confirm the setup review and document checklist once — never invent contact collection.
+- startDate answers: accept tomorrow / common typos (tommorow). Soft-confirm; do not re-ask the full start question when the intent is clear.
 - Never overwrite a stated truck/length with a different catalog item. Never invent binder/strap/lift-gate details unless they ask or that equipment needs them.
 - Operating mode is OTR or local only — never offer regional.
-- Own-MC path (mcOwnership=own_mc): after own MC ask authority age, then OTR/local. Local → miles/day → Monday–Friday → start date. OTR → Monday–Friday → start date. Never ask insurance/coverage, stay-out duration, city/ZIP, or operating area on own-MC qualify. COI stays in the document packet, not as a chat questionnaire. After start date, open the setup review and list docs — do not re-ask city.
+- Own-MC path (mcOwnership=own_mc): after own MC ask authority age, then OTR/local. Local → miles/day → Monday–Friday → start date. OTR → start date only (never miles/day, Monday–Friday, stay-out, or hours). Never ask insurance/coverage, stay-out duration, city/ZIP, or operating area on own-MC qualify. COI stays in the document packet, not as a chat questionnaire. After start date, open the setup review and list docs — do not re-ask city. A Monday–Friday answer must not change OTR into local.
 - Lease-on path: after lease-on, ask insurance; if own insurance, ask coverage types before OTR/local. Local → miles → weekday → city/ZIP; OTR → stay-out duration. If they need insurance, do not demand an existing COI — route insurance review to onboarding.
 - Load-options asks on own-MC: do not collect city/ZIP. Route to the onboarding/dispatch team to review setup and discuss loads.
 - Exactly one information request per wording. Prefer replacing a wrong question over appending a second one. Period-ended interrogatives still count as questions.
-- Fee answers: when arrangement is known, quote the approved schedule or say the manager must confirm — never invent a percent. Negotiation → onboarding manager review (not "best-fitting price"). "What do you need to start / which papers" is a docs question, not a fee question — answer with the document list.
+- Fee answers: when arrangement is known, quote the approved schedule from approved_info (own-MC by truck: flatbed/reefer/dry van/step deck 5%; box truck/hotshot 8%) or say the manager must confirm — never invent a percent. Negotiation → onboarding manager review (not "best-fitting price"). "What do you need to start / which papers" is a docs question, not a fee question — answer with the document list.
 - "Talk to onboarding manager" / human → request handoff; do not claim a manager is already on the chat until staff accepts.
 - Callback answers (number, time, timezone) must not change equipment or length. Keep starting city separate from timezone city.
 - Stated insurance ≠ verified. Upload saved ≠ approved. Ready to start ≠ cleared to dispatch. Temporary tag needs human review.
@@ -321,18 +323,11 @@ Rules:
 
 
 def system_prompt(*, think: bool | None = None) -> str:
-    use_think = think_enabled() if think is None else bool(think)
-    if use_think:
-        return (
-            SYSTEM_BASE
-            + "\nThinking is on: reason privately about pending question, saved facts, and policy before answering. "
-            "Put the customer-facing reply only in wording JSON — never dump chain-of-thought into wording."
-        )
-    return SYSTEM_BASE + "\n/no_think"
+    """System message for Gemini propose turns."""
+    return SYSTEM_BASE
 
 
-# Backward-compatible alias (tests / callers that read SYSTEM at import time get no-think default).
-SYSTEM = SYSTEM_BASE + "\n/no_think"
+SYSTEM = SYSTEM_BASE
 
 
 def request_payload(
@@ -400,7 +395,7 @@ def request_payload(
         "options": {
             "temperature": 0.2,
             "num_predict": predict,
-            # Respect QWEN_NUM_CTX — forcing 3072+ on CPU RAM thrashing made browser turns 60–120s.
+            # Keep context bounded for optional local vision tooling.
             "num_ctx": cfg.context,
             "num_thread": cfg.threads,
             **({"num_gpu": cfg.num_gpu} if cfg.num_gpu >= 0 else {}),
@@ -438,10 +433,8 @@ def status() -> dict:
         "waiting": _gate.pending - _gate.active,
         "max_waiting": CONFIG.max_waiting,
         "router": router.mode(),
-        "qwen_model": MODEL,
-        "think": think_enabled(),
-        "gemma_model": GEMMA_MODEL,
-        "gemma_ready": gemma_ready,
+        "chat_model": MODEL,
+        "think": False,
         "gemini_configured": gemini.is_configured(),
         "gemini_model": gemini.chat_model(),
         "vision_ready": vision_ready,
@@ -453,7 +446,7 @@ def status() -> dict:
 
 
 def vision_enabled() -> bool:
-    return os.getenv("QWEN_VISION", "off").strip().lower() not in {"off", "none", "0", ""} and vision_ready
+    return bool(VISION_MODEL) and os.getenv("OLLAMA_VISION", "off").strip().lower() not in {"off", "none", "0", ""} and vision_ready
 
 
 def _sanitize_look(raw: dict) -> dict:
@@ -520,7 +513,12 @@ def look(path: str, kind: str = "photo") -> dict:
 
 
 async def refresh_installed() -> set[str]:
+    """Optional Ollama tag refresh for background vision only — never used for chat."""
     global _installed, gemma_ready, vision_ready
+    gemma_ready = False
+    vision_ready = False
+    if not VISION_MODEL:
+        return _installed
     try:
         response = await client().get(f"{OLLAMA}/api/tags")
         response.raise_for_status()
@@ -528,9 +526,9 @@ async def refresh_installed() -> set[str]:
         _installed = {name for name in names if isinstance(name, str)}
     except (httpx.HTTPError, ValueError, TypeError):
         _installed = set(_installed)
-    gemma_ready = GEMMA_MODEL in _installed or any(name.startswith("gemma4:e2b") for name in _installed)
-    vision_ready = False
-    target = VISION_MODEL if VISION_MODEL in _installed or any(name.startswith(str(VISION_MODEL).split(":")[0]) for name in _installed) else None
+    target = VISION_MODEL if VISION_MODEL in _installed or any(
+        name.startswith(str(VISION_MODEL).split(":")[0]) for name in _installed
+    ) else None
     if target:
         try:
             shown = await client().post(f"{OLLAMA}/api/show", json={"name": VISION_MODEL})
@@ -558,74 +556,28 @@ async def _infer(
 ) -> dict[str, Any]:
     global last_error, ready
     started = perf_counter()
-    if family == "gemini":
-        from app import gemini
-        raw_proposal = await gemini.propose(
-            user_text=user_text,
-            facts=facts,
-            conversation_state=conversation_state,
-            memory=memory,
-            examples=examples,
-            recent=recent,
-            approved=approved,
-            system_prompt=SYSTEM,
-        )
-        parsed = Proposal.model_validate(_sanitize(raw_proposal))
-        result = parsed.model_dump()
-        for fact in result["facts"]:
-            fact["status"] = "user_stated"
-        timing = {"queue_ms": round(queue_ms, 2), "request_ms": round((perf_counter() - started) * 1000, 2)}
-        result.update(_source=family, _model=model, _timing=timing, _thinking=None, _think=False)
-        last_error = None
-        ready = True
-        log.info("%s timing %s", family, timing)
-        return result
-
-    response = await client().post(
-        f"{OLLAMA}/api/chat",
-        json=request_payload(
-            user_text,
-            facts,
-            conversation_state,
-            memory=memory,
-            examples=examples,
-            model=model,
-            recent=recent,
-            approved=approved,
-            think=think,
-        ),
+    if family != "gemini":
+        raise ValueError("chat inference is Gemini-only")
+    from app import gemini
+    raw_proposal = await gemini.propose(
+        user_text=user_text,
+        facts=facts,
+        conversation_state=conversation_state,
+        memory=memory,
+        examples=examples,
+        recent=recent,
+        approved=approved,
+        system_prompt=SYSTEM,
     )
-    response.raise_for_status()
-    body = response.json()
-    if body.get("done_reason") == "length":
-        raise ValueError("model output truncated; increase QWEN_NUM_PREDICT")
-    message = body.get("message") or {}
-    content = (message.get("content") or "").strip()
-    thinking_text = (message.get("thinking") or "").strip()
-    if not content:
-        # Qwen 3.5 may put JSON in thinking when think mode is on or slips through.
-        if thinking_text.startswith("{") or '"intent"' in thinking_text:
-            start = thinking_text.find("{")
-            end = thinking_text.rfind("}")
-            content = thinking_text[start : end + 1] if start >= 0 and end > start else thinking_text
-    if not content:
-        raise ValueError("model returned empty content")
-    parsed = parse_content(content)
+    parsed = Proposal.model_validate(_sanitize(raw_proposal))
     result = parsed.model_dump()
     for fact in result["facts"]:
         fact["status"] = "user_stated"
     timing = {"queue_ms": round(queue_ms, 2), "request_ms": round((perf_counter() - started) * 1000, 2)}
-    for key in ("load_duration", "prompt_eval_duration", "eval_duration", "total_duration"):
-        value = body.get(key)
-        if isinstance(value, (int, float)):
-            timing[key.replace("_duration", "_ms")] = round(value / 1_000_000, 2)
-    for key in ("prompt_eval_count", "eval_count"):
-        if isinstance(body.get(key), int):
-            timing[key] = body[key]
-    result.update(_source=family, _model=model, _timing=timing, _thinking=thinking_text or None, _think=think_enabled())
+    result.update(_source="gemini", _model=model, _timing=timing, _thinking=None, _think=False)
     last_error = None
     ready = True
-    log.info("%s timing %s", family, timing)
+    log.info("gemini timing %s", timing)
     return result
 
 
@@ -643,13 +595,18 @@ async def propose(
     think: bool | None = None,
 ) -> dict[str, Any]:
     global last_error, ready, last_route
-    choice = router.pick(user_text, intent, repair, memory, gemma_ready=gemma_ready)
+    choice = router.pick(user_text, intent, repair, memory, gemma_ready=False)
     last_route = choice
+    if choice.get("family") != "gemini":
+        last_error = "gemini_required"
+        ready = False
+        log.warning("non-gemini route blocked: %s", choice)
+        return {}
     async with _gate.enter() as queue_ms:
         try:
             return await _infer(
                 choice["model"],
-                choice["family"],
+                "gemini",
                 user_text,
                 facts,
                 conversation_state,
@@ -658,89 +615,29 @@ async def propose(
                 queue_ms,
                 recent,
                 approved,
-                think=think,
+                think=False,
             )
         except (httpx.HTTPError, ValidationError, ValueError, TypeError, AttributeError) as first:
-            # Optional Qwen failover. Gemini-only mode: GEMINI_FAILOVER_QWEN=0 (default when router=gemini).
-            allow_qwen_failover = os.getenv("GEMINI_FAILOVER_QWEN", "0" if router.mode() == "gemini" else "1").strip().lower() in {
-                "1",
-                "true",
-                "yes",
-                "on",
-            }
-            if (
-                allow_qwen_failover
-                and choice["family"] in {"gemma", "gemini"}
-                and MODEL != choice["model"]
-            ):
-                try:
-                    result = await _infer(
-                        MODEL,
-                        "qwen",
-                        user_text,
-                        facts,
-                        conversation_state,
-                        memory,
-                        examples,
-                        queue_ms,
-                        recent,
-                        approved,
-                        think=think,
-                    )
-                    last_route = {"model": MODEL, "family": "qwen", "reason": f"{choice['family']}_failover_qwen"}
-                    return result
-                except (httpx.HTTPError, ValidationError, ValueError, TypeError, AttributeError):
-                    pass
-            last_error = f"{choice['family']}_timeout" if isinstance(first, httpx.TimeoutException) else f"{choice['family']}_request_or_schema_failed"
+            last_error = "gemini_timeout" if isinstance(first, httpx.TimeoutException) else "gemini_request_or_schema_failed"
             ready = False
-            log.warning(
-                "inference failed for %s (no qwen failover); transport, timeout, or invalid output",
-                choice["family"],
-            )
+            log.warning("gemini inference failed; transport, timeout, or invalid output")
             return {}
 
 
 async def warmup() -> None:
     global ready, last_error, gemma_ready
-    await refresh_installed()
-    # Warmup stays fast — do not enable thinking here even when QWEN_THINK=1.
-    if router.mode() == "gemini":
-        from app import gemini
-        if gemini.is_configured():
-            result = await propose("I need dispatch", {}, "understand_request", intent="dispatch_inquiry", think=False)
-            if result and last_route.get("family") == "gemini":
-                log.info("gemini ready: %s", gemini.chat_model())
-                ready = True
-                return
-            else:
-                log.warning("gemini warmup failed: %s", last_error)
-                return
-    if router.mode() == "gemma":
-        result = await propose(
-            "I need dispatch", {}, "understand_request", intent="dispatch_inquiry", think=False
-        )
-        if result and last_route.get("family") == "gemma":
-            log.info("gemma ready: %s; cpu threads=%s", GEMMA_MODEL, CONFIG.threads)
-        else:
-            log.warning("gemma warmup failed: %s", last_error)
-        return
-    result = await propose(
-        "I need dispatch", {}, "understand_request", intent="dispatch_inquiry", think=False
-    )
-    if result:
-        log.info("primary ready: %s; cpu threads=%s; think_live=%s", MODEL, CONFIG.threads, think_enabled())
-    else:
-        log.warning("primary warmup failed: %s", last_error)
-        return
-    if not gemma_ready:
-        return
-    qwen_ready, qwen_error = ready, last_error
-    gemma = await propose(
-        "I don't want to sign for nothing", {}, "understand_request", intent="commit", think=False
-    )
-    if gemma and last_route.get("family") == "gemma":
-        log.info("gemma warmup ok: %s", GEMMA_MODEL)
-        return
-    ready, last_error = qwen_ready, qwen_error
     gemma_ready = False
-    log.warning("gemma warmup failed; routing stays on %s", MODEL)
+    await refresh_installed()
+    from app import gemini
+    if not gemini.is_configured():
+        ready = False
+        last_error = "gemini_not_configured"
+        log.warning("gemini warmup skipped: API key missing")
+        return
+    result = await propose("I need dispatch", {}, "understand_request", intent="dispatch_inquiry", think=False)
+    if result and last_route.get("family") == "gemini":
+        log.info("gemini ready: %s", gemini.chat_model())
+        ready = True
+        return
+    log.warning("gemini warmup failed: %s", last_error)
+    ready = False

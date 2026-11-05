@@ -164,7 +164,7 @@ QUESTIONS = {
         "What number should our onboarding manager call? Please include the country code if you have one, "
         "plus a preferred time and timezone."
     ),
-    "trailerLength": "What length trailer or box are you running?",
+    "trailerLength": "What length is your trailer?",
     "payload": "What payload do you need to haul?",
     "liftgate": "Do you need a liftgate?",
     "operatingMode": "Do you prefer OTR or staying local?",
@@ -182,7 +182,7 @@ CHIPS = {
     "primaryProblem": ["Better loads", "Home every night", "Paperwork", "Rates"],
     "mcOwnership": ["I have my own MC", "I want to lease on", "Not sure about my MC"],
     "fleetSize": ["1 truck", "2 trucks", "3 trucks", "I don't know yet"],
-    "startDate": ["Next week", "I don't know yet"],
+    "startDate": ["Tomorrow", "Next week", "I don't know yet"],
     "supportNeed": ["Home every night", "Paperwork", "Keep me loaded"],
     "deadline": ["Monday", "Next week", "I don't know yet"],
     "liftgate": ["Liftgate yes", "No liftgate"],
@@ -235,6 +235,9 @@ CHIP_VALUES: dict[str, dict] = {
     "500-600": {"milesPerDay": "500-600"},
     "otr": {"operatingMode": "otr"},
     "local work": {"operatingMode": "local"},
+    "tomorrow": {"startDate": "tomorrow"},
+    "tommorow": {"startDate": "tomorrow"},
+    "next week": {"startDate": "next week"},
     "i have my own insurance": {"insurance": "own_insurance"},
     "yes, i have insurance": {"insurance": "own_insurance"},
     "yes i have insurance": {"insurance": "own_insurance"},

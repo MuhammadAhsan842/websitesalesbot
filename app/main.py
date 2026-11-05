@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from pydantic import BaseModel
 
-from app import db, docworker, embed, entities, examples, fees, ingest, media, playbook, qwen, requirements, retrieve, second_pass, vision, workflows, zoho, voice
+from app import db, docworker, embed, entities, examples, fees, ingest, media, playbook, llm, requirements, retrieve, second_pass, vision, workflows, zoho, voice
 from app.graph import _chips, build_graph
 from app.knowledge import EQUIP_KEYS, lookup
 from app.schema import CHIPS, STAFF_ACTS, chip_options
@@ -88,7 +88,8 @@ async def lifespan(app: FastAPI):
         # Warm the chat model before accepting turns — background warmup used to hold the
         # single CPU slot while the UI already sent /v1/turn, causing 60–120s hangs then 503.
         await asyncio.to_thread(ingest.seed_reviewed_bank)
-        await qwen.warmup()
+        await asyncio.to_thread(fees.ensure_own_mc_equipment_schedule)
+        await llm.warmup()
 
         async def boot_index():
             # Embeddings use EMBED_URL (nomic-embed-text), never the chat process. Skip unchanged hashes.
@@ -102,7 +103,7 @@ async def lifespan(app: FastAPI):
         finally:
             boot_task.cancel()
             await asyncio.gather(boot_task, return_exceptions=True)
-            await qwen.close()
+            await llm.close()
 
 
 app = FastAPI(title="Ayyan sales assistant", lifespan=lifespan)
@@ -110,8 +111,8 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 app.include_router(voice.router)
 
 
-@app.exception_handler(qwen.InferenceBusy)
-async def inference_busy(request: Request, exc: qwen.InferenceBusy):
+@app.exception_handler(llm.InferenceBusy)
+async def inference_busy(request: Request, exc: llm.InferenceBusy):
     return JSONResponse(status_code=503, headers={"Retry-After": "2"}, content={"detail": str(exc)})
 
 
@@ -126,20 +127,20 @@ def health():
     reviewed = second_pass.reviewed_count()
     return {
         "ok": True,
-        "model": (qwen.last_route or {}).get("model") or qwen.MODEL,
-        "qwen_ready": qwen.ready,
-        "gemma_ready": qwen.gemma_ready,
-        "qwen_error": qwen.last_error,
-        "last_route": qwen.last_route,
-        "qwen_runtime": qwen.status(),
+        "model": (llm.last_route or {}).get("model") or llm.MODEL,
+        "llm_ready": llm.ready,
+        "gemma_ready": llm.gemma_ready,
+        "llm_error": llm.last_error,
+        "last_route": llm.last_route,
+        "llm_runtime": llm.status(),
         "gemini": __import__("app.gemini", fromlist=["status"]).status(),
         "retrieve": retrieve.status(),
         "embed": embed.status(),
         "image_embed": vision.status(),
         "vision": {
-            "ready": qwen.vision_ready,
-            "enabled": qwen.vision_enabled(),
-            "model": qwen.VISION_MODEL,
+            "ready": llm.vision_ready,
+            "enabled": llm.vision_enabled(),
+            "model": llm.VISION_MODEL,
         },
         "hard_turns": n,
         "hard_turns_reviewed": reviewed,

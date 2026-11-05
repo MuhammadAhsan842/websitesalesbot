@@ -162,11 +162,11 @@ async def propose(
     model = chat_model()
     url = f"{BASE_URL}/models/{model}:generateContent?key={key}"
 
-    from app import qwen
-    from app.qwen import FACT_KEYS
+    from app import llm
+    from app.llm import FACT_KEYS
 
     if not system_prompt:
-        system_prompt = qwen.system_prompt(think=False)
+        system_prompt = llm.system_prompt(think=False)
 
     current = {
         k: rec.get("value")

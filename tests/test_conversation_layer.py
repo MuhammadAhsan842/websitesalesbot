@@ -10,7 +10,7 @@ from unittest.mock import patch
 import httpx
 from langgraph.checkpoint.memory import InMemorySaver
 
-from app import db, examples, graph, main, memory, playbook, qwen, retrieve, rules, variants, zoho
+from app import db, examples, graph, main, memory, playbook, llm, retrieve, rules, variants, zoho
 from app.graph import build_graph
 
 
@@ -158,17 +158,17 @@ class MovesAndWording(unittest.TestCase):
         self.assertEqual(variants.default_move("existing_customer", "leave_sales", None, None), "offer_handoff")
 
     def test_wording_with_bare_percent_is_dropped(self):
-        parsed = qwen.parse_content(json.dumps({"intent": "fee", "wording": "It's 8% today"}))
+        parsed = llm.parse_content(json.dumps({"intent": "fee", "wording": "It's 8% today"}))
         self.assertIsNone(parsed.wording)
-        parsed = qwen.parse_content(
+        parsed = llm.parse_content(
             json.dumps({"intent": "fee", "wording": "The published own-MC dispatch fee is 8% of gross."})
         )
         self.assertIn("8%", parsed.wording or "")
-        parsed = qwen.parse_content(json.dumps({"intent": "fee", "wording": "Own-MC path is on file"}))
+        parsed = llm.parse_content(json.dumps({"intent": "fee", "wording": "Own-MC path is on file"}))
         self.assertEqual(parsed.wording, "Own-MC path is on file")
 
-    def test_examples_and_last_blocker_reach_qwen_payload(self):
-        payload = qwen.request_payload(
+    def test_examples_and_last_blocker_reach_llm_payload(self):
+        payload = llm.request_payload(
             "My authority is ready",
             {},
             "discover_needs",
@@ -205,12 +205,12 @@ class SessionRestore(unittest.IsolatedAsyncioTestCase):
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as model_client:
             with (
                 tempfile.TemporaryDirectory() as temporary,
-                patch.dict(os.environ, {"MODEL_ROUTER": "qwen"}),
+                patch.dict(os.environ, {"MODEL_ROUTER": "gemini"}),
                 patch.object(db, "DB_PATH", Path(temporary) / "test.db"),
                 patch.object(zoho, "access_token", return_value=None),
                 patch.object(retrieve, "search", return_value=[]),
-                patch.object(qwen, "_client", model_client),
-                patch.object(qwen, "_gate", qwen.Admission(qwen.CONFIG)),
+                patch.object(llm, "_client", model_client),
+                patch.object(llm, "_gate", llm.Admission(llm.CONFIG)),
                 patch.object(main.app.state, "graph", build_graph(InMemorySaver()), create=True),
             ):
                 db.init()
@@ -270,9 +270,9 @@ class SessionRestore(unittest.IsolatedAsyncioTestCase):
 
 
 class MergeRepair(unittest.TestCase):
-    def test_qwen_cannot_promote_authority_ready_to_own_mc(self):
+    def test_model_cannot_promote_authority_ready_to_own_mc(self):
         ruled = rules.propose("My authority is ready", {}, None)
-        merged = graph._from_qwen(
+        merged = graph._from_model(
             {"intent": "mc", "facts": [{"key": "mcOwnership", "value": "own_mc"}], "action": "create_case", "task": "setup_packet"},
             ruled,
             "My authority is ready",

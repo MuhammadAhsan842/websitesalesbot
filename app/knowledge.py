@@ -48,7 +48,7 @@ REGISTER = {
     "lease": "Our onboarding manager reviews lease-on eligibility and the agreement. Asking to lease on isn't approval.",
     "mc_new": "A new or pending MC still needs a look — it isn't an automatic yes. Tell me if you'll keep that authority or need lease-on.",
     "docs_own": "For own-MC, onboarding usually asks for the MC authority sheet, W-9, certificate of insurance, and truck photos. A notice of assignment applies if you use factoring; a voided check applies where quick-pay or factoring requires it. Files here stay unverified until they look — they'll confirm the live list with the packet.",
-    "docs_review_pending": "Got it — your own-MC setup review is saved for onboarding (unverified, not approved yet). Nobody has accepted it from this chat. While that sits, I can still help with lanes, timing, or whatever else is on your mind.",
+    "docs_review_pending": "Got it — your own-MC setup review is saved for our onboarding manager to review. Would you prefer a callback? While that sits, I can still help with lanes, timing, or whatever else is on your mind.",
     "payment_methods_broker": "Brokers may pay standard (often multi-week), quick-pay (faster, with a broker deduction and usually a voided check with rate con and POD), or through factoring (NOA on file). Timing and any deduction come from that arrangement and your agreement — I won't invent a payday or percent from chat.",
     "docs_lease": "For lease-on, onboarding usually asks for licence, insurance listing the proper certificate holder, medical card, inspection, W-9, and the lease. They'll confirm the list when they review.",
     "docs_w9": "The W-9 is the taxpayer ID form. Onboarding checks the name, TIN, and signature. I can't confirm it's complete from chat, and I don't send a blank one from here.",
@@ -92,7 +92,7 @@ REGISTER = {
     "docs_lease_needs_insurance": "You’re asking for insurance to be arranged, so there isn’t an existing COI to provide yet. Onboarding typically starts with licence and registration for the quote review; evidence of coverage is needed once a policy is active.",
     "loads_after_onboarding": "Dispatch can look at freight after onboarding has the papers. I can't send load options from this chat.",
     "loads_route_team": "I can route your request to our team. They'll review your setup and discuss suitable load options with you — I won't collect a city or ZIP here or confirm a live load from chat.",
-    "own_mc_ready_brief": "Your own-MC setup review is with our onboarding manager. Nothing is approved from chat — they'll confirm the live document list with the packet.",
+    "own_mc_ready_brief": "Your own-MC setup review is with our onboarding manager. They'll confirm the live document list with the packet — nothing is approved from chat.",
     "missing_equipment": "I'll keep what you have today separate from anything you're still buying. A planned purchase isn't a truck on the road yet — what are you running right now?",
     "fuel_requirement": "If you need funding before pickup, that's a real blocker — different from faster pay after delivery. I won't invent a fuel program from chat; we should sort that with the team before calling you ready.",
     "deferred": "Starting later is fine — I'll stop pushing. Reach out when you're ready; I won't invent a follow-up schedule.",
@@ -102,9 +102,14 @@ REGISTER = {
     "privacy_boundary": "You're right—that was more than I needed to ask. I'm sorry for overstepping. You don't need to share that; I'll leave it there.",
     "apology_no_pitch": "I understand. You don't need to share that information — no pitch from me.",
     "voluntary_return": "Of course. What has changed, and what help are you looking for now?",
-    "handoff_requested": "I've saved your request for an onboarding manager. Nobody has accepted it yet — would you prefer a callback while you wait?",
+    "handoff_requested": "Your request is saved for our onboarding manager to review. Would you prefer a callback?",
     "ready_own_next": "Next step is an own-MC setup review. Onboarding typically needs the MC authority sheet, W-9, certificate of insurance, and truck photos — plus a notice of assignment if you factor, and a voided check where quick-pay or factoring requires it. Files here stay unverified until they look.",
-    "own_mc_review_saved": "I've saved an own-MC setup review for our onboarding manager. Nothing is approved yet — they'll confirm the document list when they send the packet.",
+    "own_mc_review_saved": (
+        "Your own-MC setup review is saved for our onboarding manager. "
+        "Please prepare the MC authority sheet, W-9, COI and truck photos. "
+        "An NOA applies if you use factoring; a voided check applies where the payment setup requires it. "
+        "The manager will review the documents and agreement with you."
+    ),
     "ready_lease_next": "Next step is a lease-on review. Onboarding typically needs licence, medical card, inspection, W-9, and the lease — nothing is approved from chat.",
     "ready_lease_needs_insurance": "You're ready to start, but insurance still needs to be arranged. Our onboarding manager needs to review that before you can be cleared to run. A COI is only needed once the applicable coverage is in place — nothing is approved from chat.",
     "mc_age_ask": "About how old is your MC or authority? Newer authorities still need an onboarding look — age alone isn't an automatic yes.",

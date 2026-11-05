@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 from langgraph.checkpoint.memory import InMemorySaver
-from app import db, examples, graph, main, qwen, retrieve, voice, zoho
+from app import db, examples, graph, main, llm, retrieve, voice, zoho
 
 
 class BrowserVoice(unittest.IsolatedAsyncioTestCase):
@@ -24,7 +24,7 @@ class BrowserVoice(unittest.IsolatedAsyncioTestCase):
         self.stack.enter_context(patch.object(zoho, 'access_token', return_value=None))
         self.stack.enter_context(patch.object(examples, 'search', return_value=[]))
         self.stack.enter_context(patch.object(retrieve, 'search', return_value=[]))
-        self.model = self.stack.enter_context(patch.object(qwen, 'propose', new=AsyncMock(return_value={
+        self.model = self.stack.enter_context(patch.object(llm, 'propose', new=AsyncMock(return_value={
             'intent': 'general', 'facts': [], 'action': 'none'})))
         self.stack.enter_context(patch.object(main.app.state, 'graph', graph.build_graph(InMemorySaver()), create=True))
         self.stack.enter_context(patch.dict(os.environ, {'VOICE_WORKER_SECRET': 's' * 40, 'VOICE_ENABLED': '0'}))

@@ -82,7 +82,7 @@ def summarize(text: str, out: dict) -> dict:
         "propose": pr.get("source"),
         "model": pr.get("model"),
         "wall_ms": out.get("_wall_ms"),
-        "qwen_timing": pr.get("timing") or {},
+        "llm_timing": pr.get("timing") or {},
         "intent": pr.get("intent"),
         "knowledge_keys": kn.get("keys"),
         "hybrid": kn.get("hybrid_rerank"),
@@ -123,7 +123,7 @@ def dump(title: str, rows: list[dict]) -> None:
             flush=True,
         )
         print(
-            "LATENCY: api_ms=%s qwen=%s" % (row["wall_ms"], row["qwen_timing"]),
+            "LATENCY: api_ms=%s llm=%s" % (row["wall_ms"], row["llm_timing"]),
             flush=True,
         )
         print(
@@ -145,7 +145,7 @@ def dump(title: str, rows: list[dict]) -> None:
 def main() -> None:
     health = json.load(urllib.request.urlopen(f"{API}/v1/health", timeout=10))
     print(
-        f"API {API} model={health.get('model')} qwen_ready={health.get('qwen_ready')}",
+        f"API {API} model={health.get('model')} llm_ready={health.get('llm_ready')}",
         flush=True,
     )
     for title, lines in SCENARIOS:

@@ -35,7 +35,7 @@ class OneQuestionFlow(unittest.TestCase):
         ask = playbook.next_ask(state, {"answered": answered})
         self.assertEqual(ask, "weekdaySchedule")
 
-    def test_own_mc_otr_asks_weekday_not_stay_out(self):
+    def test_own_mc_otr_asks_start_not_weekday_or_miles(self):
         state = facts(
             equipment="box_truck",
             trailerLength="26ft",
@@ -48,7 +48,8 @@ class OneQuestionFlow(unittest.TestCase):
             "equipment", "trailerLength", "mcOwnership", "authorityAgeMonths", "operatingMode",
         ]
         ask = playbook.next_ask(state, {"answered": answered})
-        self.assertEqual(ask, "weekdaySchedule")
+        self.assertEqual(ask, "startDate")
+        self.assertNotEqual(ask, "weekdaySchedule")
         self.assertNotEqual(ask, "stayOutDuration")
         self.assertNotEqual(ask, "milesPerDay")
 
@@ -98,6 +99,19 @@ class FeeAndHandoff(unittest.TestCase):
         self.assertNotRegex(line.lower(), r"\b6%\b")
         if "%" in line:
             self.assertIn("onboarding manager", line.lower())
+
+    def test_own_mc_fee_by_equipment(self):
+        flat = fees.live_quote("dispatch_service", equipment="flatbed")
+        box = fees.live_quote("dispatch_service", equipment="box_truck")
+        self.assertIn("5%", flat)
+        self.assertIn("flatbed", flat.lower())
+        self.assertIn("8%", box)
+        self.assertIn("box truck", box.lower())
+        for eq in ("reefer", "dry_van", "step_deck"):
+            self.assertIn("5%", fees.live_quote("dispatch_service", equipment=eq))
+        self.assertIn("8%", fees.live_quote("dispatch_service", equipment="hotshot"))
+        self.assertIn("5", fees.approved_percents())
+        self.assertIn("8", fees.approved_percents())
 
     def test_negotiation_does_not_adopt_counter_percent(self):
         text = "Can you do 6% instead?"

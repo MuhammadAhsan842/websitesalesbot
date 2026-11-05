@@ -128,7 +128,7 @@ def post(path: str, body: dict, timeout: int = 180) -> dict:
 def main() -> None:
     health = json.load(urllib.request.urlopen(f"{API}/v1/health", timeout=20))
     print(
-        f"API {API} model={health.get('model')} qwen_ready={health.get('qwen_ready')} runtime={health.get('qwen_runtime')}",
+        f"API {API} model={health.get('model')} llm_ready={health.get('llm_ready')} runtime={health.get('llm_runtime')}",
         flush=True,
     )
     failed = 0

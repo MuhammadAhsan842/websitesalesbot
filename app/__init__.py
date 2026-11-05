@@ -1,1 +1,1 @@
-# Ayyan sales assistant — conversation graph, tasks, SQLite, local Qwen.
+# Ayyan sales assistant — conversation graph, tasks, SQLite, local optional Ollama vision; chat is Gemini.

@@ -16,6 +16,55 @@ def fact_value(facts: dict, key: str):
     return item.get("value")
 
 
+def awaiting_catalog_length(facts: dict) -> bool:
+    """Supported length-gated type with no length yet — ask length; never refuse."""
+    from app.knowledge import EQUIPMENT_LENGTHS_FT, SUPPORTED_EQUIPMENT
+
+    eq = fact_value(facts, "equipment")
+    if not eq or eq not in SUPPORTED_EQUIPMENT:
+        return False
+    if eq not in EQUIPMENT_LENGTHS_FT:
+        return False
+    return not fact_value(facts, "trailerLength")
+
+
+def length_question(facts: dict) -> str:
+    """One equipment-specific length ask (never the generic + specific pair)."""
+    eq = fact_value(facts, "equipment")
+    if eq == "box_truck":
+        return "What length is the box — 24, 26, or 28 ft?"
+    if eq == "hotshot":
+        return "What length is your hotshot trailer — 30 or 40 ft?"
+    if eq == "reefer":
+        return "What length is your reefer trailer?"
+    if eq == "flatbed":
+        return "What length is your flatbed trailer?"
+    if eq == "dry_van":
+        return "What length is your dry van — 48 or 53 ft?"
+    if eq == "step_deck":
+        return "What length is your step deck — 48 or 53 ft?"
+    return QUESTIONS.get("trailerLength") or "What length trailer are you running?"
+
+
+def question_for(ask: str | None, facts: dict) -> str | None:
+    if ask == "trailerLength":
+        return length_question(facts)
+    return QUESTIONS.get(ask) if ask else None
+
+
+_OUT_OF_SCOPE_CLAIM = re.compile(
+    r"outside what we dispatch|outside our current service|don'?t provide dispatch|"
+    r"do not provide dispatch|that equipment is outside|we only serve box",
+    re.I,
+)
+
+_EMAIL_INVENT_ASK = re.compile(
+    r"best email|what(?:'s| is) (?:the )?best email|email (?:to|for) (?:send|the packet)|"
+    r"send the packet to|what email|your email address",
+    re.I,
+)
+
+
 def missing_core(facts: dict, memory: dict | None = None) -> list[str]:
     answered = set((memory or {}).get("answered") or [])
     constraint = (memory or {}).get("hard_constraint")
@@ -55,10 +104,10 @@ def missing_core(facts: dict, memory: dict | None = None) -> list[str]:
             continue
         if own:
             # Own-MC local: miles/day → Monday–Friday → start date.
-            # Own-MC OTR: Monday–Friday → start date (no stay-out / hours).
+            # Own-MC OTR: start date only (no miles / weekday / stay-out / hours).
             if key == "stayOutDuration":
                 continue
-            if mode == "otr" and key == "milesPerDay":
+            if mode == "otr" and key in {"milesPerDay", "weekdaySchedule"}:
                 continue
             if mode == "local" and key == "stayOutDuration":
                 continue
@@ -92,6 +141,9 @@ def next_ask(facts: dict, memory: dict | None = None, intent: str | None = None,
     mem = memory or {}
     if mem.get("follow_up") == "driver_initiates":
         return None
+    # Length gate beats a premature / model-invented out_of_scope flag.
+    if awaiting_catalog_length(facts):
+        return "trailerLength"
     if fact_value(facts, "equipmentSupport") == "out_of_scope":
         return None
     if mem.get("concern") in {
@@ -135,8 +187,10 @@ def next_ask(facts: dict, memory: dict | None = None, intent: str | None = None,
         missing = [key for key in missing if key not in {"supportNeed", "primaryProblem", "stayOutDuration"}]
     if mode == "otr":
         if own:
-            # Own-MC OTR still needs Monday–Friday; never stay-out or miles.
-            missing = [key for key in missing if key not in {"milesPerDay", "stayOutDuration"}]
+            # Own-MC OTR → start only; never miles, weekday, or stay-out.
+            missing = [
+                key for key in missing if key not in {"milesPerDay", "weekdaySchedule", "stayOutDuration"}
+            ]
         else:
             missing = [key for key in missing if key not in {"milesPerDay", "weekdaySchedule"}]
     # After own MC, authority maturity comes before OTR/local (no insurance questionnaire).
@@ -450,14 +504,18 @@ def _has_question(text: str) -> bool:
 # Model often asks without '?'. Count these as information requests for exclusivity checks.
 _INFO_REQUEST = re.compile(
     r"(?:"
-    r"what (?:kind|type|length|coverage|number|city|zip|papers|documents)|"
+    r"what (?:is the )?length|"
+    r"what (?:kind|type|coverage|number|city|zip|papers|documents)|"
+    r"length (?:of|is) your|"
+    r"what length|"
     r"do you (?:currently |still )?(?:have|prefer|need|want)|"
     r"are you (?:able|looking|running|interested)|"
     r"will you (?:run|be|need)|"
     r"when (?:would|do|can) you|"
     r"how (?:old|many|long|much)|"
     r"which (?:city|zip|papers|lanes)|"
-    r"about how (?:old|many)"
+    r"about how (?:old|many)|"
+    r"best email|email (?:to|for) send"
     r")[^.?\n]{0,120}[.!]?",
     re.I,
 )
@@ -468,6 +526,16 @@ _OWN_MC_FORBIDDEN_ASK = re.compile(
     r"help getting (insurance )?set up|need help getting (insurance )?set up|"
     r"what coverage|coverage (?:does|do) your policy|"
     r"city or zip|which city|starting from|heading out from|operating from|"
+    r"comfortable staying out|stay(?:ing)? out before"
+    r")",
+    re.I,
+)
+
+# Own-MC OTR must never surface these even if the model invents them.
+_OWN_MC_OTR_FORBIDDEN_ASK = re.compile(
+    r"(?:"
+    r"miles (?:can you cover|a day|per day)|how many miles|"
+    r"monday through friday|weekends (?:too|at home)|open to weekends|"
     r"comfortable staying out|stay(?:ing)? out before"
     r")",
     re.I,
@@ -703,27 +771,59 @@ def compose(
     if variant_text and variant_text.strip() == lookup("welcome").strip() and (mem.get("answered") or fact_value(facts, "equipment")):
         variant_text = None
 
-    unsupported = fact_value(facts, "equipmentSupport") == "out_of_scope"
-    if unsupported:
-        eq = fact_value(facts, "equipment")
-        length = fact_value(facts, "trailerLength")
-        from app.knowledge import EQUIPMENT_LENGTHS_FT, UNSUPPORTED_EQUIPMENT
+    # Supported type + unknown length → ask length. Never refuse / list catalog as a refusal.
+    if awaiting_catalog_length(facts):
+        unsupported = False
+        ask = "trailerLength"
+        if validated is not None:
+            validated = {**validated, "next_question_id": "trailerLength"}
+        if _OUT_OF_SCOPE_CLAIM.search(spoken or ""):
+            spoken = ""
+        if not spoken or _OUT_OF_SCOPE_CLAIM.search(spoken) or not _asks_about(spoken, "trailerLength"):
+            label = EQUIP_LABELS.get(str(fact_value(facts, "equipment") or ""), "truck")
+            spoken = f"Got it, {label}. {length_question(facts)}"
+    else:
+        unsupported = fact_value(facts, "equipmentSupport") == "out_of_scope"
+        if unsupported:
+            eq = fact_value(facts, "equipment")
+            length = fact_value(facts, "trailerLength")
+            from app.knowledge import EQUIPMENT_LENGTHS_FT, UNSUPPORTED_EQUIPMENT
 
-        if eq in UNSUPPORTED_EQUIPMENT:
-            refusal = lookup(EQUIP_KEYS.get(str(eq or ""), "equip_unsupported"))
-        elif eq == "box_truck" and length:
-            refusal = lookup("equip_box_truck_short")
-        elif eq in EQUIPMENT_LENGTHS_FT and length:
-            refusal = lookup("equip_length_mismatch")
-        else:
-            refusal = lookup(EQUIP_KEYS.get(str(eq or ""), "equip_unsupported"))
-        if not spoken or not re.search(
-            r"don'?t provide|do not provide|outside|not (in |within )?scope|don'?t dispatch|do not dispatch|"
-            r"only dispatch box trucks|24,\s*26,\s*or 28|catalog|outside our current service",
-            spoken,
-            re.I,
-        ):
-            spoken = refusal
+            if eq in UNSUPPORTED_EQUIPMENT:
+                refusal = lookup(EQUIP_KEYS.get(str(eq or ""), "equip_unsupported"))
+            elif eq == "box_truck" and length:
+                refusal = lookup("equip_box_truck_short")
+            elif eq in EQUIPMENT_LENGTHS_FT and length:
+                refusal = lookup("equip_length_mismatch")
+            else:
+                # Length-gated but somehow marked out without a mismatch length — ask length instead.
+                if eq in EQUIPMENT_LENGTHS_FT and not length:
+                    unsupported = False
+                    ask = "trailerLength"
+                    spoken = length_question(facts)
+                    refusal = None
+                else:
+                    refusal = lookup(EQUIP_KEYS.get(str(eq or ""), "equip_unsupported"))
+            if unsupported and refusal and (
+                not spoken
+                or not re.search(
+                    r"don'?t provide|do not provide|outside|not (in |within )?scope|don'?t dispatch|do not dispatch|"
+                    r"only dispatch box trucks|24,\s*26,\s*or 28|catalog|outside our current service",
+                    spoken,
+                    re.I,
+                )
+            ):
+                spoken = refusal
+
+    # Own-MC save always wins over model wording (prevents email invent + skipped checklist).
+    if (
+        saved
+        and arrangement == "dispatch_service"
+        and fact_value(facts, "equipmentSupport") != "out_of_scope"
+        and not awaiting_catalog_length(facts)
+    ):
+        parts[:] = [lookup("own_mc_review_saved")]
+        return " ".join(_dedupe(parts)), CHIPS["handoff"], summary
 
     # Boundary / closure concerns before free model wording.
     if not _is_reactivation(user_text):
@@ -812,14 +912,15 @@ def compose(
     ):
         parts.append(spoken)
         # One question only: replace a wrong/missing ask with the playbook question.
-        if ask and QUESTIONS.get(ask) and not unsupported and not _asks_about(" ".join(parts), ask):
+        q = question_for(ask, facts)
+        if ask and q and not unsupported and not _asks_about(" ".join(parts), ask):
             joined = " ".join(parts)
             if _has_question(joined):
                 # Drop the model question; keep a short ack lead-in when safe.
                 lead = re.split(r"[?]", joined, maxsplit=1)[0].strip().rstrip(".,;:")
-                parts[:] = ([f"{lead}."] if lead and len(lead) <= 140 else []) + [QUESTIONS[ask]]
+                parts[:] = ([f"{lead}."] if lead and len(lead) <= 140 else []) + [q]
             else:
-                parts.append(QUESTIONS[ask])
+                parts.append(q)
         # Never attach an onboarding receipt when the truck is out of scope.
         if receipt and not unsupported:
             parts.append(receipt)
@@ -998,16 +1099,9 @@ def compose(
         parts.append(receipt)
 
     if saved and fact_value(facts, "equipmentSupport") != "out_of_scope":
-        # One composition route: confirmation → one checklist → short disclaimer.
-        # Do not union catalog, dual docs lists, and model essays.
+        # One composition route: single own-MC checklist (also handled earlier for model path).
         if arrangement == "dispatch_service":
-            from app import requirements as reqmod
-
-            parts[:] = [
-                action_message or lookup("own_mc_review_saved"),
-                reqmod.customer_docs_sentence("setup_packet", facts),
-                "I don't send, sign, or approve from here — that's onboarding.",
-            ]
+            parts[:] = [lookup("own_mc_review_saved")]
             return " ".join(_dedupe(parts)), CHIPS["handoff"], summary
         if spoken and action_message:
             parts.append(spoken)
@@ -1047,7 +1141,7 @@ def compose(
     ):
         parts.append(lookup("insurance_assist_ack"))
 
-    question, ask = select_question(validated, parts)
+    question, ask = select_question(validated, parts, facts)
     if question:
         parts.append(question)
     elif not parts:
@@ -1063,16 +1157,20 @@ def action_confirmation(action_message: str | None, saved: bool) -> str | None:
     return action_message if allow_action_message(action_message, saved) else None
 
 
-def select_question(plan: dict, parts: list[str]) -> tuple[str | None, str | None]:
+def select_question(plan: dict, parts: list[str], facts: dict | None = None) -> tuple[str | None, str | None]:
     ask = (plan or {}).get("next_question_id")
-    if ask and QUESTIONS.get(ask) and not _has_question(" ".join(parts)):
-        return QUESTIONS[ask], ask
+    q = question_for(ask, facts or {})
+    if ask and q and not _has_question(" ".join(parts)):
+        return q, ask
     return None, ask
 
 
 _ASK_MARKERS = {
     "equipment": r"what type of truck|what are you running",
-    "trailerLength": r"what length|24,\s*26,\s*or 28|length trailer|length.*box",
+    "trailerLength": (
+        r"what (?:is the )?length|length (?:of|is) your|what length|"
+        r"24,\s*26,\s*or 28|length trailer|length.*(?:box|reefer|flatbed|van|hotshot|deck)"
+    ),
     "mcOwnership": r"own mc|lease on",
     "insurance": r"own insurance on the truck|have your own insurance",
     "coverageTypes": r"what coverage|commercial auto|cargo, or both",
@@ -1082,6 +1180,7 @@ _ASK_MARKERS = {
     "stayOutDuration": r"stay(?:ing)? out|comfortable staying out",
     "operatingArea": r"operating from|city or zip|which city",
     "weekdaySchedule": r"monday through friday|weekends at home|stay on the road monday",
+    "startDate": r"when would you like to start|when do you (?:want|need) to start|start timing",
     "phone": r"what number should|callback number|timezone|country code",
 }
 
@@ -1139,13 +1238,42 @@ def _ungrounded_equipment_claim(spoken: str, facts: dict) -> bool:
 
 
 def _ack_for_ask(facts: dict, ask: str | None) -> str:
+    """Acknowledge truck/length only on the turn that first advances off that fact.
+
+    Later qualify slots must not re-stamp "Got it — 48ft reefer" on every question.
+    """
     equip = fact_value(facts, "equipment")
     if not equip or ask == "equipment":
         return ""
     label = EQUIP_LABELS.get(str(equip), str(equip).replace("_", " "))
     length = fact_value(facts, "trailerLength")
-    focus = f"{length} {label}" if length else label
-    return f"Got it — {focus}. "
+    if ask == "trailerLength":
+        return f"Got it — {label}. "
+    if ask == "mcOwnership" and length:
+        return f"Got it, {length} {label}. "
+    if ask == "mcOwnership":
+        return f"Got it — {label}. "
+    return ""
+
+
+_STALE_EQUIP_ECHO = re.compile(
+    r"^\s*got it\s*[—\-–,.]?\s*"
+    r"(?:a\s+)?"
+    r"(?:\d+\s*-?\s*ft\s+)?"
+    r"(?:reefer|flatbed|box\s*truck|hotshot|dry\s*van|step\s*deck|power\s*only)"
+    r"[^.?!]*[.!]?\s*",
+    re.I,
+)
+
+
+def _strip_stale_equip_echo(spoken: str, ask: str | None, facts: dict) -> str:
+    """Drop repeated truck stamps once length is on file and we've moved past MC ownership."""
+    if ask in {None, "equipment", "trailerLength", "mcOwnership"}:
+        return spoken
+    if not fact_value(facts, "equipment") or not fact_value(facts, "trailerLength"):
+        return spoken
+    cleaned = _STALE_EQUIP_ECHO.sub("", spoken or "").strip()
+    return cleaned or spoken
 
 
 def _info_request_count(text: str) -> int:
@@ -1161,11 +1289,19 @@ def align_delivery(text: str, ask: str | None, facts: dict) -> tuple[str, str | 
     spoken = (text or "").strip()
     chips = _chips_for_ask(ask, facts) if ask else None
     own = fact_value(facts, "mcOwnership") == "own_mc"
+    otr = fact_value(facts, "operatingMode") == "otr"
 
     def _replace_with_canonical() -> str:
-        return (_ack_for_ask(facts, ask) + QUESTIONS[ask]).strip()
+        q = question_for(ask, facts) or ""
+        return (_ack_for_ask(facts, ask) + q).strip()
 
-    if ask and QUESTIONS.get(ask):
+    # Premature catalog refusal while length is still unknown — always one length ask.
+    if awaiting_catalog_length(facts):
+        ask = "trailerLength"
+        spoken = (_ack_for_ask(facts, "trailerLength") + length_question(facts)).strip()
+        return spoken, "trailerLength", list(_chips_for_ask("trailerLength", facts))
+
+    if ask and question_for(ask, facts):
         equip = fact_value(facts, "equipment")
         wrong_equip = bool(
             (str(equip) == "hotshot" and re.search(r"\bbox\s*truck\b", spoken, re.I))
@@ -1175,19 +1311,25 @@ def align_delivery(text: str, ask: str | None, facts: dict) -> tuple[str, str | 
         about = _asks_about(spoken, ask)
         extras = _info_request_count(spoken) > 1
         forbidden = own and bool(_OWN_MC_FORBIDDEN_ASK.search(spoken))
+        otr_polluted = own and otr and bool(_OWN_MC_OTR_FORBIDDEN_ASK.search(spoken))
+        email_invent = own and bool(_EMAIL_INVENT_ASK.search(spoken))
         # Insurance/city/stay-out must not ride along even when the age/OTR/start ask is present.
+        # Own-MC OTR: strip miles / Monday–Friday invents when start (or any) ask is pending.
         wrong_or_polluted = (
             not about
             or extras
             or forbidden
+            or otr_polluted
+            or email_invent
             or _POLLUTED_DELIVERY.search(spoken)
             or wrong_equip
             or invented
+            or (ask == "trailerLength" and _OUT_OF_SCOPE_CLAIM.search(spoken))
         )
         if wrong_or_polluted:
             spoken = _replace_with_canonical()
         elif not _has_question(spoken):
-            spoken = f"{spoken} {QUESTIONS[ask]}".strip()
+            spoken = f"{spoken} {question_for(ask, facts)}".strip()
         else:
             # Right slot only — keep first info request sentence + ensure canonical ask once.
             if not about or extras:
@@ -1195,12 +1337,30 @@ def align_delivery(text: str, ask: str | None, facts: dict) -> tuple[str, str | 
             else:
                 # Strip any second '?'-style ask; period hybrids already caught via extras.
                 spoken = re.sub(r"\?\s+.*\?", "?", spoken).strip()
-                if own and _OWN_MC_FORBIDDEN_ASK.search(spoken):
+                if extras or _info_request_count(spoken) > 1:
                     spoken = _replace_with_canonical()
+                if own and (
+                    _OWN_MC_FORBIDDEN_ASK.search(spoken)
+                    or (otr and _OWN_MC_OTR_FORBIDDEN_ASK.search(spoken))
+                    or _EMAIL_INVENT_ASK.search(spoken)
+                ):
+                    spoken = _replace_with_canonical()
+        spoken = _strip_stale_equip_echo(spoken, ask, facts)
+        # If stripping left only the question-less residue, restore canonical ask.
+        if ask and question_for(ask, facts) and not _asks_about(spoken, ask):
+            spoken = _replace_with_canonical()
         return spoken, ask, list(chips or _chips_for_ask(ask, facts))
 
     # No pending qualify question.
-    if own and (_OWN_MC_FORBIDDEN_ASK.search(spoken) or _CITY_ASK.search(spoken)):
+    if own and _EMAIL_INVENT_ASK.search(spoken):
+        spoken = lookup("own_mc_ready_brief")
+        return spoken, None, list(CHIPS["assess"] if not missing_core(facts) else CHIPS["handoff"])
+
+    if own and (
+        _OWN_MC_FORBIDDEN_ASK.search(spoken)
+        or _CITY_ASK.search(spoken)
+        or (otr and _OWN_MC_OTR_FORBIDDEN_ASK.search(spoken))
+    ):
         # Drop invented insurance/city asks after qualify is complete.
         if re.search(r"load|freight|dispatch", spoken, re.I):
             spoken = lookup("loads_route_team")
