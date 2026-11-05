@@ -299,9 +299,12 @@ Rules:
 - Use approved_info for fees/docs/support. Never invent percents, paydays, load offers, emails, or approvals.
 - Equipment catalog only: box 24/26/28 ft; hotshot 30/40 ft; dry van/reefer/flatbed/step deck 48/53 ft; power only. Any other type or non-catalog length => out of scope; stop qualifying that vehicle. Sprinter/cargo van => don't dispatch. If they also name a supported truck, switch to it without replaying the greeting.
 - Never overwrite a stated truck/length with a different catalog item. Never invent binder/strap/lift-gate details unless they ask or that equipment needs them.
-- Operating mode is OTR or local only — never offer regional. Local → miles/day → Monday–Friday availability → city/ZIP (one at a time). OTR → how long they can stay out.
-- After they confirm insurance, ask coverage types (auto / cargo / both) before lanes. If they need insurance, do not demand an existing COI — route insurance review to onboarding.
-- Fee answers: when arrangement is known, quote the approved schedule or say the manager must confirm — never pretend arrangement is unknown. Negotiation → onboarding manager review (not "best-fitting price").
+- Operating mode is OTR or local only — never offer regional.
+- Own-MC path (mcOwnership=own_mc): after own MC ask authority age, then OTR/local. Local → miles/day → Monday–Friday → start date. OTR → Monday–Friday → start date. Never ask insurance/coverage, stay-out duration, city/ZIP, or operating area on own-MC qualify. COI stays in the document packet, not as a chat questionnaire. After start date, open the setup review and list docs — do not re-ask city.
+- Lease-on path: after lease-on, ask insurance; if own insurance, ask coverage types before OTR/local. Local → miles → weekday → city/ZIP; OTR → stay-out duration. If they need insurance, do not demand an existing COI — route insurance review to onboarding.
+- Load-options asks on own-MC: do not collect city/ZIP. Route to the onboarding/dispatch team to review setup and discuss loads.
+- Exactly one information request per wording. Prefer replacing a wrong question over appending a second one. Period-ended interrogatives still count as questions.
+- Fee answers: when arrangement is known, quote the approved schedule or say the manager must confirm — never invent a percent. Negotiation → onboarding manager review (not "best-fitting price"). "What do you need to start / which papers" is a docs question, not a fee question — answer with the document list.
 - "Talk to onboarding manager" / human → request handoff; do not claim a manager is already on the chat until staff accepts.
 - Callback answers (number, time, timezone) must not change equipment or length. Keep starting city separate from timezone city.
 - Stated insurance ≠ verified. Upload saved ≠ approved. Ready to start ≠ cleared to dispatch. Temporary tag needs human review.
@@ -658,8 +661,18 @@ async def propose(
                 think=think,
             )
         except (httpx.HTTPError, ValidationError, ValueError, TypeError, AttributeError) as first:
-            # Fall over to Qwen when Gemma/Gemini failover is needed
-            if choice["family"] in {"gemma", "gemini"} and MODEL != choice["model"]:
+            # Optional Qwen failover. Gemini-only mode: GEMINI_FAILOVER_QWEN=0 (default when router=gemini).
+            allow_qwen_failover = os.getenv("GEMINI_FAILOVER_QWEN", "0" if router.mode() == "gemini" else "1").strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+            if (
+                allow_qwen_failover
+                and choice["family"] in {"gemma", "gemini"}
+                and MODEL != choice["model"]
+            ):
                 try:
                     result = await _infer(
                         MODEL,
@@ -680,7 +693,10 @@ async def propose(
                     pass
             last_error = f"{choice['family']}_timeout" if isinstance(first, httpx.TimeoutException) else f"{choice['family']}_request_or_schema_failed"
             ready = False
-            log.warning("inference failed for %s (transport, timeout, or invalid output)", choice["family"])
+            log.warning(
+                "inference failed for %s (no qwen failover); transport, timeout, or invalid output",
+                choice["family"],
+            )
             return {}
 
 

@@ -441,7 +441,42 @@ def deal_title(facts: dict, arrangement: str | None, *, task: str | None = None,
 
 
 def _has_question(text: str) -> bool:
-    return "?" in (text or "")
+    """True for '?' or period-ended interrogatives the model often emits."""
+    if "?" in (text or ""):
+        return True
+    return bool(_INFO_REQUEST.search(text or ""))
+
+
+# Model often asks without '?'. Count these as information requests for exclusivity checks.
+_INFO_REQUEST = re.compile(
+    r"(?:"
+    r"what (?:kind|type|length|coverage|number|city|zip|papers|documents)|"
+    r"do you (?:currently |still )?(?:have|prefer|need|want)|"
+    r"are you (?:able|looking|running|interested)|"
+    r"will you (?:run|be|need)|"
+    r"when (?:would|do|can) you|"
+    r"how (?:old|many|long|much)|"
+    r"which (?:city|zip|papers|lanes)|"
+    r"about how (?:old|many)"
+    r")[^.?\n]{0,120}[.!]?",
+    re.I,
+)
+
+_OWN_MC_FORBIDDEN_ASK = re.compile(
+    r"(?:"
+    r"own insurance|active commercial insurance|commercial auto|cargo insurance|"
+    r"help getting (insurance )?set up|need help getting (insurance )?set up|"
+    r"what coverage|coverage (?:does|do) your policy|"
+    r"city or zip|which city|starting from|heading out from|operating from|"
+    r"comfortable staying out|stay(?:ing)? out before"
+    r")",
+    re.I,
+)
+
+_CITY_ASK = re.compile(
+    r"city or zip|which city|starting from|heading out from|operating from|what (?:city|zip)",
+    re.I,
+)
 
 
 def _dedupe(parts: list[str]) -> list[str]:
@@ -651,6 +686,11 @@ def compose(
 
     def _covers(text: str, topic_list: list[str]) -> bool:
         low = (text or "").lower()
+        if "docs_status" in topic_list and not re.search(
+            r"w-?9|authority|certificate|\bcoi\b|document|paper|photo|noa|voided|packet",
+            low,
+        ):
+            return False
         if "dispatch_fee" in topic_list and not re.search(r"\bfee\b|percent|%|\bcharge\b", low):
             return False
         if "insurance" in topic_list and not re.search(r"insurance|cargo|liability|\bcoi\b|coverage", low):
@@ -720,13 +760,19 @@ def compose(
         return " ".join(_dedupe(parts)), CHIPS.get(ask) or CHIPS["default"], None
 
     if intent == "onboard" and arrangement in {"dispatch_service", "lease_on"} and not saved:
+        # Qualify already complete — short status only (no catalog / dual checklists).
+        if (
+            arrangement == "dispatch_service"
+            and fact_value(facts, "startDate")
+            and not missing_core(facts, mem)
+        ):
+            parts.append(lookup("own_mc_ready_brief"))
+            if receipt:
+                parts.append(receipt)
+            return " ".join(_dedupe(parts)), CHIPS["handoff"], summary
+        # One purpose: brief next step (ready_own_next already lists core docs).
         if arrangement == "dispatch_service":
-            from app import requirements as reqmod
-
             parts.append(lookup("ready_own_next"))
-            docs = reqmod.customer_docs_sentence("setup_packet", facts)
-            if docs and docs not in parts:
-                parts.append(docs)
         elif fact_value(facts, "insurance") == "needs_insurance":
             parts.append(lookup("ready_lease_needs_insurance"))
         else:
@@ -952,29 +998,32 @@ def compose(
         parts.append(receipt)
 
     if saved and fact_value(facts, "equipmentSupport") != "out_of_scope":
-        if spoken:
-            if not action_message:
-                parts.append(
-                    lookup("own_mc_review_saved")
-                    if arrangement == "dispatch_service"
-                    else "I've asked our onboarding manager to take this from here. They haven't approved anything yet."
-                )
-            if arrangement == "dispatch_service" and not any("authority sheet" in (p or "").lower() or "w-9" in (p or "").lower() for p in parts):
-                from app import requirements as reqmod
-
-                parts.append(reqmod.customer_docs_sentence("setup_packet", facts))
-            return " ".join(_dedupe(parts)), CHIPS["handoff"], summary
+        # One composition route: confirmation → one checklist → short disclaimer.
+        # Do not union catalog, dual docs lists, and model essays.
         if arrangement == "dispatch_service":
             from app import requirements as reqmod
 
-            parts.append(lookup("own_mc_review_saved"))
-            parts.append(reqmod.customer_docs_sentence("setup_packet", facts))
-        elif arrangement == "lease_on" and fact_value(facts, "insurance") == "needs_insurance":
+            parts[:] = [
+                action_message or lookup("own_mc_review_saved"),
+                reqmod.customer_docs_sentence("setup_packet", facts),
+                "I don't send, sign, or approve from here — that's onboarding.",
+            ]
+            return " ".join(_dedupe(parts)), CHIPS["handoff"], summary
+        if spoken and action_message:
+            parts.append(spoken)
+            parts.append(action_message)
+            return " ".join(_dedupe(parts)), CHIPS["handoff"], summary
+        if arrangement == "lease_on" and fact_value(facts, "insurance") == "needs_insurance":
             parts.append(lookup("docs_lease_needs_insurance"))
         elif arrangement == "lease_on":
             parts.append(lookup("docs_lease"))
         elif arrangement == "needs_clarification":
             parts.append("Onboarding will confirm own-MC vs lease-on before any packet goes out.")
+        else:
+            parts.append(
+                action_message
+                or "I've asked our onboarding manager to take this from here. They haven't approved anything yet."
+            )
         parts.append("I don't send, sign, or approve from here — that's onboarding.")
         return " ".join(_dedupe(parts)), CHIPS["handoff"], summary
     if saved and fact_value(facts, "equipmentSupport") == "out_of_scope":
@@ -1089,46 +1138,83 @@ def _ungrounded_equipment_claim(spoken: str, facts: dict) -> bool:
     return False
 
 
+def _ack_for_ask(facts: dict, ask: str | None) -> str:
+    equip = fact_value(facts, "equipment")
+    if not equip or ask == "equipment":
+        return ""
+    label = EQUIP_LABELS.get(str(equip), str(equip).replace("_", " "))
+    length = fact_value(facts, "trailerLength")
+    focus = f"{length} {label}" if length else label
+    return f"Got it — {focus}. "
+
+
+def _info_request_count(text: str) -> int:
+    return len(_INFO_REQUEST.findall(text or ""))
+
+
 def align_delivery(text: str, ask: str | None, facts: dict) -> tuple[str, str | None, list[str]]:
     """Force wording, pending question, and chips to agree before the customer sees them.
 
-    The selected qualify question replaces any model question — never append a second ask.
+    Every information request must map to the single permitted next field — presence of the
+    expected question is not enough if a forbidden or extra ask also appears.
     """
     spoken = (text or "").strip()
     chips = _chips_for_ask(ask, facts) if ask else None
+    own = fact_value(facts, "mcOwnership") == "own_mc"
+
+    def _replace_with_canonical() -> str:
+        return (_ack_for_ask(facts, ask) + QUESTIONS[ask]).strip()
+
     if ask and QUESTIONS.get(ask):
         equip = fact_value(facts, "equipment")
-        # Model sometimes swaps hotshot ↔ box truck while still naming the ask.
         wrong_equip = bool(
             (str(equip) == "hotshot" and re.search(r"\bbox\s*truck\b", spoken, re.I))
             or (str(equip) == "box_truck" and re.search(r"\bhotshot\b", spoken, re.I))
         )
         invented = _ungrounded_equipment_claim(spoken, facts)
+        about = _asks_about(spoken, ask)
+        extras = _info_request_count(spoken) > 1
+        forbidden = own and bool(_OWN_MC_FORBIDDEN_ASK.search(spoken))
+        # Insurance/city/stay-out must not ride along even when the age/OTR/start ask is present.
         wrong_or_polluted = (
-            not _asks_about(spoken, ask)
+            not about
+            or extras
+            or forbidden
             or _POLLUTED_DELIVERY.search(spoken)
             or wrong_equip
             or invented
-            or (_has_question(spoken) and not _asks_about(spoken, ask))
         )
         if wrong_or_polluted:
-            length = fact_value(facts, "trailerLength")
-            ack = ""
-            # Only acknowledge facts that are actually saved — never invent a truck.
-            # Always replace a wrong model question; never keep its question text as the ack.
-            if equip and ask != "equipment":
-                label = EQUIP_LABELS.get(str(equip), str(equip).replace("_", " "))
-                focus = f"{length} {label}" if length else label
-                ack = f"Got it — {focus}. "
-            spoken = (ack + QUESTIONS[ask]).strip()
+            spoken = _replace_with_canonical()
         elif not _has_question(spoken):
-            # No question yet — attach the canonical ask (still exactly one question).
             spoken = f"{spoken} {QUESTIONS[ask]}".strip()
         else:
-            # Model already asks the right slot — drop any trailing second question.
-            spoken = re.sub(r"\?\s+.*\?", "?", spoken).strip()
+            # Right slot only — keep first info request sentence + ensure canonical ask once.
+            if not about or extras:
+                spoken = _replace_with_canonical()
+            else:
+                # Strip any second '?'-style ask; period hybrids already caught via extras.
+                spoken = re.sub(r"\?\s+.*\?", "?", spoken).strip()
+                if own and _OWN_MC_FORBIDDEN_ASK.search(spoken):
+                    spoken = _replace_with_canonical()
         return spoken, ask, list(chips or _chips_for_ask(ask, facts))
-    # No pending question — strip stuck qualify loops.
+
+    # No pending qualify question.
+    if own and (_OWN_MC_FORBIDDEN_ASK.search(spoken) or _CITY_ASK.search(spoken)):
+        # Drop invented insurance/city asks after qualify is complete.
+        if re.search(r"load|freight|dispatch", spoken, re.I):
+            spoken = lookup("loads_route_team")
+        else:
+            equip = fact_value(facts, "equipment")
+            length = fact_value(facts, "trailerLength")
+            if equip:
+                label = EQUIP_LABELS.get(str(equip), str(equip).replace("_", " "))
+                focus = f"{length} {label}" if length else label
+                spoken = f"Got it — {focus} is on file. What else should we cover?"
+            else:
+                spoken = lookup("welcome")
+        return spoken, None, list(CHIPS["assess"] if not missing_core(facts) else CHIPS["default"])
+
     if re.search(r"fit already|future purchase|current setup|current mc status", spoken, re.I):
         equip = fact_value(facts, "equipment")
         length = fact_value(facts, "trailerLength")

@@ -91,6 +91,8 @@ REGISTER = {
     "insurance_quote_docs": "For that insurance quote review, the first documents required are usually your driver’s licence and truck registration — onboarding confirms the live list. A COI is only needed once coverage is in place.",
     "docs_lease_needs_insurance": "You’re asking for insurance to be arranged, so there isn’t an existing COI to provide yet. Onboarding typically starts with licence and registration for the quote review; evidence of coverage is needed once a policy is active.",
     "loads_after_onboarding": "Dispatch can look at freight after onboarding has the papers. I can't send load options from this chat.",
+    "loads_route_team": "I can route your request to our team. They'll review your setup and discuss suitable load options with you — I won't collect a city or ZIP here or confirm a live load from chat.",
+    "own_mc_ready_brief": "Your own-MC setup review is with our onboarding manager. Nothing is approved from chat — they'll confirm the live document list with the packet.",
     "missing_equipment": "I'll keep what you have today separate from anything you're still buying. A planned purchase isn't a truck on the road yet — what are you running right now?",
     "fuel_requirement": "If you need funding before pickup, that's a real blocker — different from faster pay after delivery. I won't invent a fuel program from chat; we should sort that with the team before calling you ready.",
     "deferred": "Starting later is fine — I'll stop pushing. Reach out when you're ready; I won't invent a follow-up schedule.",

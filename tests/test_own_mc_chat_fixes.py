@@ -75,7 +75,7 @@ class OwnMcAskOrder(unittest.TestCase):
 
 
 class FreightCityOnly(unittest.TestCase):
-    def test_freight_topic_asks_city_when_missing(self):
+    def test_freight_topic_never_asks_city_on_own_mc(self):
         validated = plan.validate_plan(
             "what load options do you have near me?",
             {
@@ -102,7 +102,8 @@ class FreightCityOnly(unittest.TestCase):
             },
         )
         self.assertIn("freight", validated["answer_topics"])
-        self.assertEqual(validated["next_question_id"], "operatingArea")
+        self.assertIsNone(validated["next_question_id"])
+        self.assertNotEqual(validated["next_question_id"], "operatingArea")
 
     def test_missing_city_does_not_block_own_mc_packet(self):
         validated = plan.validate_plan(
@@ -168,6 +169,167 @@ class OneQuestionReplace(unittest.TestCase):
         self.assertIn("how old", text.lower())
         self.assertNotIn("insurance", text.lower())
         self.assertEqual(chips, CHIPS["authorityAgeMonths"])
+
+    def test_period_ended_insurance_plus_age_keeps_only_age(self):
+        text, ask, _ = playbook.align_delivery(
+            "Got it—you're running under your own MC. Do you currently have active commercial insurance, "
+            "or do you need help getting set up. About how old is your MC or authority?",
+            "authorityAgeMonths",
+            facts(equipment="hotshot", trailerLength="40ft", mcOwnership="own_mc"),
+        )
+        self.assertEqual(ask, "authorityAgeMonths")
+        low = text.lower()
+        self.assertIn("how old", low)
+        self.assertNotIn("insurance", low)
+        self.assertEqual(low.count("?"), 1)
+
+    def test_city_plus_start_keeps_only_start(self):
+        text, ask, _ = playbook.align_delivery(
+            "Got it—Monday through Friday. What city or ZIP will you be starting from. When would you like to start?",
+            "startDate",
+            facts(
+                equipment="hotshot",
+                trailerLength="40ft",
+                mcOwnership="own_mc",
+                operatingMode="local",
+                weekdaySchedule="monday_friday",
+            ),
+        )
+        self.assertEqual(ask, "startDate")
+        low = text.lower()
+        self.assertIn("when would you like to start", low)
+        self.assertNotIn("city", low)
+        self.assertNotIn("zip", low)
+
+    def test_standalone_city_ask_stripped_when_no_pending(self):
+        text, ask, _ = playbook.align_delivery(
+            "Got it, starting today. What city or ZIP will you be heading out from?",
+            None,
+            facts(
+                equipment="hotshot",
+                trailerLength="40ft",
+                mcOwnership="own_mc",
+                startDate="today",
+                equipmentSupport="in_scope",
+            ),
+        )
+        self.assertIsNone(ask)
+        self.assertNotIn("city", text.lower())
+        self.assertNotIn("zip", text.lower())
+
+
+class DocsBeatStickyFee(unittest.TestCase):
+    def test_what_did_you_need_is_docs_not_fee(self):
+        topics = plan.detect_topics(
+            "What did youneed from me to start?",
+            intent="general",
+            concern="total_fees",
+        )
+        self.assertIn("docs_status", topics)
+        self.assertNotIn("dispatch_fee", topics)
+
+    def test_compose_docs_not_fee_paragraph(self):
+        reply, _, _ = playbook.compose(
+            "general",
+            facts(
+                equipment="hotshot",
+                trailerLength="40ft",
+                mcOwnership="own_mc",
+                startDate="today",
+                equipmentSupport="in_scope",
+            ),
+            [],
+            "dispatch_service",
+            False,
+            None,
+            None,
+            {"answered": [], "concern": "total_fees", "follow_up": "assistant"},
+            plan={
+                "answer_topics": ["docs_status"],
+                "next_question_id": None,
+                "proposed_action": "none",
+            },
+            user_text="What did youneed from me to start?",
+            wording="For this arrangement, the current own-MC dispatch fee is 8% of gross.",
+        )
+        low = reply.lower()
+        self.assertTrue("w-9" in low or "authority" in low)
+        self.assertNotIn("8%", low)
+
+
+class ReadyComposeOneRoute(unittest.TestCase):
+    def test_ready_after_start_is_brief(self):
+        reply, chips, _ = playbook.compose(
+            "onboard",
+            facts(
+                equipment="hotshot",
+                trailerLength="40ft",
+                mcOwnership="own_mc",
+                authorityAgeMonths=5,
+                operatingMode="local",
+                milesPerDay="500-600",
+                weekdaySchedule="monday_friday",
+                startDate="today",
+                equipmentSupport="in_scope",
+            ),
+            [],
+            "dispatch_service",
+            False,
+            None,
+            None,
+            {"answered": [], "follow_up": "assistant"},
+            plan={"answer_topics": ["onboarding"], "next_question_id": None},
+            user_text="I'm ready to start",
+        )
+        low = reply.lower()
+        self.assertIn("setup review", low)
+        self.assertNotIn("box truck 24/26/28", low)
+        self.assertNotIn("dry van", low)
+        self.assertEqual(chips, CHIPS["handoff"])
+
+    def test_saved_own_mc_single_docs_list(self):
+        reply, _, _ = playbook.compose(
+            "general",
+            facts(equipment="hotshot", trailerLength="40ft", mcOwnership="own_mc", equipmentSupport="in_scope"),
+            [],
+            "dispatch_service",
+            True,
+            knowledge.lookup("own_mc_review_saved"),
+            None,
+            {"answered": [], "follow_up": "assistant"},
+            plan={"answer_topics": [], "next_question_id": None, "proposed_action": "create_case"},
+            user_text="today",
+        )
+        low = reply.lower()
+        self.assertEqual(low.count("for own-mc, onboarding usually asks"), 1)
+        self.assertNotIn("licence", low)
+        self.assertNotIn("we only dispatch these types", low)
+
+
+class FreightOwnMcNoCity(unittest.TestCase):
+    def test_freight_does_not_ask_city_for_own_mc(self):
+        validated = plan.validate_plan(
+            "what load options do you have near me?",
+            {
+                "facts": facts(
+                    equipment="hotshot",
+                    trailerLength="40ft",
+                    mcOwnership="own_mc",
+                    startDate="today",
+                ),
+                "memory": {"answered": [], "follow_up": "assistant"},
+            },
+            {
+                "intent": "freight",
+                "facts": [],
+                "answer_topics": ["freight"],
+                "next_question_id": None,
+                "action": "none",
+                "wording": "Where should we look?",
+            },
+        )
+        self.assertIsNone(validated["next_question_id"])
+        self.assertIn("freight", validated["answer_topics"])
 
 
 class HandoffBriefOwnMc(unittest.TestCase):

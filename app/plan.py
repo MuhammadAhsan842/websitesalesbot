@@ -131,10 +131,27 @@ def detect_topics(text: str, intent: str | None = None, concern: str | None = No
     ):
         add("pause")
         return topics
-    if intent == "fee" or concern == "total_fees" or re.search(
-        r"what do you charge|how much (do you|is the)|\bpercent\b|\bfees?\b|total fees?",
-        t,
-    ):
+    # Docs / "what do you need" beats a sticky fee concern from an earlier turn.
+    docs_ask = bool(
+        re.search(
+            r"which (papers|docs|documents)|what (papers|documents|do i (send|need))|"
+            r"what (did|do) you\s*need|what you need from me|need from me to start|"
+            r"what (is|are) (required|needed) (from me|to start)|w-?9|\bcoi\b|"
+            r"notice of assignment|\bnoa\b|setup packet|voided check|usdot|\bmc authority|"
+            r"bill of lading|\bbol\b|rate conf|proof of delivery|\bpod\b|\bifta\b|\beld\b|"
+            r"power of attorney|truck photos?",
+            t,
+        )
+    )
+    if docs_ask:
+        add("docs_status")
+    fee_asked_now = bool(
+        re.search(
+            r"what do you charge|how much (do you|is the)|\bpercent\b|\bfees?\b|total fees?",
+            t,
+        )
+    )
+    if intent == "fee" or fee_asked_now or (concern == "total_fees" and not docs_ask):
         add("dispatch_fee")
     if concern == "commitment" or re.search(
         r"sign for nothing|don'?t want to sign|am i binding|have to sign|sign now|do i (have to|need to) sign|just (asking|looking|chatting)",
@@ -236,15 +253,11 @@ def detect_topics(text: str, intent: str | None = None, concern: str | None = No
         add("negotiation")
     if re.search(r"leo dispatch|silver arrow|\batl\b|like \d+\s*%", t):
         add("competitor")
-    if re.search(
-        r"which (papers|docs|documents)|what (papers|documents|do i (send|need))|w-?9|\bcoi\b|"
-        r"notice of assignment|\bnoa\b|setup packet|voided check|usdot|\bmc authority|bill of lading|"
-        r"\bbol\b|rate conf|proof of delivery|\bpod\b|\bifta\b|\beld\b|power of attorney",
-        t,
-    ):
-        add("docs_status")
     if re.search(r"i received (it|the packet)|received the packet|send it tomorrow", t):
         add("onboarding")
+    # Prefer docs over fee when both detectors fired (e.g. sticky total_fees + papers ask).
+    if "docs_status" in topics and "dispatch_fee" in topics and docs_ask and not fee_asked_now:
+        topics = [topic for topic in topics if topic != "dispatch_fee"]
     return topics
 
 
@@ -419,7 +432,10 @@ def validate_plan(user_text: str, session: dict, proposal: dict) -> dict:
         if "services" not in topics:
             topics = ["services"] + [topic for topic in topics if topic != "services"]
     elif "freight" in topics:
-        if not fact_value(facts, "equipment"):
+        # Own-MC: never collect city/ZIP for loads — route to the team after setup facts exist.
+        if fact_value(facts, "mcOwnership") == "own_mc":
+            next_q = None
+        elif not fact_value(facts, "equipment"):
             next_q = "equipment"
         elif not fact_value(facts, "trailerLength"):
             next_q = "trailerLength"
@@ -526,6 +542,9 @@ def validate_plan(user_text: str, session: dict, proposal: dict) -> dict:
 
 
 def _freight_line(facts: dict) -> str:
+    # Own-MC: never chase city/ZIP for loads — route to the team.
+    if fact_value(facts, "mcOwnership") == "own_mc":
+        return lookup("loads_route_team")
     equip = fact_value(facts, "equipment")
     label = EQUIP_LABELS.get(str(equip or ""), str(equip or "").replace("_", " "))
     area = fact_value(facts, "operatingArea") or fact_value(facts, "lanes")
@@ -621,6 +640,18 @@ def topic_lines(topics: list[str], arrangement: str | None, bits: list[str], fac
                 lines.append(picked)
             else:
                 lines.append(_freight_line(facts))
+            continue
+        if topic == "docs_status":
+            if arrangement == "dispatch_service" or fact_value(facts, "mcOwnership") == "own_mc":
+                from app import requirements as reqmod
+
+                lines.append(reqmod.customer_docs_sentence("setup_packet", facts))
+            elif arrangement == "lease_on" and fact_value(facts, "insurance") == "needs_insurance":
+                lines.append(lookup("docs_lease_needs_insurance"))
+            elif arrangement == "lease_on":
+                lines.append(lookup("docs_lease"))
+            else:
+                lines.append(lookup("docs_packet"))
             continue
         if topic == "home_time":
             if fact_value(facts, "supportNeed") != "daily_home_time":
