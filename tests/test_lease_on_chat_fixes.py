@@ -473,7 +473,11 @@ class LeaseOnMatrix(unittest.TestCase):
         )
         low = text.lower()
         self.assertIn("licence", low)
-        self.assertIn("w-9", low)
+        self.assertIn("certificate of insurance", low)
+        self.assertIn("truck registration", low)
+        self.assertIn("truck photos", low)
+        self.assertNotIn("medical card", low)
+        self.assertNotIn("w-9", low)
         self.assertNotIn("city", low)
         self.assertLessEqual(low.count("onboarding manager"), 2)
 

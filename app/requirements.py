@@ -19,20 +19,16 @@ CORE_SETUP = [
 ]
 
 CORE_LEASE = [
-    ("lease", "Lease agreement"),
-    ("licence", "Driver licence"),
+    ("licence", "Driving licence"),
     ("coi", "Certificate of insurance"),
-    ("medical", "Medical card"),
-    ("inspection", "Inspection"),
-    ("w9", "W-9"),
-    ("registration", "Cab card / registration"),
+    ("registration", "Truck registration"),
     ("equipment_photos", "Truck photos"),
 ]
 
 # Quote-stage paperwork when coverage still needs arranging — never demand an existing COI.
 INSURANCE_QUOTE = [
-    ("licence", "Driver licence"),
-    ("registration", "Cab card / registration"),
+    ("licence", "Driving licence"),
+    ("registration", "Truck registration"),
 ]
 
 SAMPLE_TYPES = {
