@@ -65,10 +65,16 @@ _EMAIL_INVENT_ASK = re.compile(
 )
 
 
+def _mode(facts: dict) -> str | None:
+    from app.rules import normalize_operating_mode
+
+    return normalize_operating_mode(fact_value(facts, "operatingMode"))
+
+
 def missing_core(facts: dict, memory: dict | None = None) -> list[str]:
     answered = set((memory or {}).get("answered") or [])
     constraint = (memory or {}).get("hard_constraint")
-    mode = fact_value(facts, "operatingMode")
+    mode = _mode(facts)
     insurance = fact_value(facts, "insurance")
     mc = fact_value(facts, "mcOwnership")
     own = mc == "own_mc"
@@ -189,7 +195,7 @@ def next_ask(facts: dict, memory: dict | None = None, intent: str | None = None,
     missing = missing_core(facts, mem)
     if fact_value(facts, "deadline"):
         missing = [key for key in missing if key != "startDate"]
-    mode = fact_value(facts, "operatingMode")
+    mode = _mode(facts)
     mc = fact_value(facts, "mcOwnership")
     own = mc == "own_mc"
     if mode == "local" or mem.get("hard_constraint") == "home_every_night":
@@ -597,7 +603,8 @@ _CITY_ASK = re.compile(
 
 _LEASE_OTR_FORBIDDEN_ASK = re.compile(
     r"(?:"
-    r"miles (?:can you cover|a day|per day)|how many miles|"
+    r"how many miles|miles (?:can you cover|are you|a day|per day|per\/day)|"
+    r"miles.{0,24}(?:day|daily)|comfortable covering.{0,12}miles|"
     r"monday through friday|weekends (?:too|at home)|open to weekends|"
     r"comfortable staying out|stay(?:ing)? out before|"
     r"city or zip|which city|what state"
@@ -890,6 +897,18 @@ def compose(
             ]
         else:
             parts[:] = [lookup("lease_review_saved")]
+            try:
+                from app import fees as feesmod
+
+                parts.append(
+                    feesmod.live_quote(
+                        "lease_on",
+                        insurance=fact_value(facts, "insurance"),
+                        operating_mode=_mode(facts),
+                    )
+                )
+            except Exception:
+                pass
         return " ".join(_dedupe(parts)), CHIPS["handoff"], summary
 
     # Boundary / closure concerns before free model wording.
@@ -941,11 +960,25 @@ def compose(
             if fact_value(facts, "insurance") == "needs_insurance":
                 parts.append(lookup("ready_lease_needs_insurance"))
             else:
+                # Start answered → docs first, then fee line (OTR negotiate / local 17%).
                 parts.append(lookup("ready_lease_next"))
+                parts.append(lookup("lease_docs_then_fee_bridge"))
+                try:
+                    from app import fees as feesmod
+
+                    parts.append(
+                        feesmod.live_quote(
+                            "lease_on",
+                            insurance=fact_value(facts, "insurance"),
+                            operating_mode=_mode(facts),
+                        )
+                    )
+                except Exception:
+                    pass
             if receipt:
                 parts.append(receipt)
             return " ".join(_dedupe(parts)), CHIPS["handoff"], summary
-        # Ready before start date — ask start only (never city).
+        # Ready before start date — ask start only (never city / miles on OTR).
         if (
             arrangement == "lease_on"
             and not fact_value(facts, "startDate")
@@ -1378,7 +1411,7 @@ def align_delivery(text: str, ask: str | None, facts: dict) -> tuple[str, str | 
     chips = _chips_for_ask(ask, facts) if ask else None
     own = fact_value(facts, "mcOwnership") == "own_mc"
     lease = fact_value(facts, "mcOwnership") == "no_own_mc"
-    otr = fact_value(facts, "operatingMode") == "otr"
+    otr = _mode(facts) == "otr"
 
     def _replace_with_canonical() -> str:
         q = question_for(ask, facts) or ""
@@ -1389,6 +1422,15 @@ def align_delivery(text: str, ask: str | None, facts: dict) -> tuple[str, str | 
         ask = "trailerLength"
         spoken = (_ack_for_ask(facts, "trailerLength") + length_question(facts)).strip()
         return spoken, "trailerLength", list(_chips_for_ask("trailerLength", facts))
+
+    # OTR (own-MC or lease-on): never deliver a miles / weekday / stay-out ask.
+    if otr and ask in {"milesPerDay", "weekdaySchedule", "stayOutDuration"}:
+        ask = "startDate" if not fact_value(facts, "startDate") else None
+        if ask:
+            spoken = (_ack_for_ask(facts, ask) + question_for(ask, facts)).strip()
+            return spoken, ask, list(_chips_for_ask(ask, facts))
+        spoken = lookup("lease_ready_brief" if lease else "own_mc_ready_brief")
+        return spoken, None, list(CHIPS["handoff"])
 
     if ask and question_for(ask, facts):
         equip = fact_value(facts, "equipment")

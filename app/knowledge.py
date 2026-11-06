@@ -96,7 +96,7 @@ REGISTER = {
     "lease_review_saved": (
         "I've asked our onboarding manager to take the lease agreement from here. They haven't approved anything yet. "
         "For the lease-on review, prepare your driver's licence, COI, medical card, inspection record, "
-        "W-9, truck registration and truck photos. They'll confirm coverage and pricing when they review."
+        "W-9, truck registration and truck photos."
     ),
     "call_me": "What number should our onboarding manager call? Please include the country code if you have one, plus a preferred time and timezone. This records a callback request — nobody has dialed yet.",
     "home_time": "Daily home time is on file as a hard constraint. I won't swap that for weekends-only. If the lanes can't support it, onboarding has to say so.",
@@ -146,8 +146,10 @@ REGISTER = {
     ),
     "ready_lease_next": (
         "For the lease-on review, prepare your driver's licence, COI, medical card, inspection record, "
-        "W-9, truck registration and truck photos. Our onboarding manager will review the lease agreement, "
-        "coverage requirements and pricing with you — nothing is approved from chat."
+        "W-9, truck registration and truck photos — nothing is approved from chat."
+    ),
+    "lease_docs_then_fee_bridge": (
+        "Our onboarding manager will review the lease agreement and coverage with you."
     ),
     "ready_lease_needs_insurance": (
         "For the initial insurance review, prepare your driver's licence and truck registration. "

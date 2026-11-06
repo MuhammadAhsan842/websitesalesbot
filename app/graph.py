@@ -133,6 +133,8 @@ def _clean_facts(items: list | None, user_text: str = "", *, require_evidence: b
             value = None
         if key == "equipment" and isinstance(value, str):
             value = rules.normalize_equip(value)
+        if key == "operatingMode" and isinstance(value, str):
+            value = rules.normalize_operating_mode(value)
         cleaned.append({"key": key, "value": value, "status": item.get("status") or "user_stated"})
     return cleaned
 

@@ -135,6 +135,24 @@ OWNED_CLAIM = re.compile(
 SPRINTER_ASK = re.compile(r"sprinter|spriter", re.I)
 
 
+def normalize_operating_mode(raw: str | None) -> str | None:
+    """Canonical OTR/local/unclear — never leave 'OTR' / 'over the road' as a distinct mode."""
+    if raw is None:
+        return None
+    value = re.sub(r"\s+", " ", str(raw).lower().strip())
+    if value in {"otr", "o.t.r", "o.t.r.", "over the road", "over-the-road", "over_the_road"}:
+        return "otr"
+    if value in {"local", "local work", "staying local", "local only"}:
+        return "local"
+    if value in {"unclear", "open", "either", "flexible", "regional"}:
+        return "unclear"
+    if "over the road" in value or re.search(r"\botr\b", value):
+        return "otr"
+    if re.search(r"\blocal\b", value):
+        return "local"
+    return value or None
+
+
 def normalize_equip(raw: str | None) -> str | None:
     if not raw:
         return None

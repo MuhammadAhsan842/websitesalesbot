@@ -252,19 +252,57 @@ class KnowledgeCopy(unittest.TestCase):
 
 class LeaseOnMatrix(unittest.TestCase):
     def test_otr_skips_miles_weekday_city_asks_start(self):
-        ask = playbook.next_ask(
-            facts(
-                equipment="dry_van",
-                trailerLength="53ft",
-                mcOwnership="no_own_mc",
-                insurance="own_insurance",
-                coverageTypes="auto_and_cargo",
-                coverageLimits="meets_minimums",
-                operatingMode="otr",
+        for mode in ("otr", "OTR", "over the road"):
+            ask = playbook.next_ask(
+                facts(
+                    equipment="dry_van",
+                    trailerLength="53ft",
+                    mcOwnership="no_own_mc",
+                    insurance="own_insurance",
+                    coverageTypes="auto_and_cargo",
+                    coverageLimits="meets_minimums",
+                    operatingMode=mode,
+                )
             )
+            self.assertEqual(ask, "startDate", msg=mode)
+            missing = playbook.missing_core(
+                facts(
+                    equipment="dry_van",
+                    trailerLength="53ft",
+                    mcOwnership="no_own_mc",
+                    insurance="own_insurance",
+                    coverageTypes="auto_and_cargo",
+                    coverageLimits="meets_minimums",
+                    operatingMode=mode,
+                )
+            )
+            self.assertNotIn("operatingArea", missing, msg=mode)
+            self.assertNotIn("milesPerDay", missing, msg=mode)
+            self.assertNotIn("weekdaySchedule", missing, msg=mode)
+            self.assertNotIn("stayOutDuration", missing, msg=mode)
+
+    def test_align_otr_forces_start_even_if_ask_was_miles(self):
+        f = facts(
+            equipment="dry_van",
+            trailerLength="53ft",
+            mcOwnership="no_own_mc",
+            insurance="own_insurance",
+            coverageTypes="auto_and_cargo",
+            coverageLimits="meets_minimums",
+            operatingMode="OTR",
+        )
+        text, ask, _ = playbook.align_delivery(
+            "Got it. How many miles can you cover in a day?",
+            "milesPerDay",
+            f,
         )
         self.assertEqual(ask, "startDate")
-        missing = playbook.missing_core(
+        self.assertNotRegex(text, r"(?i)miles")
+        self.assertRegex(text, r"(?i)start")
+
+    def test_ready_after_start_is_docs_then_fee(self):
+        text, _, _ = playbook.compose(
+            "onboard",
             facts(
                 equipment="dry_van",
                 trailerLength="53ft",
@@ -273,12 +311,32 @@ class LeaseOnMatrix(unittest.TestCase):
                 coverageTypes="auto_and_cargo",
                 coverageLimits="meets_minimums",
                 operatingMode="otr",
-            )
+                startDate="tomorrow",
+            ),
+            [],
+            "lease_on",
+            False,
+            None,
+            None,
+            {},
+            plan={
+                "answer_topics": ["onboarding"],
+                "next_question_id": None,
+                "conversation_move": "offer_handoff",
+            },
+            user_text="I'm ready",
         )
-        self.assertNotIn("operatingArea", missing)
-        self.assertNotIn("milesPerDay", missing)
-        self.assertNotIn("weekdaySchedule", missing)
-        self.assertNotIn("stayOutDuration", missing)
+        low = text.lower()
+        self.assertIn("licence", low)
+        self.assertIn("onboarding manager", low)
+        self.assertNotIn("miles", low)
+        # Fee follow-up after docs (OTR = no invented percent).
+        self.assertNotRegex(text, r"\d+(\.\d+)?\s*%")
+        docs_at = low.find("licence")
+        fee_at = low.find("onboarding manager will confirm the otr")
+        if fee_at < 0:
+            fee_at = low.find("confirm the otr lease-on")
+        self.assertGreater(fee_at, docs_at)
 
     def test_never_asks_city_on_lease(self):
         for mode in ("local", "otr"):

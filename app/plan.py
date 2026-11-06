@@ -477,6 +477,17 @@ def validate_plan(user_text: str, session: dict, proposal: dict) -> dict:
             next_q = canonical
             fallbacks.append("qualify_order")
 
+    # Hard stop: OTR never accepts miles / weekday / stay-out as the pending ask.
+    from app.rules import normalize_operating_mode
+
+    if normalize_operating_mode(fact_value(facts, "operatingMode")) == "otr" and next_q in {
+        "milesPerDay",
+        "weekdaySchedule",
+        "stayOutDuration",
+    }:
+        next_q = "startDate" if not fact_value(facts, "startDate") else None
+        fallbacks.append("otr_no_miles")
+
     if action == "create_case":
         task = proposal.get("task")
         if task not in CATALOGUE:
