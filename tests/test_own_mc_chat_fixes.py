@@ -58,7 +58,7 @@ class OwnMcAskOrder(unittest.TestCase):
         self.assertNotIn("stayOutDuration", missing)
         self.assertNotIn("milesPerDay", missing)
 
-    def test_lease_on_path_unchanged_after_weekday_asks_city(self):
+    def test_lease_on_after_weekday_asks_start_not_city(self):
         ask = playbook.next_ask(
             facts(
                 equipment="box_truck",
@@ -70,7 +70,7 @@ class OwnMcAskOrder(unittest.TestCase):
                 weekdaySchedule="monday_friday",
             )
         )
-        self.assertEqual(ask, "operatingArea")
+        self.assertEqual(ask, "startDate")
 
 
 class FreightCityOnly(unittest.TestCase):
