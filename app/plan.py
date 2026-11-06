@@ -597,47 +597,20 @@ def topic_lines(topics: list[str], arrangement: str | None, bits: list[str], fac
             picked = next((bit for bit in remaining if "%" in bit or "fee" in bit.lower()), None)
             if picked:
                 remaining.remove(picked)
-                # Never treat a customer counter-offer percent as the live Ayyan quote.
-                from app import fees as feesmod
-
-                try:
-                    approved = feesmod.approved_percents()
-                except Exception:
-                    approved = set()
-                offer_match = re.search(r"(\d+(?:\.\d+)?)\s*%", picked)
-                insurance = fact_value(facts, "insurance")
-                equip = fact_value(facts, "equipment")
-                if offer_match and approved and offer_match.group(1) not in approved and fact_value(facts, "mcOwnership"):
-                    try:
-                        lines.append(
-                            fees.live_quote(arrangement, insurance=insurance, equipment=equip)
-                        )
-                    except Exception:
-                        lines.append(picked.rstrip(". ") + ". " + lookup("fee_route_manager"))
-                else:
-                    if fact_value(facts, "mcOwnership") and "onboarding manager" not in picked.lower():
-                        # Replace invented/stale percents with the equipment schedule quote.
-                        try:
-                            lines.append(
-                                fees.live_quote(arrangement, insurance=insurance, equipment=equip)
-                            )
-                        except Exception:
-                            lines.append(picked.rstrip(". ") + ". " + lookup("fee_route_manager"))
-                    else:
-                        lines.append(picked)
-            else:
-                try:
-                    lines.append(
-                        fees.live_quote(
-                            arrangement,
-                            insurance=fact_value(facts, "insurance"),
-                            equipment=fact_value(facts, "equipment"),
-                        )
-                        if fact_value(facts, "mcOwnership")
-                        else lookup("fee_need_arrangement")
+            # Always resolve from full pricing context — never reuse a cross-arrangement percent.
+            try:
+                lines.append(
+                    fees.live_quote(
+                        arrangement,
+                        insurance=fact_value(facts, "insurance"),
+                        equipment=fact_value(facts, "equipment"),
+                        operating_mode=fact_value(facts, "operatingMode"),
                     )
-                except Exception:
-                    lines.append(lookup("fee_need_arrangement"))
+                    if fact_value(facts, "mcOwnership")
+                    else lookup("fee_need_arrangement")
+                )
+            except Exception:
+                lines.append(lookup("fee_need_arrangement"))
             continue
         if topic == "commitment":
             key = "commit" if "dispatch_fee" in topics else "concern_commitment"

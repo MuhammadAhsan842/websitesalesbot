@@ -7,6 +7,7 @@ ASK_ORDER = [
     "authorityAgeMonths",
     "insurance",
     "coverageTypes",
+    "coverageLimits",
     "operatingMode",
     "milesPerDay",
     "stayOutDuration",
@@ -28,6 +29,7 @@ EXTRA_FIELDS = [
     "cargoCoverage",
     "autoLiabilityCoverage",
     "coverageTypes",
+    "coverageLimits",
     "paymentArrangement",
     "authorityAgeMonths",
     "equipmentSupport",
@@ -169,7 +171,14 @@ QUESTIONS = {
     "liftgate": "Do you need a liftgate?",
     "operatingMode": "Do you prefer OTR or staying local?",
     "insurance": "Do you currently have your own insurance on the truck?",
-    "coverageTypes": "What coverage does your policy include — commercial auto, cargo, or both?",
+    "coverageTypes": (
+        "Does your policy include at least $750,000 in commercial auto liability "
+        "and $100,000 in cargo coverage?"
+    ),
+    "coverageLimits": (
+        "Both coverage types are noted. Are they at or above those minimums "
+        "($750,000 auto / $100,000 cargo)?"
+    ),
     "authorityAgeMonths": "About how old is your MC or authority?",
     "weekdaySchedule": "Are you able to stay on the road Monday through Friday, with weekends at home?",
     "milesPerDay": "How many miles can you cover in a day?",
@@ -189,7 +198,8 @@ CHIPS = {
     "operatingMode": ["OTR", "Local work"],
     "trailerLength": ["24 ft", "26 ft", "28 ft", "30 ft", "40 ft", "48 ft", "53 ft"],
     "insurance": ["I have my own insurance", "I need insurance", "Not sure yet"],
-    "coverageTypes": ["Auto + cargo", "Commercial auto", "Cargo", "Not sure yet"],
+    "coverageTypes": ["Yes, both minimums", "Different limits", "Not sure on limits"],
+    "coverageLimits": ["Yes, at or above", "Different limits", "Not sure on limits"],
     "authorityAgeMonths": ["Under 3 months", "About 5 months", "1 year+", "Not sure"],
     "weekdaySchedule": ["Monday through Friday", "Home weekends", "Flexible"],
     "milesPerDay": ["400-500", "500-600", "I don't know yet"],
@@ -223,6 +233,18 @@ EQUIP_LABELS = {
 
 # Structured meanings for chip labels (and matching free text). Parser uses these first.
 CHIP_VALUES: dict[str, dict] = {
+    "yes, both minimums": {
+        "coverageTypes": "auto_and_cargo",
+        "coverageLimits": "meets_minimums",
+        "autoLiabilityCoverage": "present",
+        "cargoCoverage": "present",
+    },
+    "yes, at or above": {"coverageLimits": "meets_minimums"},
+    "different limits": {
+        "coverageTypes": "auto_and_cargo",
+        "coverageLimits": "different_limits",
+    },
+    "not sure on limits": {"coverageTypes": "unclear", "coverageLimits": "unclear"},
     "auto + cargo": {"coverageTypes": "auto_and_cargo", "autoLiabilityCoverage": "present", "cargoCoverage": "present"},
     "commercial auto": {"coverageTypes": "auto", "autoLiabilityCoverage": "present"},
     "750k / 1m auto": {"coverageTypes": "auto", "autoLiabilityCoverage": "present"},

@@ -70,6 +70,7 @@ def _leaks(text: str) -> bool:
     if LEAK_MONEY.search(scrubbed):
         return True
     try:
+        # Union allow-list for leak scan; plan/live_quote enforce arrangement context.
         allowed = fees.approved_percents()
     except Exception:
         allowed = set()
@@ -345,6 +346,7 @@ async def node_propose(state: TurnState) -> dict:
                         arrangement,
                         insurance=fact_value(session.get("facts") or {}, "insurance"),
                         equipment=fact_value(session.get("facts") or {}, "equipment"),
+                        operating_mode=fact_value(session.get("facts") or {}, "operatingMode"),
                     )[:220],
                 }
             )
@@ -504,6 +506,7 @@ def node_knowledge(state: TurnState) -> dict:
                         arrangement,
                         insurance=fact_value(state["session"].get("facts") or {}, "insurance"),
                         equipment=fact_value(state["session"].get("facts") or {}, "equipment"),
+                        operating_mode=fact_value(state["session"].get("facts") or {}, "operatingMode"),
                     )
                 )
             else:
@@ -761,6 +764,15 @@ def node_execute(state: TurnState) -> dict:
         session["conversation_state"] = "handed_over"
         if task == "setup_packet":
             msg = lookup("own_mc_review_saved")
+        elif task == "lease_agreement":
+            if fact_value(session["facts"], "insurance") == "needs_insurance":
+                msg = (
+                    "I've asked our onboarding manager to take the lease agreement from here. "
+                    "They haven't approved anything yet. "
+                    + lookup("docs_lease_needs_insurance")
+                )
+            else:
+                msg = lookup("lease_review_saved")
         else:
             msg = f"I've asked our onboarding manager to take the {task.replace('_', ' ')} from here. They haven't approved anything yet."
         result.update(

@@ -904,8 +904,28 @@ def _short_answer_facts(text: str, memory: dict | None) -> list[dict]:
         if no or re.search(r"neither|none|no do not|don'?t have", t):
             # Combined coverage question answered no → uncertainty, not full absence of every coverage.
             items.append({"key": "coverageTypes", "value": "unclear", "status": "user_stated"})
+            items.append({"key": "coverageLimits", "value": "unclear", "status": "user_stated"})
             items.append({"key": "insurance", "value": "needs_insurance", "status": "user_stated"})
-        elif re.search(r"both|auto\s*\+\s*cargo|auto and cargo", t):
+        elif re.search(r"both minimums|yes[,.]?\s*both|at or above|meets? (the )?minimum", t) or (
+            yes and re.search(r"750|100,?000|minimum", t)
+        ):
+            items.append({"key": "coverageTypes", "value": "auto_and_cargo", "status": "user_stated"})
+            items.append({"key": "coverageLimits", "value": "meets_minimums", "status": "user_stated"})
+            items.append({"key": "autoLiabilityCoverage", "value": "present", "status": "user_stated"})
+            items.append({"key": "cargoCoverage", "value": "present", "status": "user_stated"})
+        elif yes:
+            items.append({"key": "coverageTypes", "value": "auto_and_cargo", "status": "user_stated"})
+            items.append({"key": "coverageLimits", "value": "meets_minimums", "status": "user_stated"})
+            items.append({"key": "autoLiabilityCoverage", "value": "present", "status": "user_stated"})
+            items.append({"key": "cargoCoverage", "value": "present", "status": "user_stated"})
+        elif re.search(r"different limits|below|lower|less than", t):
+            items.append({"key": "coverageTypes", "value": "auto_and_cargo", "status": "user_stated"})
+            items.append({"key": "coverageLimits", "value": "different_limits", "status": "user_stated"})
+        elif re.search(r"not sure|unsure|don'?t know", t):
+            items.append({"key": "coverageTypes", "value": "unclear", "status": "user_stated"})
+            items.append({"key": "coverageLimits", "value": "unclear", "status": "user_stated"})
+        elif re.search(r"auto\s*\+\s*cargo|auto and cargo|\bboth\b", t):
+            # Types only — do NOT mark minimums satisfied; coverageLimits stays open.
             items.append({"key": "coverageTypes", "value": "auto_and_cargo", "status": "user_stated"})
             items.append({"key": "autoLiabilityCoverage", "value": "present", "status": "user_stated"})
             items.append({"key": "cargoCoverage", "value": "present", "status": "user_stated"})
@@ -915,6 +935,13 @@ def _short_answer_facts(text: str, memory: dict | None) -> list[dict]:
         elif re.search(r"\bcargo\b|100k", t):
             items.append({"key": "coverageTypes", "value": "cargo", "status": "user_stated"})
             items.append({"key": "cargoCoverage", "value": "present", "status": "user_stated"})
+    elif pending == "coverageLimits":
+        if yes or re.search(r"at or above|meets?|both minimums|yes", t):
+            items.append({"key": "coverageLimits", "value": "meets_minimums", "status": "user_stated"})
+        elif re.search(r"different|below|lower|less than|no", t):
+            items.append({"key": "coverageLimits", "value": "different_limits", "status": "user_stated"})
+        elif re.search(r"not sure|unsure|don'?t know", t):
+            items.append({"key": "coverageLimits", "value": "unclear", "status": "user_stated"})
     elif pending == "operatingMode":
         if re.search(r"\botr\b|over the road", t):
             items.append({"key": "operatingMode", "value": "otr", "status": "user_stated"})

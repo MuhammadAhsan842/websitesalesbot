@@ -93,11 +93,17 @@ def missing_core(facts: dict, memory: dict | None = None) -> list[str]:
         # Coverage follow-up only after they say they have insurance (lease-on path).
         if key == "coverageTypes" and insurance != "own_insurance":
             continue
+        # Types alone ("auto + cargo") do not satisfy limits — ask clarification when missing.
+        if key == "coverageLimits":
+            if insurance != "own_insurance":
+                continue
+            if not fact_value(facts, "coverageTypes") or fact_value(facts, "coverageLimits"):
+                continue
         # MC age only for own-MC path.
         if key == "authorityAgeMonths" and not own:
             continue
-        # City/ZIP is not an own-MC qualify slot — only when they ask for load options.
-        if own and key == "operatingArea":
+        # City/ZIP is never a qualify slot (own-MC or lease-on).
+        if key == "operatingArea":
             continue
         # OTR vs local first — then one branch only (never regional).
         if key in {"milesPerDay", "stayOutDuration", "weekdaySchedule"} and mode in (None, "unclear"):
@@ -112,10 +118,13 @@ def missing_core(facts: dict, memory: dict | None = None) -> list[str]:
             if mode == "local" and key == "stayOutDuration":
                 continue
         else:
-            # Lease-on / unclear: local skips stay-out; OTR skips miles + weekday.
-            if mode == "local" and key == "stayOutDuration":
+            # Lease-on: never city. Local → miles → Mon–Fri → start.
+            # Lease-on OTR → start only (no miles / weekday / stay-out).
+            if key == "stayOutDuration":
                 continue
             if mode == "otr" and key in {"milesPerDay", "weekdaySchedule"}:
+                continue
+            if mode == "local" and key == "stayOutDuration":
                 continue
         missing.append(key)
     return missing
@@ -128,6 +137,7 @@ UNBLOCK_ORDER = [
     "authorityAgeMonths",
     "insurance",
     "coverageTypes",
+    "coverageLimits",
     "operatingMode",
     "milesPerDay",
     "stayOutDuration",
@@ -186,17 +196,17 @@ def next_ask(facts: dict, memory: dict | None = None, intent: str | None = None,
         # Keep weekdaySchedule for local; only drop support/problem and OTR stay-out.
         missing = [key for key in missing if key not in {"supportNeed", "primaryProblem", "stayOutDuration"}]
     if mode == "otr":
-        if own:
-            # Own-MC OTR → start only; never miles, weekday, or stay-out.
-            missing = [
-                key for key in missing if key not in {"milesPerDay", "weekdaySchedule", "stayOutDuration"}
-            ]
-        else:
-            missing = [key for key in missing if key not in {"milesPerDay", "weekdaySchedule"}]
+        # Own-MC and lease-on OTR → start only; never miles, weekday, or stay-out.
+        missing = [
+            key for key in missing if key not in {"milesPerDay", "weekdaySchedule", "stayOutDuration"}
+        ]
+    # Lease-on never collects city/ZIP during qualify.
+    if not own:
+        missing = [key for key in missing if key != "operatingArea"]
     # After own MC, authority maturity comes before OTR/local (no insurance questionnaire).
     if own and not fact_value(facts, "authorityAgeMonths") and "authorityAgeMonths" in missing:
         return "authorityAgeMonths"
-    # Lease-on: after "yes I have insurance", ask coverages before OTR/local.
+    # Lease-on: after "yes I have insurance", ask coverage minimums before OTR/local.
     if (
         not own
         and fact_value(facts, "insurance") == "own_insurance"
@@ -204,6 +214,15 @@ def next_ask(facts: dict, memory: dict | None = None, intent: str | None = None,
         and "coverageTypes" in missing
     ):
         return "coverageTypes"
+    # Types without limits confirmation → clarify amounts (do not assume minimums met).
+    if (
+        not own
+        and fact_value(facts, "insurance") == "own_insurance"
+        and fact_value(facts, "coverageTypes")
+        and not fact_value(facts, "coverageLimits")
+        and "coverageLimits" in missing
+    ):
+        return "coverageLimits"
     for key in UNBLOCK_ORDER:
         if key in missing:
             return key
@@ -320,18 +339,33 @@ def fit_summary(facts: dict, arrangement: str | None) -> str:
     if mode == "local" and not weekday:
         unresolved.append("Monday–Friday availability")
     # Own-MC does not collect city during qualify — only when they ask for load options.
-    if not area and arrangement != "dispatch_service":
-        unresolved.append("starting city/ZIP")
+    # Never treat missing city as a lease-on qualify gap.
     if not fact_value(facts, "startDate"):
         unresolved.append("start timing")
     if arrangement == "needs_clarification" or not fact_value(facts, "mcOwnership"):
         unresolved.append("MC arrangement")
     if insurance == "needs_insurance" and arrangement == "lease_on":
         unresolved.append("insurance options/quote")
+    elif (
+        insurance == "own_insurance"
+        and arrangement == "lease_on"
+        and fact_value(facts, "coverageTypes")
+        and not fact_value(facts, "coverageLimits")
+    ):
+        unresolved.append("coverage limit confirmation")
     open_bits = f" Still open: {', '.join(unresolved)}." if unresolved else ""
-    title = "Own-MC setup" if arrangement == "dispatch_service" else (
-        "Lease-on review" if arrangement == "lease_on" else "Fit check"
-    )
+    if arrangement == "lease_on" and insurance == "needs_insurance":
+        title = "Lease-on, needs insurance"
+    elif arrangement == "lease_on" and insurance == "own_insurance" and mode == "otr":
+        title = "Lease-on, own insurance, OTR"
+    elif arrangement == "lease_on" and insurance == "own_insurance" and mode == "local":
+        title = "Lease-on, own insurance, local"
+    elif arrangement == "dispatch_service":
+        title = "Own-MC setup"
+    elif arrangement == "lease_on":
+        title = "Lease-on review"
+    else:
+        title = "Fit check"
     return (
         f"{title}: {count}{area_bit}{ops_bit}. "
         f"{scope_bit}{ins_bit} {path}{callback_bit}{open_bits} "
@@ -380,7 +414,23 @@ def handoff_brief(
         elif task == "setup_packet":
             reason = "Own-MC setup review — qualification complete; documents pending human review."
         elif task == "lease_agreement":
-            reason = "Lease-on setup review — agreement and papers pending human review."
+            if insurance == "needs_insurance":
+                reason = (
+                    "Lease-on, needs insurance — mileage/schedule as recorded; "
+                    "insurance assistance and charges require review; initial documents outstanding."
+                )
+            elif mode == "otr":
+                reason = (
+                    "Lease-on, own insurance, OTR — coverage reported; start requested; "
+                    "lease documents pending review; manager to confirm pricing."
+                )
+            elif mode == "local":
+                reason = (
+                    "Lease-on, own insurance, local — coverage reported; start requested; "
+                    "lease documents pending; manager for any fee negotiation."
+                )
+            else:
+                reason = "Lease-on setup review — agreement and papers pending human review."
         elif insurance == "needs_insurance":
             reason = "Pricing / insurance quote review — coverage still needs arranging."
         else:
@@ -422,9 +472,7 @@ def handoff_brief(
         outstanding.append("insurance arrangement and applicable charges")
     if mode == "local" and not weekday:
         outstanding.append("Monday–Friday availability")
-    # Missing city must not block own-MC review — only note when they asked for loads or lease-on still needs it.
-    if not area and arrangement != "dispatch_service":
-        outstanding.append("starting city/ZIP")
+    # City/ZIP is never a lease-on or own-MC chat qualify gap.
     if phone and (not cb_time or not cb_tz):
         outstanding.append("callback schedule completion")
     elif not phone and task == "callback":
@@ -542,7 +590,18 @@ _OWN_MC_OTR_FORBIDDEN_ASK = re.compile(
 )
 
 _CITY_ASK = re.compile(
-    r"city or zip|which city|starting from|heading out from|operating from|what (?:city|zip)",
+    r"city or zip|which city|starting from|heading out from|operating from|what (?:city|zip)|"
+    r"what state are you|state are you based|based out of",
+    re.I,
+)
+
+_LEASE_OTR_FORBIDDEN_ASK = re.compile(
+    r"(?:"
+    r"miles (?:can you cover|a day|per day)|how many miles|"
+    r"monday through friday|weekends (?:too|at home)|open to weekends|"
+    r"comfortable staying out|stay(?:ing)? out before|"
+    r"city or zip|which city|what state"
+    r")",
     re.I,
 )
 
@@ -815,14 +874,22 @@ def compose(
             ):
                 spoken = refusal
 
-    # Own-MC save always wins over model wording (prevents email invent + skipped checklist).
+    # Own-MC / lease-on save always wins over model wording (one checklist; no city/fee mash).
     if (
         saved
-        and arrangement == "dispatch_service"
+        and arrangement in {"dispatch_service", "lease_on"}
         and fact_value(facts, "equipmentSupport") != "out_of_scope"
         and not awaiting_catalog_length(facts)
     ):
-        parts[:] = [lookup("own_mc_review_saved")]
+        if arrangement == "dispatch_service":
+            parts[:] = [lookup("own_mc_review_saved")]
+        elif fact_value(facts, "insurance") == "needs_insurance":
+            parts[:] = [
+                "I've asked our onboarding manager to take the lease agreement from here. They haven't approved anything yet.",
+                lookup("docs_lease_needs_insurance"),
+            ]
+        else:
+            parts[:] = [lookup("lease_review_saved")]
         return " ".join(_dedupe(parts)), CHIPS["handoff"], summary
 
     # Boundary / closure concerns before free model wording.
@@ -860,7 +927,7 @@ def compose(
         return " ".join(_dedupe(parts)), CHIPS.get(ask) or CHIPS["default"], None
 
     if intent == "onboard" and arrangement in {"dispatch_service", "lease_on"} and not saved:
-        # Qualify already complete — short status only (no catalog / dual checklists).
+        # Qualify already complete — short status / one docs route only.
         if (
             arrangement == "dispatch_service"
             and fact_value(facts, "startDate")
@@ -870,7 +937,22 @@ def compose(
             if receipt:
                 parts.append(receipt)
             return " ".join(_dedupe(parts)), CHIPS["handoff"], summary
-        # One purpose: brief next step (ready_own_next already lists core docs).
+        if arrangement == "lease_on" and not missing_core(facts, mem):
+            if fact_value(facts, "insurance") == "needs_insurance":
+                parts.append(lookup("ready_lease_needs_insurance"))
+            else:
+                parts.append(lookup("ready_lease_next"))
+            if receipt:
+                parts.append(receipt)
+            return " ".join(_dedupe(parts)), CHIPS["handoff"], summary
+        # Ready before start date — ask start only (never city).
+        if (
+            arrangement == "lease_on"
+            and not fact_value(facts, "startDate")
+            and next_ask(facts, mem, intent, repair) == "startDate"
+        ):
+            parts.append(lookup("ready_lease_need_start"))
+            return " ".join(_dedupe(parts)), _chips_for_ask("startDate", facts), summary
         if arrangement == "dispatch_service":
             parts.append(lookup("ready_own_next"))
         elif fact_value(facts, "insurance") == "needs_insurance":
@@ -1099,19 +1181,24 @@ def compose(
         parts.append(receipt)
 
     if saved and fact_value(facts, "equipmentSupport") != "out_of_scope":
-        # One composition route: single own-MC checklist (also handled earlier for model path).
+        # One composition route (also handled earlier for model path).
         if arrangement == "dispatch_service":
             parts[:] = [lookup("own_mc_review_saved")]
+            return " ".join(_dedupe(parts)), CHIPS["handoff"], summary
+        if arrangement == "lease_on":
+            if fact_value(facts, "insurance") == "needs_insurance":
+                parts[:] = [
+                    "I've asked our onboarding manager to take the lease agreement from here. They haven't approved anything yet.",
+                    lookup("docs_lease_needs_insurance"),
+                ]
+            else:
+                parts[:] = [lookup("lease_review_saved")]
             return " ".join(_dedupe(parts)), CHIPS["handoff"], summary
         if spoken and action_message:
             parts.append(spoken)
             parts.append(action_message)
             return " ".join(_dedupe(parts)), CHIPS["handoff"], summary
-        if arrangement == "lease_on" and fact_value(facts, "insurance") == "needs_insurance":
-            parts.append(lookup("docs_lease_needs_insurance"))
-        elif arrangement == "lease_on":
-            parts.append(lookup("docs_lease"))
-        elif arrangement == "needs_clarification":
+        if arrangement == "needs_clarification":
             parts.append("Onboarding will confirm own-MC vs lease-on before any packet goes out.")
         else:
             parts.append(
@@ -1173,7 +1260,8 @@ _ASK_MARKERS = {
     ),
     "mcOwnership": r"own mc|lease on",
     "insurance": r"own insurance on the truck|have your own insurance",
-    "coverageTypes": r"what coverage|commercial auto|cargo, or both",
+    "coverageTypes": r"750,?000|100,?000|commercial auto liability|cargo coverage|both minimums",
+    "coverageLimits": r"at or above those minimums|750,?000 auto|100,?000 cargo",
     "authorityAgeMonths": r"how old is your mc|age of your mc|authority\?",
     "operatingMode": r"otr or staying local|prefer otr|staying local",
     "milesPerDay": r"miles can you cover|miles.*a day|miles per day",
@@ -1289,6 +1377,7 @@ def align_delivery(text: str, ask: str | None, facts: dict) -> tuple[str, str | 
     spoken = (text or "").strip()
     chips = _chips_for_ask(ask, facts) if ask else None
     own = fact_value(facts, "mcOwnership") == "own_mc"
+    lease = fact_value(facts, "mcOwnership") == "no_own_mc"
     otr = fact_value(facts, "operatingMode") == "otr"
 
     def _replace_with_canonical() -> str:
@@ -1311,15 +1400,19 @@ def align_delivery(text: str, ask: str | None, facts: dict) -> tuple[str, str | 
         about = _asks_about(spoken, ask)
         extras = _info_request_count(spoken) > 1
         forbidden = own and bool(_OWN_MC_FORBIDDEN_ASK.search(spoken))
-        otr_polluted = own and otr and bool(_OWN_MC_OTR_FORBIDDEN_ASK.search(spoken))
+        otr_polluted = (own or lease) and otr and bool(
+            (_OWN_MC_OTR_FORBIDDEN_ASK if own else _LEASE_OTR_FORBIDDEN_ASK).search(spoken)
+        )
+        city_polluted = bool(_CITY_ASK.search(spoken)) and ask != "operatingArea"
         email_invent = own and bool(_EMAIL_INVENT_ASK.search(spoken))
         # Insurance/city/stay-out must not ride along even when the age/OTR/start ask is present.
-        # Own-MC OTR: strip miles / Monday–Friday invents when start (or any) ask is pending.
+        # Own-MC / lease OTR: strip miles / Monday–Friday / city invents when start is pending.
         wrong_or_polluted = (
             not about
             or extras
             or forbidden
             or otr_polluted
+            or city_polluted
             or email_invent
             or _POLLUTED_DELIVERY.search(spoken)
             or wrong_equip
@@ -1343,6 +1436,12 @@ def align_delivery(text: str, ask: str | None, facts: dict) -> tuple[str, str | 
                     _OWN_MC_FORBIDDEN_ASK.search(spoken)
                     or (otr and _OWN_MC_OTR_FORBIDDEN_ASK.search(spoken))
                     or _EMAIL_INVENT_ASK.search(spoken)
+                    or _CITY_ASK.search(spoken)
+                ):
+                    spoken = _replace_with_canonical()
+                if lease and (
+                    _CITY_ASK.search(spoken)
+                    or (otr and _LEASE_OTR_FORBIDDEN_ASK.search(spoken))
                 ):
                     spoken = _replace_with_canonical()
         spoken = _strip_stale_equip_echo(spoken, ask, facts)
@@ -1356,14 +1455,17 @@ def align_delivery(text: str, ask: str | None, facts: dict) -> tuple[str, str | 
         spoken = lookup("own_mc_ready_brief")
         return spoken, None, list(CHIPS["assess"] if not missing_core(facts) else CHIPS["handoff"])
 
-    if own and (
-        _OWN_MC_FORBIDDEN_ASK.search(spoken)
+    if (own or lease) and (
+        (own and _OWN_MC_FORBIDDEN_ASK.search(spoken))
         or _CITY_ASK.search(spoken)
-        or (otr and _OWN_MC_OTR_FORBIDDEN_ASK.search(spoken))
+        or (own and otr and _OWN_MC_OTR_FORBIDDEN_ASK.search(spoken))
+        or (lease and otr and _LEASE_OTR_FORBIDDEN_ASK.search(spoken))
     ):
         # Drop invented insurance/city asks after qualify is complete.
         if re.search(r"load|freight|dispatch", spoken, re.I):
             spoken = lookup("loads_route_team")
+        elif lease and not missing_core(facts):
+            spoken = lookup("lease_ready_brief")
         else:
             equip = fact_value(facts, "equipment")
             length = fact_value(facts, "trailerLength")

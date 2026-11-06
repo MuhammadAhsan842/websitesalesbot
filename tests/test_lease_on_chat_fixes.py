@@ -53,7 +53,7 @@ class LocalQualifyOrder(unittest.TestCase):
         )
         self.assertEqual(ask, "weekdaySchedule")
 
-    def test_after_weekday_asks_city(self):
+    def test_after_weekday_asks_start_not_city(self):
         ask = playbook.next_ask(
             facts(
                 equipment="box_truck",
@@ -65,7 +65,8 @@ class LocalQualifyOrder(unittest.TestCase):
                 weekdaySchedule="monday_friday",
             )
         )
-        self.assertEqual(ask, "operatingArea")
+        self.assertEqual(ask, "startDate")
+        self.assertNotEqual(ask, "operatingArea")
 
 
 class FeeAndReadyInsurance(unittest.TestCase):
@@ -86,6 +87,9 @@ class FeeAndReadyInsurance(unittest.TestCase):
                 mcOwnership="no_own_mc",
                 insurance="needs_insurance",
                 operatingMode="local",
+                milesPerDay="500-600",
+                weekdaySchedule="monday_friday",
+                startDate="tomorrow",
             ),
             [],
             "lease_on",
@@ -102,8 +106,9 @@ class FeeAndReadyInsurance(unittest.TestCase):
         )
         low = text.lower()
         self.assertIn("insurance", low)
-        self.assertNotIn("coi with the proper holder", low)
-        self.assertIn("once the applicable coverage", low)
+        self.assertIn("licence", low)
+        self.assertIn("registration", low)
+        self.assertNotIn("prepare your driver's licence, coi", low)
 
     def test_fit_summary_includes_length_insurance_callback(self):
         summary = playbook.fit_summary(
@@ -243,6 +248,176 @@ class KnowledgeCopy(unittest.TestCase):
         text = knowledge.lookup("fee_route_manager").lower()
         self.assertIn("review your request", text)
         self.assertNotIn("best-fitting", text)
+
+
+class LeaseOnMatrix(unittest.TestCase):
+    def test_otr_skips_miles_weekday_city_asks_start(self):
+        ask = playbook.next_ask(
+            facts(
+                equipment="dry_van",
+                trailerLength="53ft",
+                mcOwnership="no_own_mc",
+                insurance="own_insurance",
+                coverageTypes="auto_and_cargo",
+                coverageLimits="meets_minimums",
+                operatingMode="otr",
+            )
+        )
+        self.assertEqual(ask, "startDate")
+        missing = playbook.missing_core(
+            facts(
+                equipment="dry_van",
+                trailerLength="53ft",
+                mcOwnership="no_own_mc",
+                insurance="own_insurance",
+                coverageTypes="auto_and_cargo",
+                coverageLimits="meets_minimums",
+                operatingMode="otr",
+            )
+        )
+        self.assertNotIn("operatingArea", missing)
+        self.assertNotIn("milesPerDay", missing)
+        self.assertNotIn("weekdaySchedule", missing)
+        self.assertNotIn("stayOutDuration", missing)
+
+    def test_never_asks_city_on_lease(self):
+        for mode in ("local", "otr"):
+            missing = playbook.missing_core(
+                facts(
+                    equipment="box_truck",
+                    trailerLength="26ft",
+                    mcOwnership="no_own_mc",
+                    insurance="own_insurance",
+                    coverageTypes="auto_and_cargo",
+                    coverageLimits="meets_minimums",
+                    operatingMode=mode,
+                    milesPerDay="400",
+                    weekdaySchedule="monday_friday",
+                )
+            )
+            self.assertNotIn("operatingArea", missing)
+
+    def test_coverage_question_mentions_limits(self):
+        from app.schema import QUESTIONS
+
+        q = QUESTIONS["coverageTypes"].lower()
+        self.assertIn("750", q)
+        self.assertIn("100", q)
+        self.assertIn("commercial auto", q)
+
+    def test_types_without_limits_asks_clarification(self):
+        ask = playbook.next_ask(
+            facts(
+                equipment="box_truck",
+                trailerLength="26ft",
+                mcOwnership="no_own_mc",
+                insurance="own_insurance",
+                coverageTypes="auto_and_cargo",
+            )
+        )
+        self.assertEqual(ask, "coverageLimits")
+
+    def test_both_minimums_advances_to_mode(self):
+        ask = playbook.next_ask(
+            facts(
+                equipment="box_truck",
+                trailerLength="26ft",
+                mcOwnership="no_own_mc",
+                insurance="own_insurance",
+                coverageTypes="auto_and_cargo",
+                coverageLimits="meets_minimums",
+            )
+        )
+        self.assertEqual(ask, "operatingMode")
+
+    def test_fee_local_17(self):
+        text = fees.live_quote(
+            "lease_on", insurance="own_insurance", operating_mode="local"
+        )
+        self.assertIn("17%", text)
+        self.assertIn("onboarding manager", text.lower())
+
+    def test_fee_otr_negotiate_no_percent(self):
+        text = fees.live_quote(
+            "lease_on", insurance="own_insurance", operating_mode="otr"
+        )
+        self.assertNotRegex(text, r"\d+(\.\d+)?\s*%")
+        self.assertIn("onboarding manager", text.lower())
+
+    def test_approved_percents_lease_rejects_own_mc_eight(self):
+        lease_local = fees.approved_percents_for(
+            "lease_on", insurance="own_insurance", operating_mode="local"
+        )
+        self.assertEqual(lease_local, {"17"})
+        lease_otr = fees.approved_percents_for(
+            "lease_on", insurance="own_insurance", operating_mode="otr"
+        )
+        self.assertEqual(lease_otr, set())
+        lease_needs = fees.approved_percents_for(
+            "lease_on", insurance="needs_insurance", operating_mode="local"
+        )
+        self.assertEqual(lease_needs, set())
+        self.assertNotIn("8", lease_local)
+        self.assertNotIn("5", lease_local)
+
+    def test_needs_insurance_local_never_quotes_17(self):
+        text = fees.live_quote(
+            "lease_on", insurance="needs_insurance", operating_mode="local"
+        )
+        self.assertNotIn("17%", text)
+        self.assertIn("insurance", text.lower())
+
+    def test_align_strips_city_on_lease_start_ask(self):
+        f = facts(
+            equipment="box_truck",
+            trailerLength="26ft",
+            mcOwnership="no_own_mc",
+            insurance="own_insurance",
+            coverageTypes="auto_and_cargo",
+            operatingMode="otr",
+        )
+        text, ask, _ = playbook.align_delivery(
+            "Got it. What city or ZIP are you operating from?",
+            "startDate",
+            f,
+        )
+        self.assertEqual(ask, "startDate")
+        self.assertNotRegex(text, r"(?i)city or zip")
+        self.assertRegex(text, r"(?i)start")
+
+    def test_saved_lease_one_docs_route(self):
+        text, _, _ = playbook.compose(
+            "onboard",
+            facts(
+                equipment="box_truck",
+                trailerLength="26ft",
+                mcOwnership="no_own_mc",
+                insurance="own_insurance",
+                coverageTypes="auto_and_cargo",
+                coverageLimits="meets_minimums",
+                operatingMode="local",
+                milesPerDay="500",
+                weekdaySchedule="monday_friday",
+                startDate="tomorrow",
+            ),
+            [],
+            "lease_on",
+            True,
+            "I've asked our onboarding manager to take the lease agreement from here.",
+            None,
+            {},
+            plan={
+                "answer_topics": ["onboarding"],
+                "next_question_id": None,
+                "conversation_move": "offer_handoff",
+            },
+            user_text="I'm ready",
+        )
+        low = text.lower()
+        self.assertIn("licence", low)
+        self.assertIn("w-9", low)
+        self.assertNotIn("city", low)
+        self.assertLessEqual(low.count("onboarding manager"), 2)
 
 
 if __name__ == "__main__":

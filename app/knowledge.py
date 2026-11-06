@@ -39,6 +39,24 @@ REGISTER = {
     "fee_need_arrangement": "Once we know if you're keeping your own MC or leasing on, I can give you the current fee from our published schedule.",
     "fee_manager_confirm": "I don't have an approved fee quote for that combination right now. Our onboarding manager needs to confirm the applicable charges.",
     "fee_lease_needs_insurance": "You're looking to lease on and still need insurance arranged. Our onboarding manager needs to confirm the available insurance options and applicable charges — I won't invent a number here.",
+    "fee_lease_otr_negotiate": (
+        "Our onboarding manager will confirm the OTR lease-on quote and discuss the terms with you. "
+        "I won't invent a percent here."
+    ),
+    "fee_lease_local": (
+        "For local lease-on with your own insurance, the fee is 17% of gross. "
+        "Our onboarding manager can review any request to negotiate the rate."
+    ),
+    "fee_lease_pricing_saved": (
+        "Your pricing-review request is saved for our onboarding manager."
+    ),
+    "lease_ready_brief": (
+        "Your lease-on review is with our onboarding manager. "
+        "They'll confirm the live document list — nothing is approved from chat."
+    ),
+    "ready_lease_need_start": (
+        "You're ready to proceed. When would you like to start?"
+    ),
     "fee_lease_blank": "Lease-on pay is on the agreement. A blank percent on a draft isn't a quote. Onboarding sets the live settlement before I can give you a number.",
     "docs_status": "I can tell you where papers stand once onboarding has them: received, under review, corrections, or approved. A COI on this chat isn't insurance approved.",
     "guarantee": "We don't guarantee weekly gross, a set number of loads, or a rate. Fit depends on equipment, lanes, and current freight. I can still check whether we support the truck.",
@@ -50,7 +68,11 @@ REGISTER = {
     "docs_own": "For own-MC, onboarding usually asks for the MC authority sheet, W-9, certificate of insurance, and truck photos. A notice of assignment applies if you use factoring; a voided check applies where quick-pay or factoring requires it. Files here stay unverified until they look — they'll confirm the live list with the packet.",
     "docs_review_pending": "Got it — your own-MC setup review is saved for our onboarding manager to review. Would you prefer a callback? While that sits, I can still help with lanes, timing, or whatever else is on your mind.",
     "payment_methods_broker": "Brokers may pay standard (often multi-week), quick-pay (faster, with a broker deduction and usually a voided check with rate con and POD), or through factoring (NOA on file). Timing and any deduction come from that arrangement and your agreement — I won't invent a payday or percent from chat.",
-    "docs_lease": "For lease-on, onboarding usually asks for licence, insurance listing the proper certificate holder, medical card, inspection, W-9, and the lease. They'll confirm the list when they review.",
+    "docs_lease": (
+        "For the lease-on review, prepare your driver's licence, COI, medical card, inspection record, "
+        "W-9, truck registration and truck photos. Our onboarding manager will review the lease agreement, "
+        "coverage requirements and pricing with you — nothing is approved from chat."
+    ),
     "docs_w9": "The W-9 is the taxpayer ID form. Onboarding checks the name, TIN, and signature. I can't confirm it's complete from chat, and I don't send a blank one from here.",
     "docs_coi": "A certificate of insurance is evidence, not approval. Onboarding checks named insured, certificate holder, auto liability, and cargo. A COI on this chat is unverified until they look at it.",
     "docs_noa": "A notice of assignment tells brokers where to send payment when factoring is involved. Onboarding checks the factoring party. A photo here is not filed.",
@@ -67,7 +89,15 @@ REGISTER = {
     "support": "If you're already running with us, that's operations, not this sales chat. I can note it for them.",
     "payment_support": "I understand this is about payment. Which load or invoice does it relate to? Operations owns settlement status — I won't promise a payday from chat.",
     "unknown": "I don't have that answer. I can note it for our onboarding manager instead of guessing.",
-    "talk_here": "Browser voice isn't available in this build yet. We can continue this same inquiry in chat, or you can request a callback.",
+    "talk_here": (
+        "Browser voice isn't available right now. We can continue this same inquiry in chat, "
+        "or you can request a callback — I won't restart qualification."
+    ),
+    "lease_review_saved": (
+        "I've asked our onboarding manager to take the lease agreement from here. They haven't approved anything yet. "
+        "For the lease-on review, prepare your driver's licence, COI, medical card, inspection record, "
+        "W-9, truck registration and truck photos. They'll confirm coverage and pricing when they review."
+    ),
     "call_me": "What number should our onboarding manager call? Please include the country code if you have one, plus a preferred time and timezone. This records a callback request — nobody has dialed yet.",
     "home_time": "Daily home time is on file as a hard constraint. I won't swap that for weekends-only. If the lanes can't support it, onboarding has to say so.",
     "commit": "You're not committing by talking here. Next step is a packet, a lease review, or a callback — and only if you ask.",
@@ -89,7 +119,11 @@ REGISTER = {
     "fee_route_manager": "For further inquiry or negotiation I can route you to our onboarding manager — they can review your request.",
     "insurance_assist_ack": "Our onboarding manager will need to review the insurance options before you can start.",
     "insurance_quote_docs": "For that insurance quote review, the first documents required are usually your driver’s licence and truck registration — onboarding confirms the live list. A COI is only needed once coverage is in place.",
-    "docs_lease_needs_insurance": "You’re asking for insurance to be arranged, so there isn’t an existing COI to provide yet. Onboarding typically starts with licence and registration for the quote review; evidence of coverage is needed once a policy is active.",
+    "docs_lease_needs_insurance": (
+        "For the initial insurance review, prepare your driver's licence and truck registration. "
+        "Our onboarding manager will confirm the insurance options, charges and remaining lease-on requirements. "
+        "A COI is only needed once coverage is arranged — nothing is approved from chat."
+    ),
     "loads_after_onboarding": "Dispatch can look at freight after onboarding has the papers. I can't send load options from this chat.",
     "loads_route_team": "I can route your request to our team. They'll review your setup and discuss suitable load options with you — I won't collect a city or ZIP here or confirm a live load from chat.",
     "own_mc_ready_brief": "Your own-MC setup review is with our onboarding manager. They'll confirm the live document list with the packet — nothing is approved from chat.",
@@ -110,8 +144,16 @@ REGISTER = {
         "An NOA applies if you use factoring; a voided check applies where the payment setup requires it. "
         "The manager will review the documents and agreement with you."
     ),
-    "ready_lease_next": "Next step is a lease-on review. Onboarding typically needs licence, medical card, inspection, W-9, and the lease — nothing is approved from chat.",
-    "ready_lease_needs_insurance": "You're ready to start, but insurance still needs to be arranged. Our onboarding manager needs to review that before you can be cleared to run. A COI is only needed once the applicable coverage is in place — nothing is approved from chat.",
+    "ready_lease_next": (
+        "For the lease-on review, prepare your driver's licence, COI, medical card, inspection record, "
+        "W-9, truck registration and truck photos. Our onboarding manager will review the lease agreement, "
+        "coverage requirements and pricing with you — nothing is approved from chat."
+    ),
+    "ready_lease_needs_insurance": (
+        "For the initial insurance review, prepare your driver's licence and truck registration. "
+        "Our onboarding manager will confirm the insurance options, charges and remaining lease-on requirements. "
+        "A COI is only needed once coverage is arranged — nothing is approved from chat."
+    ),
     "mc_age_ask": "About how old is your MC or authority? Newer authorities still need an onboarding look — age alone isn't an automatic yes.",
     "compound_competitor_fee": "Thanks for explaining. I'll note that as what you were told — not verified competitor policy and not an Ayyan offer. I won't match or undercut it from chat.",
 }

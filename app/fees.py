@@ -62,10 +62,41 @@ def latest(arrangement: str, equipment: str | None = None) -> dict | None:
     )
 
 
+LEASE_ON_LOCAL_FEE_PCT = 17.0
+
+
 def approved_percents() -> set[str]:
+    """Union of all published percents (legacy scanners). Prefer approved_percents_for()."""
     found = {_fmt(row["percent"]) for row in list_fees()}
     found.update(_fmt(pct) for pct in OWN_MC_EQUIPMENT_FEE_PCT.values())
+    found.add(_fmt(LEASE_ON_LOCAL_FEE_PCT))
     return found
+
+
+def approved_percents_for(
+    arrangement: str | None = None,
+    *,
+    insurance: str | None = None,
+    operating_mode: str | None = None,
+    equipment: str | None = None,
+) -> set[str]:
+    """Context-scoped approved percents — own-MC 8% must not authorize lease-on 8%."""
+    if arrangement == "lease_on":
+        # Needs-insurance: never a numerical chat quote.
+        if insurance == "needs_insurance":
+            return set()
+        mode = str(operating_mode or "").strip().lower() or None
+        # Own-insurance local only publishes 17%.
+        if mode == "local":
+            return {_fmt(LEASE_ON_LOCAL_FEE_PCT)}
+        # OTR / unknown mode: negotiation only — no approved chat percent.
+        return set()
+    if arrangement == "dispatch_service":
+        eq = str(equipment or "").strip().lower() or None
+        if eq and eq in OWN_MC_EQUIPMENT_FEE_PCT:
+            return {_fmt(OWN_MC_EQUIPMENT_FEE_PCT[eq])}
+        return {_fmt(pct) for pct in OWN_MC_EQUIPMENT_FEE_PCT.values()}
+    return approved_percents()
 
 
 def publish(
@@ -117,23 +148,23 @@ def live_quote(
     *,
     insurance: str | None = None,
     equipment: str | None = None,
+    operating_mode: str | None = None,
 ) -> str:
     if not arrangement or arrangement == "needs_clarification":
         return lookup("fee_need_arrangement")
 
     if arrangement == "lease_on":
-        row = latest("lease_on")
-        if not row:
-            if insurance == "needs_insurance":
-                return lookup("fee_lease_needs_insurance")
-            return lookup("fee_manager_confirm")
-        base = (
-            f"For this arrangement, the current lease-on settlement is {_fmt(row['percent'])}% of gross. "
-            "That's the rate our onboarding manager uses — I won't change it here. "
-        )
+        # Needs-insurance: keep manager/options line — never invent a percent.
         if insurance == "needs_insurance":
-            return base + lookup("fee_lease_needs_insurance")
-        return base + lookup("fee_route_manager")
+            return lookup("fee_lease_needs_insurance")
+        mode = str(operating_mode or "").strip().lower() or None
+        # Own-insurance local: published 17% of gross + negotiation route.
+        if mode == "local":
+            return lookup("fee_lease_local")
+        # Own-insurance OTR: negotiation only — no schedule invent.
+        if mode == "otr":
+            return lookup("fee_lease_otr_negotiate")
+        return lookup("fee_manager_confirm")
 
     # Own-MC / dispatch_service — quote by equipment when known.
     eq = str(equipment or "").strip().lower() or None
