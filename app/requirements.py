@@ -90,6 +90,39 @@ def customer_doc_labels(task: str | None = "setup_packet", facts: dict | None = 
     return [label for doc, label in catalog_for(task, facts) if doc not in _CUSTOMER_DOC_SKIP]
 
 
+def customer_upload_options(task: str | None = None, facts: dict | None = None) -> list[dict]:
+    """Document-type choices for the chat upload picker (checklist-aware + Not sure)."""
+    from app.rules import arrangement_of, task_for
+
+    facts = facts or {}
+    arrangement = arrangement_of(facts)
+    resolved = task or task_for(arrangement, "onboard", facts) or "setup_packet"
+    options = [
+        {"value": doc, "label": label}
+        for doc, label in catalog_for(resolved, facts)
+        if doc not in _CUSTOMER_DOC_SKIP
+    ]
+    options.append({"value": "unknown", "label": "Not sure"})
+    return options
+
+
+def customer_status_label(status: str | None) -> str:
+    mapping = {
+        "issued": "Requested",
+        "received": "Received",
+        "queued": "Received",
+        "under_review": "Under review",
+        "flagged": "Correction needed",
+        "corrections": "Correction needed",
+        "reopened": "Correction needed",
+        "acknowledged": "Under review",
+        "approved": "Approved",
+        "waived": "Approved",
+        "rejected": "Correction needed",
+    }
+    return mapping.get(str(status or "").lower(), "Received")
+
+
 def customer_docs_sentence(task: str | None = "setup_packet", facts: dict | None = None) -> str:
     """Own-MC / lease document follow-up generated from the live requirements catalog."""
     labels = customer_doc_labels(task, facts)

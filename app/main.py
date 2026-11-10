@@ -2,7 +2,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
@@ -470,15 +470,98 @@ async def _interpret_later(attachment_id: str) -> None:
     await asyncio.to_thread(media.interpret, attachment_id)
 
 
-@app.post("/v1/session/{session_id}/attachment")
-async def upload_attachment(session_id: str, background: BackgroundTasks, file: UploadFile = File(...)):
+_UPLOAD_MAX_BYTES = 10 * 1024 * 1024
+_UPLOAD_EXT = {".pdf", ".jpg", ".jpeg", ".png"}
+_UPLOAD_MIME = {
+    "application/pdf",
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "application/octet-stream",
+}
+
+
+def _upload_magic_ok(data: bytes, suffix: str) -> bool:
+    if not data:
+        return False
+    low = suffix.lower()
+    if low == ".pdf":
+        return data.startswith(b"%PDF")
+    if low in {".png"}:
+        return data.startswith(b"\x89PNG\r\n\x1a\n")
+    if low in {".jpg", ".jpeg"}:
+        return data[:3] == b"\xff\xd8\xff"
+    return False
+
+
+def _doc_label(doc_type: str | None, packet: dict | None = None) -> str:
+    wanted = str(doc_type or "unknown")
+    for row in (packet or {}).get("requirements") or []:
+        if row.get("doc_type") == wanted and row.get("label"):
+            return row["label"]
+    labels = {
+        "coi": "certificate of insurance",
+        "licence": "driving licence",
+        "registration": "truck registration",
+        "equipment_photos": "truck photos",
+        "w9": "W-9",
+        "authority": "MC authority sheet",
+        "notice_of_assignment": "notice of assignment",
+        "voided_check": "voided check",
+        "unknown": "document",
+    }
+    return labels.get(wanted, wanted.replace("_", " "))
+
+
+@app.get("/v1/session/{session_id}/upload-options")
+def session_upload_options(session_id: str):
     session = db.get_session(session_id)
     if not session:
         raise HTTPException(404, "unknown session")
-    suffix = Path(file.filename or "upload.bin").suffix or ".bin"
+    case = db.get_case(session["case_id"]) if session.get("case_id") else None
+    task = (case or {}).get("task")
+    facts = session.get("facts") or {}
+    options = requirements.customer_upload_options(task, facts)
+    return {
+        "session_id": session_id,
+        "case_id": (case or {}).get("id"),
+        "task": task,
+        "options": options,
+        "accept": ".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png",
+        "max_bytes": _UPLOAD_MAX_BYTES,
+        "note": "Upload completion means received, not approved.",
+    }
+
+
+@app.post("/v1/session/{session_id}/attachment")
+async def upload_attachment(
+    session_id: str,
+    background: BackgroundTasks,
+    file: UploadFile = File(...),
+    doc_type: str | None = Form(None),
+):
+    session = db.get_session(session_id)
+    if not session:
+        raise HTTPException(404, "unknown session")
+    raw_name = file.filename or "upload.bin"
+    suffix = Path(raw_name).suffix.lower() or ".bin"
+    if suffix not in _UPLOAD_EXT:
+        raise HTTPException(400, "Only PDF, JPG, or PNG files are accepted.")
+    content_type = (file.content_type or "").lower()
+    if content_type and content_type not in _UPLOAD_MIME:
+        raise HTTPException(400, "Unsupported file type. Use PDF, JPG, or PNG.")
+    data = await file.read()
+    if len(data) > _UPLOAD_MAX_BYTES:
+        raise HTTPException(400, "File is too large. Maximum size is 10 MB.")
+    if not _upload_magic_ok(data, suffix):
+        raise HTTPException(400, "File content does not match a PDF, JPG, or PNG.")
+    # Lightweight scan gate — reject obvious script payloads in image/pdf wrappers.
+    head = data[:512].lower()
+    if b"<script" in head or b"<?php" in head:
+        raise HTTPException(400, "File failed the upload safety check.")
     dest = ROOT / "data" / "attachments" / session_id / f"{db.uid('up')}{suffix}"
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(await file.read())
+    dest.write_bytes(data)
     case = _ensure_onboarding_case(session)
     # Persist case linkage before any reload; a DB reload must not wipe case_id.
     session["case_id"] = case["id"]
@@ -491,15 +574,26 @@ async def upload_attachment(session_id: str, background: BackgroundTasks, file: 
     att_id = result.get("id")
     attachment = result.get("attachment") or (db.get_attachment(att_id) if att_id else None)
     case_file = None
+    suggested = (doc_type or "").strip().lower() or None
     if attachment and result.get("status") != "duplicate":
         case_file = await asyncio.to_thread(
             docworker.ingest_upload,
             case["id"],
             Path(attachment.get("path") or dest),
             attachment,
+            suggested_doc_type=suggested,
         )
         if att_id and case_file:
             db.save_attachment({**attachment, "case_id": case["id"]})
+    elif attachment and result.get("status") == "duplicate" and suggested:
+        # Replacement intent on same bytes still updates checklist classification when asked.
+        case_file = await asyncio.to_thread(
+            docworker.ingest_upload,
+            case["id"],
+            Path(attachment.get("path") or dest),
+            attachment,
+            suggested_doc_type=suggested,
+        )
     queue_vision = (
         bool(att_id)
         and result.get("status") != "duplicate"
@@ -508,19 +602,34 @@ async def upload_attachment(session_id: str, background: BackgroundTasks, file: 
     )
     if queue_vision:
         background.add_task(_interpret_later, att_id)
-    db.add_message(session_id, "user", f"[attachment] {file.filename}")
+    resolved_type = (case_file or {}).get("doc_type") or suggested or "unknown"
+    packet = requirements.snapshot(case["id"])
+    label = _doc_label(resolved_type, packet)
+    if resolved_type in {None, "", "unknown"}:
+        receipt = lookup("docs_upload_unknown")
+    else:
+        receipt = lookup("docs_upload_received").format(label=label.lower())
+    db.add_message(session_id, "user", f"[attachment] {raw_name} ({resolved_type})")
+    db.add_message(session_id, "assistant", receipt)
     session["case_id"] = case["id"]
     db.save_session(session)
-    receipt = lookup("docs_review_pending") if case_file else lookup("photo_unverified")
+    req_status = None
+    for row in packet.get("requirements") or []:
+        if row.get("doc_type") == resolved_type:
+            req_status = requirements.customer_status_label(row.get("status"))
+            break
     return {
         **result,
         "text": receipt,
         "queued_vision": queue_vision,
         "case_id": case.get("id"),
         "case_file_id": (case_file or {}).get("id"),
-        "doc_type": (case_file or {}).get("doc_type"),
-        "packet": requirements.snapshot(case["id"]),
+        "doc_type": resolved_type,
+        "doc_label": label,
+        "requirement_status": req_status or "Received",
+        "packet": packet,
         "takeover": False,
+        "not_approval": True,
     }
 
 

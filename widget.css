@@ -14,6 +14,8 @@
   display: none; flex-direction: column; overflow: hidden;
   font-family: "Manrope", system-ui, sans-serif;
 }
+.agoc-panel.lead-open .agoc-uploads,
+.agoc-panel.lead-open .agoc-upload-modal { display: none !important; }
 .agoc-panel.open { display: flex; }
 .agoc-head {
   background: #16324f; color: #fff; padding: 12px 14px;
@@ -37,15 +39,58 @@
   border: 1px solid #d7e0ea; background: #fff; border-radius: 999px;
   padding: 6px 10px; font-size: 12px; font-weight: 700; cursor: pointer;
 }
-.agoc-form { display: flex; gap: 8px; padding: 10px; border-top: 1px solid #d7e0ea; }
-.agoc-form input {
-  flex: 1; border: 1px solid #d7e0ea; border-radius: 12px; padding: 10px;
+.agoc-form { padding: 10px; border-top: 1px solid #d7e0ea; background: #fff; }
+.agoc-composer { display: grid; gap: 8px; }
+.agoc-composer input[name="message"] {
+  width: 100%; border: 1px solid #d7e0ea; border-radius: 12px; padding: 10px 12px; font: inherit;
 }
-.agoc-form button { border: 0; background: #c9a227; border-radius: 12px; padding: 10px 12px; font-weight: 800; cursor: pointer; }
-.agoc-attach {
-  border: 1px solid #d7e0ea; background: #fff; border-radius: 12px;
-  padding: 10px 8px; font-size: 12px; font-weight: 800; cursor: pointer; white-space: nowrap;
+.agoc-composer-actions { display: flex; gap: 8px; align-items: center; }
+.agoc-upload-btn {
+  flex: 1; border: 1px solid #d7e0ea; background: #fff; color: #16324f;
+  border-radius: 12px; padding: 10px 12px; font: inherit; font-size: 13px; font-weight: 800; cursor: pointer;
 }
+.agoc-composer-actions button[type="submit"] {
+  border: 0; background: #c9a227; border-radius: 12px; padding: 10px 14px; font-weight: 800; cursor: pointer;
+}
+.agoc-upload-hint { margin: 0; color: #6b7c90; font-size: 11px; }
+.agoc-uploads {
+  padding: 8px 12px; border-top: 1px solid #d7e0ea; background: #f6f8fb;
+  display: grid; gap: 6px; max-height: 120px; overflow: auto;
+}
+.agoc-upload-row {
+  display: flex; justify-content: space-between; gap: 8px; align-items: center;
+  background: #fff; border: 1px solid #d7e0ea; border-radius: 10px; padding: 8px 10px; font-size: 12px;
+}
+.agoc-upload-row strong { display: block; color: #16324f; }
+.agoc-upload-row span { color: #4a5d73; }
+.agoc-upload-row.uploading span { color: #8a6d00; }
+.agoc-upload-row.received span { color: #1f6b3a; }
+.agoc-upload-row.failed span { color: #b42318; }
+.agoc-upload-row-actions button {
+  border: 1px solid #d7e0ea; background: #fff; border-radius: 8px; padding: 4px 8px; font-size: 11px; cursor: pointer;
+}
+.agoc-upload-modal {
+  position: absolute; inset: 0; z-index: 5;
+  background: rgba(18, 32, 51, 0.45);
+  display: grid; place-items: center; padding: 16px;
+}
+.agoc-upload-modal[hidden] { display: none !important; }
+.agoc-upload-dialog {
+  width: min(100%, 320px); background: #fff; border-radius: 16px;
+  border: 1px solid #d7e0ea; padding: 16px; box-shadow: 0 16px 40px rgba(18, 32, 51, 0.2);
+}
+.agoc-upload-dialog strong { display: block; margin-bottom: 12px; color: #16324f; word-break: break-word; }
+.agoc-upload-dialog label { display: block; margin-bottom: 6px; font-size: 12px; font-weight: 800; color: #16324f; }
+.agoc-upload-dialog select {
+  width: 100%; margin-bottom: 14px; border: 1px solid #d7e0ea; border-radius: 10px;
+  padding: 10px; font: inherit; background: #fbfcfe;
+}
+.agoc-upload-dialog-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.agoc-upload-dialog-actions button {
+  border: 1px solid #d7e0ea; background: #fff; border-radius: 10px; padding: 8px 12px; font-weight: 700; cursor: pointer;
+}
+.agoc-upload-dialog-actions button.primary { border: 0; background: #c9a227; }
+.agoc-upload-note { margin: 10px 0 0; color: #6b7c90; font-size: 11px; }
 .agoc-voice { padding: 8px 12px; border-top: 1px solid #d7e0ea; font-size: 12px; }
 .agoc-voice [role="status"] { display: block; margin-bottom: 6px; color: #42566f; }
 .agoc-voice button { border: 1px solid #d7e0ea; border-radius: 10px; padding: 7px 10px; background: #fff; color: #16324f; cursor: pointer; }

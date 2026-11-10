@@ -57,14 +57,32 @@
       <button type="button" data-voice-audio hidden>Enable audio</button>
       <button type="button" data-voice-end hidden>Return to chat</button></div>
     </div>
+    <div class="agoc-uploads" id="agoc-uploads" hidden></div>
     <form class="agoc-form" id="agoc-form">
-      <label class="agoc-attach" title="Add a photo. Stored unverified — not approval.">
-        <input type="file" name="photo" accept="image/*,.pdf" hidden />
-        Photo
-      </label>
-      <input name="message" autocomplete="off" placeholder="Ask, or choose Talk here / Call me" />
-      <button type="submit">Send</button>
+      <div class="agoc-composer">
+        <input name="message" autocomplete="off" placeholder="Message…" />
+        <div class="agoc-composer-actions">
+          <button type="button" class="agoc-upload-btn" data-upload-open title="PDF, JPG or PNG — received is not approved">
+            📎 Upload documents
+          </button>
+          <button type="submit">Send</button>
+        </div>
+        <p class="agoc-upload-hint">PDF, JPG or PNG</p>
+      </div>
+      <input type="file" name="docs" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" multiple hidden />
     </form>
+    <div class="agoc-upload-modal" id="agoc-upload-modal" hidden>
+      <div class="agoc-upload-dialog" role="dialog" aria-modal="true" aria-labelledby="agoc-upload-title">
+        <strong id="agoc-upload-title" data-upload-filename>Document</strong>
+        <label for="agoc-upload-type">Document type</label>
+        <select id="agoc-upload-type" data-upload-type></select>
+        <div class="agoc-upload-dialog-actions">
+          <button type="button" data-upload-cancel>Cancel</button>
+          <button type="button" class="primary" data-upload-confirm>Upload</button>
+        </div>
+        <p class="agoc-upload-note">Upload completion means received, not approved.</p>
+      </div>
+    </div>
   `;
   document.body.append(launcher, panel);
 
@@ -242,6 +260,13 @@
   async function send(text, chip = null) {
     const value = String(text || "").trim();
     if (value.toLowerCase() === "talk here" && voiceAvailable) return startVoice();
+    if (value.toLowerCase() === "upload documents") {
+      if (!leadReady) {
+        setLeadMode(true);
+        return;
+      }
+      return openUploadPicker();
+    }
     if (!["idle", "error"].includes(voiceState)) return;
     if (!value) return;
     if (!leadReady) {
@@ -500,28 +525,176 @@
     send(form.message.value);
     form.message.value = "";
   });
-  form.photo.addEventListener("change", async () => {
-    const file = form.photo.files && form.photo.files[0];
-    form.photo.value = "";
-    if (!file) return;
+
+  const uploadList = panel.querySelector("#agoc-uploads");
+  const uploadInput = form.docs;
+  const uploadModal = panel.querySelector("#agoc-upload-modal");
+  const uploadType = panel.querySelector("[data-upload-type]");
+  const uploadFilename = panel.querySelector("[data-upload-filename]");
+  const uploadQueue = [];
+  let uploadOptions = [{ value: "unknown", label: "Not sure" }];
+  let pendingUpload = null;
+
+  function renderUploadQueue() {
+    if (!uploadQueue.length) {
+      uploadList.hidden = true;
+      uploadList.innerHTML = "";
+      return;
+    }
+    uploadList.hidden = false;
+    uploadList.innerHTML = "";
+    uploadQueue.forEach((item) => {
+      const row = el("div", { class: `agoc-upload-row ${item.status}` });
+      row.innerHTML = `<div><strong></strong><span></span></div><div class="agoc-upload-row-actions"></div>`;
+      row.querySelector("strong").textContent = item.file.name;
+      row.querySelector("span").textContent = item.detail || item.status;
+      const actions = row.querySelector(".agoc-upload-row-actions");
+      if (item.status === "failed") {
+        const retry = el("button", { type: "button" }, "Retry");
+        retry.addEventListener("click", () => uploadFile(item));
+        actions.appendChild(retry);
+      }
+      uploadList.appendChild(row);
+    });
+  }
+
+  async function loadUploadOptions() {
+    if (!sessionId) return;
+    try {
+      const response = await fetch(`${API}/v1/session/${sessionId}/upload-options`);
+      if (!response.ok) return;
+      const data = await response.json();
+      if (Array.isArray(data.options) && data.options.length) {
+        uploadOptions = data.options;
+      }
+    } catch {
+      /* keep defaults */
+    }
+  }
+
+  function fillUploadTypes(preferred) {
+    uploadType.innerHTML = "";
+    uploadOptions.forEach((opt) => {
+      const option = document.createElement("option");
+      option.value = opt.value;
+      option.textContent = opt.label;
+      if (preferred && preferred === opt.value) option.selected = true;
+      uploadType.appendChild(option);
+    });
+    if (![...uploadType.options].some((o) => o.value === "unknown")) {
+      const option = document.createElement("option");
+      option.value = "unknown";
+      option.textContent = "Not sure";
+      uploadType.appendChild(option);
+    }
+  }
+
+  function guessDocType(filename) {
+    const name = String(filename || "").toLowerCase();
+    if (/coi|insurance|certificate/.test(name)) return "coi";
+    if (/licen[cs]e|dl\b/.test(name)) return "licence";
+    if (/regist|cab.?card/.test(name)) return "registration";
+    if (/photo|truck|equipment|jpg|jpeg|png/.test(name)) return "equipment_photos";
+    if (/w-?9/.test(name)) return "w9";
+    if (/authority|mc\b/.test(name)) return "authority";
+    return "unknown";
+  }
+
+  function openUploadPicker() {
     if (!leadReady) {
       setLeadMode(true);
       return;
     }
+    uploadInput.click();
+  }
+
+  async function openUploadConfirm(file) {
     await ensureSession();
     if (!sessionId) return;
-    addMsg("user", `Photo: ${file.name}`);
-    const pending = addMsg("bot", "Saving the photo in the background. This is not approval.", true);
+    await loadUploadOptions();
+    pendingUpload = file;
+    uploadFilename.textContent = file.name;
+    fillUploadTypes(guessDocType(file.name));
+    uploadModal.hidden = false;
+  }
+
+  function closeUploadConfirm() {
+    pendingUpload = null;
+    uploadModal.hidden = true;
+  }
+
+  async function uploadFile(item) {
+    item.status = "uploading";
+    item.detail = "Uploading…";
+    renderUploadQueue();
     const body = new FormData();
-    body.append("file", file);
+    body.append("file", item.file);
+    body.append("doc_type", item.docType || "unknown");
     try {
-      const response = await fetch(`${API}/v1/session/${sessionId}/attachment`, { method: "POST", body });
-      const data = await response.json();
-      pending.classList.remove("pending");
-      pending.textContent = data.text || "I have the photo on this chat (unverified). Onboarding still needs to look at it.";
+      const response = await fetch(`${API}/v1/session/${sessionId}/attachment`, {
+        method: "POST",
+        body,
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        item.status = "failed";
+        item.detail = data.detail || data.text || "Upload failed";
+        renderUploadQueue();
+        return;
+      }
+      item.status = "received";
+      item.detail = `${data.requirement_status || "Received"} · not approved`;
+      renderUploadQueue();
+      addMsg("user", `Uploaded: ${item.file.name}`);
+      addMsg(
+        "bot",
+        data.text ||
+          "Your file was uploaded and is awaiting review by our onboarding manager. Received is not approved.",
+      );
+      if (Array.isArray(data.chips)) renderChips(data.chips);
     } catch {
-      pending.classList.remove("pending");
-      pending.textContent = "The photo could not be saved. Try again after the API is up.";
+      item.status = "failed";
+      item.detail = "Network error — tap Retry";
+      renderUploadQueue();
+    }
+  }
+
+  panel.querySelector("[data-upload-open]").addEventListener("click", openUploadPicker);
+  uploadInput.addEventListener("change", async () => {
+    const files = [...(uploadInput.files || [])];
+    uploadInput.value = "";
+    if (!files.length) return;
+    if (!leadReady) {
+      setLeadMode(true);
+      return;
+    }
+    // Confirm the first file's type; queue the rest with guessed/Not sure after first confirm pattern.
+    for (const file of files) {
+      await openUploadConfirm(file);
+      // Wait for modal confirm/cancel via one-file-at-a-time promise.
+      await new Promise((resolve) => {
+        const onConfirm = async () => {
+          cleanup();
+          const docType = uploadType.value || "unknown";
+          closeUploadConfirm();
+          const item = { file, docType, status: "queued", detail: "Queued" };
+          uploadQueue.unshift(item);
+          renderUploadQueue();
+          await uploadFile(item);
+          resolve();
+        };
+        const onCancel = () => {
+          cleanup();
+          closeUploadConfirm();
+          resolve();
+        };
+        function cleanup() {
+          panel.querySelector("[data-upload-confirm]").removeEventListener("click", onConfirm);
+          panel.querySelector("[data-upload-cancel]").removeEventListener("click", onCancel);
+        }
+        panel.querySelector("[data-upload-confirm]").addEventListener("click", onConfirm);
+        panel.querySelector("[data-upload-cancel]").addEventListener("click", onCancel);
+      });
     }
   });
 })();

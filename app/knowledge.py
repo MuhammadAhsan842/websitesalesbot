@@ -111,6 +111,14 @@ REGISTER = {
     "payment_timing": "When you get paid is on the agreement. Onboarding owns that clause — I won't pick invoice-now versus pay-after-broker from someone else's packet.",
     "email_delivery": "The packet email didn't go through. Clear some space and tell me when to resend. I won't ask you to sign until that lands.",
     "photo_unverified": "I have the photo on this chat (unverified). Onboarding still needs to look at it — I can't confirm equipment, insurance, or eligibility from an image.",
+    "docs_upload_received": (
+        "We received your {label}. It is awaiting review by our onboarding manager. "
+        "Received is not approved."
+    ),
+    "docs_upload_unknown": (
+        "Your file was uploaded and is awaiting review by our onboarding manager. "
+        "They'll classify it — received is not approved."
+    ),
     "insurance": "Onboarding checks commercial auto liability and cargo on your COI. Ayyan confirms the limits that apply to your setup — a COI on this chat isn't insurance approved.",
     "insurance_coverage_ask": "What coverage does your policy include — commercial auto, cargo, or both? Ayyan still confirms the required limits at review.",
     "insurance_affordability": "Understood — insurance cost is holding things up. I don't sell policies from chat. We can pause until you and the owner are ready; no pressure from me.",

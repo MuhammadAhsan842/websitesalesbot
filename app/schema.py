@@ -205,10 +205,10 @@ CHIPS = {
     "weekdaySchedule": ["Monday through Friday", "Home weekends", "Flexible"],
     "milesPerDay": ["400-500", "500-600", "I don't know yet"],
     "stayOutDuration": ["Home weekends", "1-2 weeks out", "Flexible", "Not sure yet"],
-    "handoff": ["What's my status?", "Talk here", "Call me", "Talk to onboarding manager"],
+    "handoff": ["What's my status?", "Upload documents", "Talk here", "Call me", "Talk to onboarding manager"],
     "voice_id": ["My name is Alex Rivera"],
-    "assess": ["I'm ready to start", "Talk here", "Call me", "What is the fee?", "Talk to onboarding manager"],
-    "default": ["I'm ready to start", "Talk here", "Call me", "What is the fee?", "Talk to onboarding manager"],
+    "assess": ["I'm ready to start", "Upload documents", "Talk here", "Call me", "What is the fee?", "Talk to onboarding manager"],
+    "default": ["I'm ready to start", "Upload documents", "Talk here", "Call me", "What is the fee?", "Talk to onboarding manager"],
 }
 
 STAFF_ACTS = {

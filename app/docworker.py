@@ -284,7 +284,13 @@ def _link_review(case_id: str, review: dict, original_path: str, *, sample: bool
     return row
 
 
-def ingest_upload(case_id: str, path: Path, attachment: dict | None = None) -> dict:
+def ingest_upload(
+    case_id: str,
+    path: Path,
+    attachment: dict | None = None,
+    *,
+    suggested_doc_type: str | None = None,
+) -> dict:
     """Link a real chat/staff upload to the case checklist. Never approves."""
     case = db.get_case(case_id)
     if not case:
@@ -301,7 +307,15 @@ def ingest_upload(case_id: str, path: Path, attachment: dict | None = None) -> d
     if not ocr_text and path.exists():
         read = ocr.read_document(path)
     review = extract_path(path, case.get("facts") or {}, read=read)
-    review["doc_type"] = classify(path, read.get("text") or "")
+    guessed = classify(path, read.get("text") or "")
+    suggested = (suggested_doc_type or "").strip().lower() or None
+    if suggested and suggested not in {"null", "none"}:
+        # Driver-selected type wins (including explicit "Not sure" → unknown).
+        review["doc_type"] = suggested
+        review["suggested_doc_type"] = suggested
+        review["guessed_doc_type"] = guessed
+    else:
+        review["doc_type"] = guessed
     if attachment:
         review["filename"] = attachment.get("filename") or path.name
         review["attachment_id"] = attachment.get("id")
@@ -314,6 +328,7 @@ def ingest_upload(case_id: str, path: Path, attachment: dict | None = None) -> d
             "fileId": row["id"],
             "docType": row.get("doc_type"),
             "attachmentId": (attachment or {}).get("id"),
+            "suggestedDocType": suggested,
         },
     )
     return row
