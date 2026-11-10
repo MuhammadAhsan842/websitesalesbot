@@ -47,6 +47,7 @@ EXTRA_FIELDS = [
 
 FACT_KEYS = QUAL_FIELDS + [
     "name",
+    "email",
     "phone",
     "requestedArrangement",
     "callbackTime",

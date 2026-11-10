@@ -378,6 +378,7 @@ def record(scenario: str, session: dict, extra: dict | None = None) -> dict:
             "start_date": _val(facts, "startDate"),
             "mc_status": _val(facts, "mcOwnership"),
             "name": _val(facts, "name"),
+            "email": _val(facts, "email"),
             "needs_summary": description,
             "handoff_status": status,
             "unresolved_objections": _objections(extra.get("blocked"), extra.get("intent")),

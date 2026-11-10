@@ -1,6 +1,7 @@
 (() => {
   const API = "";
   const STORE = "agoc_session_v2";
+  const LEAD_STORE = "agoc_lead_v1";
   let sessionId = sessionStorage.getItem(STORE);
   const VOICE_STORE = "agoc_voice_access_v1";
   let voiceClient = null;
@@ -10,6 +11,7 @@
   let muted = false;
   let channel = "chat";
   let workflows = {};
+  let leadReady = false;
   const pageEquipment = () => document.body.dataset.equipment || "";
 
   function el(tag, attrs = {}, html = "") {
@@ -31,6 +33,20 @@
         <span data-channel>Useful answers first. Papers stay with a person.</span>
       </div>
       <button type="button" data-close>×</button>
+    </div>
+    <div class="agoc-lead" id="agoc-lead" hidden>
+      <form class="agoc-lead-card" id="agoc-lead-form" novalidate>
+        <div class="agoc-lead-mark" aria-hidden="true">A</div>
+        <h2>Welcome to Ayyan</h2>
+        <p>Share your details so our onboarding manager can follow up on your inquiry.</p>
+        <label for="agoc-lead-name">Your name</label>
+        <input id="agoc-lead-name" name="name" type="text" autocomplete="name" placeholder="Enter your name" required />
+        <label for="agoc-lead-email">Email address</label>
+        <input id="agoc-lead-email" name="email" type="email" autocomplete="email" placeholder="you@example.com" required />
+        <div class="agoc-lead-error" data-lead-error role="alert"></div>
+        <button type="submit">Start chat</button>
+        <p class="agoc-lead-note">We’ll use these details to follow up on this inquiry.</p>
+      </form>
     </div>
     <div class="agoc-log" id="agoc-log"></div>
     <div class="agoc-chips" id="agoc-chips"></div>
@@ -55,7 +71,34 @@
   const log = panel.querySelector("#agoc-log");
   const chips = panel.querySelector("#agoc-chips");
   const form = panel.querySelector("#agoc-form");
+  const lead = panel.querySelector("#agoc-lead");
+  const leadForm = panel.querySelector("#agoc-lead-form");
+  const leadError = panel.querySelector("[data-lead-error]");
   const channelLabel = panel.querySelector("[data-channel]");
+
+  function readLead() {
+    try {
+      return JSON.parse(sessionStorage.getItem(LEAD_STORE) || "null");
+    } catch {
+      return null;
+    }
+  }
+
+  function saveLead(payload) {
+    sessionStorage.setItem(LEAD_STORE, JSON.stringify(payload));
+  }
+
+  function setLeadMode(on) {
+    panel.classList.toggle("lead-open", on);
+    lead.hidden = !on;
+    if (on) {
+      channelLabel.textContent = "Share your details to start";
+      const nameInput = leadForm.name;
+      if (nameInput && !nameInput.value) nameInput.focus();
+    } else {
+      channelLabel.textContent = channelText();
+    }
+  }
 
   function channelText() {
     if (voiceState !== "idle" && voiceState !== "error") return "Voice · same inquiry";
@@ -138,6 +181,8 @@
       }
       if (!response.ok) throw new Error("session");
       sessionId = stored;
+      leadReady = true;
+      setLeadMode(false);
       renderHistory(await response.json());
       return true;
     } catch {
@@ -145,24 +190,50 @@
     }
   }
 
+  function validEmail(value) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
+  }
+
+  function showLeadError(message) {
+    leadError.textContent = message || "";
+    leadError.classList.toggle("show", Boolean(message));
+  }
+
+  async function startWithLead(name, email) {
+    const response = await fetch(`${API}/v1/session`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        page: document.body.dataset.page || "",
+        equipment: pageEquipment(),
+        name,
+        email,
+      }),
+    });
+    if (!response.ok) throw new Error("session");
+    const data = await response.json();
+    sessionId = data.session_id;
+    sessionStorage.setItem(STORE, sessionId);
+    saveLead({ sessionId, name, email });
+    if (data.voice_access_token) {
+      sessionStorage.setItem(VOICE_STORE, JSON.stringify({ sessionId, token: data.voice_access_token }));
+    }
+    leadReady = true;
+    setLeadMode(false);
+    log.innerHTML = "";
+    chips.innerHTML = "";
+    showIntro(data.text, data.chips);
+  }
+
   async function ensureSession() {
     if (sessionId && log.children.length) return;
     if (await restoreSession()) return;
-    try {
-      const response = await fetch(`${API}/v1/session`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ page: document.body.dataset.page || "", equipment: pageEquipment() }),
-      });
-      if (!response.ok) throw new Error("session");
-      const data = await response.json();
-      sessionId = data.session_id;
-      sessionStorage.setItem(STORE, sessionId);
-      if (data.voice_access_token) sessionStorage.setItem(VOICE_STORE, JSON.stringify({sessionId, token: data.voice_access_token}));
-      showIntro(data.text, data.chips);
-    } catch {
-      addMsg("bot", "The fit check is not reachable. Start the API, then open this again.");
+    const lead = readLead();
+    if (lead?.name && lead?.email) {
+      await startWithLead(lead.name, lead.email);
+      return;
     }
+    setLeadMode(true);
   }
 
   async function send(text, chip = null) {
@@ -170,7 +241,12 @@
     if (value.toLowerCase() === "talk here" && voiceAvailable) return startVoice();
     if (!["idle", "error"].includes(voiceState)) return;
     if (!value) return;
+    if (!leadReady) {
+      setLeadMode(true);
+      return;
+    }
     await ensureSession();
+    if (!sessionId) return;
     addMsg("user", value);
     renderChips([]);
     const pending = addMsg("bot", "Listening — keeping this on the same case…", true);
@@ -242,16 +318,25 @@
     voiceState = state;
     const active = !["idle", "error"].includes(state);
     startButton.hidden = active;
-    startButton.disabled = !voiceAvailable;
+    startButton.disabled = !voiceAvailable || !leadReady;
     endButton.hidden = !active;
     muteButton.hidden = !["connected", "playback_blocked"].includes(state);
     audioButton.hidden = state !== "playback_blocked";
-    form.querySelectorAll("input, button").forEach(node => { node.disabled = active; });
-    chips.querySelectorAll("button").forEach(node => { node.disabled = active; });
-    voiceStatus.textContent = message || ({connecting: "Connecting microphone…", connected: "AI voice connected · you can interrupt",
-      playback_blocked: "Enable audio to hear the AI assistant",
-      idle: voiceAvailable ? "Microphone starts only when you choose Talk here." : "Voice unavailable · continue in chat",
-      error: "Voice unavailable · continue in chat"}[state] || state);
+    form.querySelectorAll("input, button").forEach((node) => {
+      node.disabled = active;
+    });
+    chips.querySelectorAll("button").forEach((node) => {
+      node.disabled = active;
+    });
+    voiceStatus.textContent =
+      message ||
+      ({
+        connecting: "Connecting microphone…",
+        connected: "AI voice connected · you can interrupt",
+        playback_blocked: "Enable audio to hear the AI assistant",
+        idle: voiceAvailable ? "Microphone starts only when you choose Talk here." : "Voice unavailable · continue in chat",
+        error: "Voice unavailable · continue in chat",
+      }[state] || state);
     channelLabel.textContent = channelText();
   }
   async function checkVoice() {
@@ -261,28 +346,40 @@
       const capability = await response.json();
       voiceAvailable = capability.available;
       startButton.textContent = capability.profile === "demo" ? "Talk here · demo voice" : "Talk here";
-    } catch { voiceAvailable = false; }
+    } catch {
+      voiceAvailable = false;
+    }
     if (["idle", "error"].includes(voiceState)) updateVoice("idle");
   }
   let sdkPromise;
   function loadVoice() {
-    if (!sdkPromise) sdkPromise = new Promise((resolve, reject) => {
-      const script = document.createElement("script");
-      script.src = "/voice-client.js";
-      script.onload = resolve;
-      script.onerror = () => { sdkPromise = null; reject(new Error("Voice client could not load. Continue in chat.")); };
-      document.head.append(script);
-    });
+    if (!sdkPromise)
+      sdkPromise = new Promise((resolve, reject) => {
+        const script = document.createElement("script");
+        script.src = "/voice-client.js";
+        script.onload = resolve;
+        script.onerror = () => {
+          sdkPromise = null;
+          reject(new Error("Voice client could not load. Continue in chat."));
+        };
+        document.head.append(script);
+      });
     return sdkPromise;
   }
   async function startVoice() {
     if (!["idle", "error"].includes(voiceState)) return;
+    if (!leadReady) {
+      setLeadMode(true);
+      return;
+    }
     const request = ++voiceRequest;
     updateVoice("connecting");
     await ensureSession();
     if (request !== voiceRequest) return;
     let access;
-    try { access = JSON.parse(sessionStorage.getItem(VOICE_STORE) || "null"); } catch {}
+    try {
+      access = JSON.parse(sessionStorage.getItem(VOICE_STORE) || "null");
+    } catch {}
     if (!access || access.sessionId !== sessionId) {
       updateVoice("error", "Voice needs a newly started chat in this browser. Your existing chat remains available.");
       return;
@@ -290,8 +387,11 @@
     try {
       await loadVoice();
       if (request !== voiceRequest) return;
-      voiceClient = new window.AyyanVoice.VoiceClient({sessionId, accessToken: access.token,
-        onStatus: updateVoice, onHistory: async () => {
+      voiceClient = new window.AyyanVoice.VoiceClient({
+        sessionId,
+        accessToken: access.token,
+        onStatus: updateVoice,
+        onHistory: async () => {
           if (!sessionId) return;
           const response = await fetch(`/v1/session/${sessionId}`);
           if (response.ok) {
@@ -299,35 +399,91 @@
             renderHistory(history);
             if (history.manager_accepted && voiceClient?.room) await voiceClient.stop();
           }
-        }});
+        },
+      });
       await voiceClient.start();
-    } catch (error) { updateVoice("error", error.message); }
+    } catch (error) {
+      updateVoice("error", error.message);
+    }
   }
   startButton.addEventListener("click", startVoice);
-  endButton.addEventListener("click", () => { ++voiceRequest; if (voiceClient) void voiceClient.stop(); else updateVoice("idle"); });
+  endButton.addEventListener("click", () => {
+    ++voiceRequest;
+    if (voiceClient) void voiceClient.stop();
+    else updateVoice("idle");
+  });
   muteButton.addEventListener("click", async () => {
     muted = !muted;
-    try { await voiceClient?.mute(muted); muteButton.textContent = muted ? "Unmute" : "Mute"; }
-    catch { await voiceClient?.stop(); }
+    try {
+      await voiceClient?.mute(muted);
+      muteButton.textContent = muted ? "Unmute" : "Mute";
+    } catch {
+      await voiceClient?.stop();
+    }
   });
   audioButton.addEventListener("click", () => voiceClient?.enableAudio());
-  window.addEventListener("pagehide", () => { void voiceClient?.stop(); });
+  window.addEventListener("pagehide", () => {
+    void voiceClient?.stop();
+  });
   void checkVoice();
+
+  leadForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const nameInput = leadForm.name;
+    const emailInput = leadForm.email;
+    const name = String(nameInput.value || "").trim();
+    const email = String(emailInput.value || "").trim().toLowerCase();
+    nameInput.classList.toggle("invalid", !name);
+    emailInput.classList.toggle("invalid", !validEmail(email));
+    if (!name) {
+      showLeadError("Please enter your name.");
+      nameInput.focus();
+      return;
+    }
+    if (!validEmail(email)) {
+      showLeadError("Please enter a valid email address.");
+      emailInput.focus();
+      return;
+    }
+    showLeadError("");
+    const button = leadForm.querySelector('button[type="submit"]');
+    button.disabled = true;
+    button.textContent = "Starting…";
+    try {
+      await startWithLead(name, email);
+    } catch {
+      showLeadError("The fit check is not reachable. Start the API, then try again.");
+      button.disabled = false;
+      button.textContent = "Start chat";
+      return;
+    }
+    button.disabled = false;
+    button.textContent = "Start chat";
+  });
 
   window.addEventListener("agoc-reset", async () => {
     ++voiceRequest;
     await voiceClient?.stop();
     sessionStorage.removeItem(VOICE_STORE);
+    sessionStorage.removeItem(LEAD_STORE);
     sessionId = null;
+    leadReady = false;
     sessionStorage.removeItem(STORE);
     log.innerHTML = "";
     chips.innerHTML = "";
     channel = "chat";
     workflows = {};
+    leadForm.reset();
+    showLeadError("");
+    setLeadMode(true);
   });
   launcher.addEventListener("click", async () => {
     panel.classList.add("open");
-    if (!log.children.length) await ensureSession();
+    if (sessionId || log.children.length) {
+      if (!log.children.length) await ensureSession();
+    } else if (!(await restoreSession())) {
+      setLeadMode(true);
+    }
     await checkVoice();
   });
   panel.querySelector("[data-close]").addEventListener("click", async () => {
@@ -345,6 +501,10 @@
     const file = form.photo.files && form.photo.files[0];
     form.photo.value = "";
     if (!file) return;
+    if (!leadReady) {
+      setLeadMode(true);
+      return;
+    }
     await ensureSession();
     if (!sessionId) return;
     addMsg("user", `Photo: ${file.name}`);

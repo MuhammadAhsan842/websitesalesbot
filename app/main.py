@@ -21,6 +21,8 @@ CHECKPOINT = ROOT / "data" / "checkpoints.db"
 class SessionIn(BaseModel):
     page: str | None = None
     equipment: str | None = None
+    name: str | None = None
+    email: str | None = None
 
 
 class ChipIn(BaseModel):
@@ -170,8 +172,14 @@ def _seed_equipment(value: str | None) -> dict:
 @app.post("/v1/session")
 def open_session(body: SessionIn | None = None):
     body = body or SessionIn()
-    seed = _seed_equipment(body.equipment)
-    session = db.create_session(seed)
+    seed = _seed_equipment(body.equipment) or {}
+    name = (body.name or "").strip() or None
+    email = (body.email or "").strip().lower() or None
+    if name:
+        seed["name"] = {"value": name, "status": "user_stated"}
+    if email:
+        seed["email"] = {"value": email, "status": "user_stated"}
+    session = db.create_session(seed or None)
     zoho.queue_inquiry(session, body.page)
     try:
         zoho.drain()
@@ -180,7 +188,7 @@ def open_session(body: SessionIn | None = None):
         pass
     text = lookup("welcome")
     ask = "open"
-    if seed:
+    if body.equipment and seed.get("equipment"):
         from app.knowledge import lookup as kn
 
         text = kn(EQUIP_KEYS[seed["equipment"]["value"]]) + " " + kn("welcome").split(". ", 1)[-1]
@@ -199,6 +207,8 @@ def open_session(body: SessionIn | None = None):
         ],
         "manager_requested": False,
         "manager_accepted": False,
+        "name": name,
+        "email": email,
     }
 
 
