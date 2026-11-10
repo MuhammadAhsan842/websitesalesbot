@@ -187,7 +187,7 @@ QUESTIONS = {
 }
 
 CHIPS = {
-    "open": ["I need dispatch", "What equipment do you support?", "I'm already a carrier"],
+    "open": ["I need dispatch", "Service questions", "I'm already a carrier"],
     "equipment": ["Dry van", "Reefer", "Flatbed", "Box truck", "Hotshot"],
     "primaryProblem": ["Better loads", "Home every night", "Paperwork", "Rates"],
     "mcOwnership": ["I have my own MC", "I want to lease on", "Not sure about my MC"],

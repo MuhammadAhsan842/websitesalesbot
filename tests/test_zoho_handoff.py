@@ -196,13 +196,14 @@ class HandoffBriefContent(unittest.TestCase):
         )
         low = brief.lower()
         self.assertIn("26ft", brief.replace(" ", ""))
-        self.assertIn("lease", low)
+        self.assertIn("lease-on, needs insurance", low)
         self.assertIn("insurance", low)
         self.assertIn("500-600", brief)
         self.assertIn("callback", low)
-        self.assertIn("timezone", low)
+        self.assertIn("america/chicago", low)
         self.assertNotIn("operating from chicago", low)
-        self.assertIn("monday", low)  # outstanding weekday
+        self.assertIn("name and email:", low)
+        self.assertIn("assistance requested:", low)
         self.assertIn("opp_abcdef12", brief)
 
     def test_fit_summary_no_inscope_without_equipment(self):

@@ -150,7 +150,8 @@ def _merge_facts(
     # Catalog / support questions are not the customer's truck.
     catalog_ask = bool(
         re.search(
-            r"what (equipment|trucks?) (do you|did you)|do you (support|dispatch|haul)|what do you support",
+            r"service questions|what (equipment|trucks?) (do you|did you)|"
+            r"do you (support|dispatch|haul)|what do you support",
             user_text or "",
             re.I,
         )

@@ -390,10 +390,12 @@ class HandoffBriefOwnMc(unittest.TestCase):
         )
         low = brief.lower()
         self.assertIn("own-mc setup review", low)
-        self.assertIn("own mc", low)
+        self.assertIn("own-mc / dispatch service", low)
+        self.assertIn("own-mc", low)
         self.assertIn("authority ~5 months", low)
         self.assertNotIn("starting city/zip", low)
-        self.assertIn("document packet", low)
+        self.assertIn("name and email:", low)
+        self.assertIn("next action:", low)
 
 
 class AutoSaveOnStartDate(unittest.TestCase):

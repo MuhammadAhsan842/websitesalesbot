@@ -105,7 +105,7 @@ function chipsFor(session) {
   if (session.takeover) return ["What's my status?"];
   if (session.handedOver) return ["What's my status?", "Talk here", "Call me", "Talk to a human"];
   if (session.conversationState === "understand_request") {
-    return ["I need dispatch", "What equipment do you support?", "I'm already a carrier"];
+    return ["I need dispatch", "Service questions", "I'm already a carrier"];
   }
   const missing = missingQualification(session);
   if (missing[0] === "equipment") return ["Dry van", "Reefer", "Flatbed", "Box truck"];

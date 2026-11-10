@@ -235,12 +235,41 @@ class ZohoHandoffPayload(unittest.TestCase):
         self.assertEqual(crm["callback_timezone"], "America/Chicago")
         self.assertIn("insurance", (crm.get("needs_summary") or "").lower())
         self.assertIn("26", desc)
-        self.assertIn("Reason for review", desc)
-        self.assertIn("Next Step", desc)
-        self.assertIn("timezone", desc.lower())
+        self.assertIn("Name and email:", desc)
+        self.assertIn("Arrangement:", desc)
+        self.assertIn("Assistance requested:", desc)
+        self.assertIn("Next action:", desc)
+        self.assertIn("america/chicago", desc.lower())
         self.assertNotIn("Closing_Date", payload["zoho"])
         self.assertIn("Lease-on review", payload["zoho"]["Deal_Name"])
         self.assertIn("Insurance", payload["zoho"]["Deal_Name"])
+
+    def test_manager_brief_includes_contact_and_lease_matrix(self):
+        from app import playbook
+
+        brief = playbook.handoff_brief(
+            facts(
+                name="Ahmed Khan",
+                email="ahmed@example.com",
+                equipment="box_truck",
+                trailerLength="26ft",
+                mcOwnership="no_own_mc",
+                insurance="needs_insurance",
+                operatingMode="local",
+                milesPerDay="500-600",
+            ),
+            "lease_on",
+            task="insurance_quote",
+            status="manager_requested",
+            next_action="Manager to review and follow up",
+            opportunity_id="opp_test_12345678",
+        )
+        self.assertIn("Ahmed Khan · ahmed@example.com", brief)
+        self.assertIn("26ft box truck", brief)
+        self.assertIn("Lease-on, needs insurance", brief)
+        self.assertIn("500-600 miles/day", brief)
+        self.assertIn("Insurance and pricing review", brief)
+        self.assertIn("Manager to review and follow up", brief)
 
 
 class KnowledgeCopy(unittest.TestCase):

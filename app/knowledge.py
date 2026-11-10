@@ -3,6 +3,7 @@
 REGISTER = {
     "version": "ayyan_sales_v12",
     "welcome": "Hey — I'm Ayyan Group's AI sales assistant. I can help see if we're a fit; our onboarding manager handles the papers. What are you running?",
+    "welcome_lead": "Thanks, {name}. How can I help you today?",
     "services": "We only dispatch these types: box truck 24/26/28 ft, hotshot 30/40 ft, dry van 48/53 ft, reefer 48/53 ft, flatbed 48/53 ft, step deck 48/53 ft, and power-only. You approve every load. We handle brokers and paperwork.",
     "freight_roles": "Shippers own the cargo. Brokers connect shippers with carriers and pay for completed loads. A dispatcher represents the carrier — finds matching freight, negotiates with brokers, and handles paperwork. The motor carrier runs the truck under FMCSA rules. Broker freight pay goes to the carrier's account — dispatchers don't take those payments personally.",
     "dispatch_how": "Our dispatch team helps find freight that fits your equipment and preferred lanes, handles broker communication and paperwork, and coordinates the load process. You approve each load. Talking here isn't a live load search.",

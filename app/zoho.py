@@ -298,7 +298,13 @@ def _description(session: dict, extra: dict, arrangement: str | None) -> str:
         status = case.get("status")
         extra = {**extra, "next_action": case.get("next_action"), "related_tasks": case.get("related_tasks")}
     try:
-        if case or _is_handoff_scenario(scenario, task, status):
+        use_manager_brief = (
+            case
+            or _is_handoff_scenario(scenario, task, status)
+            or _val(facts, "name")
+            or _val(facts, "email")
+        )
+        if use_manager_brief:
             brief = handoff_brief(
                 facts,
                 arrangement,
@@ -313,7 +319,7 @@ def _description(session: dict, extra: dict, arrangement: str | None) -> str:
 
             callback = workflows.public_state(session).get("callback")
             if callback:
-                brief += f" Callback request status: {callback['status']}."
+                brief += f"\nCallback request status: {callback['status']}."
                 if callback["status"] == "cancelled":
                     brief += " Do not call; the driver cancelled this request."
             return brief
@@ -337,16 +343,16 @@ def record(scenario: str, session: dict, extra: dict | None = None) -> dict:
     extra_for_desc = {**extra, "scenario": scenario, "task": task, "status": status}
     description = _description(session, extra_for_desc, arrangement)
     title = deal_title(facts, arrangement, task=task, opportunity_id=session.get("opportunity_id"))
+    next_step = extra.get("next_action")
+    # handoff_brief already includes Next action; only append when using a short fit summary.
+    if next_step and "Next action:" not in (description or ""):
+        description = f"{description}\n\nNext action: {next_step}"
     zoho_fields = {
         "Deal_Name": title,
         "Stage": stage,
         "Phone": _val(facts, "phone"),
         "Description": description,
     }
-    # Follow-up timing belongs in the brief / Next Step — not Closing Date.
-    next_step = extra.get("next_action")
-    if next_step:
-        zoho_fields["Description"] = f"{description}\n\nNext Step: {next_step}"
     payload = {
         "scenario": scenario,
         "module": extra.get("module") or "Deals",
@@ -379,10 +385,11 @@ def record(scenario: str, session: dict, extra: dict | None = None) -> dict:
             "mc_status": _val(facts, "mcOwnership"),
             "name": _val(facts, "name"),
             "email": _val(facts, "email"),
+            "contact": " · ".join(p for p in [_val(facts, "name"), _val(facts, "email")] if p) or None,
             "needs_summary": description,
             "handoff_status": status,
             "unresolved_objections": _objections(extra.get("blocked"), extra.get("intent")),
-            "next_action": next_step,
+            "next_action": next_step or "Manager to review and follow up",
             "owner": owner,
             "follow_up_due": follow,
             "task": task,

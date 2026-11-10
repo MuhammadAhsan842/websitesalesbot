@@ -186,12 +186,16 @@ def open_session(body: SessionIn | None = None):
     except Exception:
         # Never block opening chat on CRM/sqlite contention — outbox retries later.
         pass
-    text = lookup("welcome")
     ask = "open"
+    if name:
+        first = name.split()[0]
+        text = lookup("welcome_lead").format(name=first)
+    else:
+        text = lookup("welcome")
     if body.equipment and seed.get("equipment"):
         from app.knowledge import lookup as kn
 
-        text = kn(EQUIP_KEYS[seed["equipment"]["value"]]) + " " + kn("welcome").split(". ", 1)[-1]
+        text = kn(EQUIP_KEYS[seed["equipment"]["value"]]) + " How can I help you today?"
         ask = "primaryProblem"
     session["manager_requested"] = False
     session["manager_accepted"] = False
@@ -214,12 +218,22 @@ def open_session(body: SessionIn | None = None):
 
 @app.get("/v1/session/{session_id}")
 def session_history(session_id: str):
+    from app.tasks import fact_value
+
     session = db.get_session(session_id)
     if not session:
         raise HTTPException(404, "unknown session")
     messages = [{"role": row["role"], "text": row["text"]} for row in db.list_messages(session_id)]
     mem = session.get("memory") or {}
     ask = playbook.next_ask(session.get("facts") or {}, mem, intent=None, repair=mem.get("repair"))
+    name = fact_value(session.get("facts") or {}, "name")
+    email = fact_value(session.get("facts") or {}, "email")
+    if messages:
+        intro = None
+    elif name:
+        intro = lookup("welcome_lead").format(name=str(name).split()[0])
+    else:
+        intro = lookup("welcome")
     return {
         "session_id": session["id"],
         "opportunity_id": session["opportunity_id"],
@@ -236,10 +250,12 @@ def session_history(session_id: str):
             if not messages
             else chip_options(ask) if ask else [{"label": label, "field": None, "value": label} for label in _chips(session, {"next_field": ask})]
         ),
-        "text": None if messages else lookup("welcome"),
+        "text": intro,
         "memory": session.get("memory") or {},
         "desk": playbook.desk_card(session),
         "workflows": workflows.public_state(session),
+        "name": name,
+        "email": email,
     }
 
 

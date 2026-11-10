@@ -147,13 +147,12 @@
     if (log.children.length) return;
     addMsg(
       "bot",
-      text ||
-        "I'm Ayyan Group's AI sales assistant. I can check dispatch fit; a person handles papers. What are you running?",
+      text || "Thanks. How can I help you today?",
     );
     renderChips(
       list && list.length
         ? list
-        : ["I need dispatch", "What equipment do you support?", "I'm already a carrier"],
+        : ["I need dispatch", "Service questions", "I'm already a carrier"],
     );
   }
 
@@ -175,15 +174,23 @@
     try {
       const response = await fetch(`${API}/v1/session/${stored}`);
       if (response.status === 404) {
+        // Inquiry gone — ask for contact again on the next inquiry.
         sessionStorage.removeItem(STORE);
+        sessionStorage.removeItem(LEAD_STORE);
+        sessionStorage.removeItem(VOICE_STORE);
         sessionId = null;
+        leadReady = false;
         return false;
       }
       if (!response.ok) throw new Error("session");
       sessionId = stored;
       leadReady = true;
       setLeadMode(false);
-      renderHistory(await response.json());
+      const data = await response.json();
+      if (data.name || data.email) {
+        saveLead({ sessionId, name: data.name || "", email: data.email || "" });
+      }
+      renderHistory(data);
       return true;
     } catch {
       return false;
@@ -228,11 +235,7 @@
   async function ensureSession() {
     if (sessionId && log.children.length) return;
     if (await restoreSession()) return;
-    const lead = readLead();
-    if (lead?.name && lead?.email) {
-      await startWithLead(lead.name, lead.email);
-      return;
-    }
+    // Form once per inquiry — do not invent a new session from cached contact alone.
     setLeadMode(true);
   }
 

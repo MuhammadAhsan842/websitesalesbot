@@ -390,137 +390,100 @@ def handoff_brief(
     opportunity_id: str | None = None,
     reason: str | None = None,
 ) -> str:
-    """Internal manager brief for Zoho Description — evidence-based, action-oriented."""
+    """Manager / Zoho summary — structured contact + qualify context."""
     equip_key = fact_value(facts, "equipment")
     equip = EQUIP_LABELS.get(str(equip_key or ""), equip_key) if equip_key else None
     length = fact_value(facts, "trailerLength")
     insurance = fact_value(facts, "insurance")
     route = fact_value(facts, "insuranceRoute")
-    mode = fact_value(facts, "operatingMode")
+    mode = _mode(facts)
     miles = fact_value(facts, "milesPerDay")
     weekday = fact_value(facts, "weekdaySchedule")
-    area = fact_value(facts, "operatingArea") or fact_value(facts, "lanes")
     phone = fact_value(facts, "phone")
     cb_time = fact_value(facts, "callbackTime")
     cb_tz = fact_value(facts, "callbackTimezone")
     support = fact_value(facts, "equipmentSupport")
+    name = fact_value(facts, "name")
+    email = fact_value(facts, "email")
+    start = fact_value(facts, "startDate")
+    authority_age = fact_value(facts, "authorityAgeMonths")
+
+    contact = " · ".join(p for p in [name, email] if p) or "not captured yet"
+    if length and equip:
+        equipment_line = f"{length} {equip}"
+    elif equip:
+        equipment_line = str(equip)
+    else:
+        equipment_line = "not confirmed yet"
+
+    if arrangement == "lease_on":
+        if insurance == "needs_insurance":
+            arrangement_line = "Lease-on, needs insurance"
+        elif insurance == "own_insurance":
+            arrangement_line = "Lease-on, own insurance"
+        else:
+            arrangement_line = "Lease-on"
+    elif arrangement == "dispatch_service":
+        arrangement_line = "Own-MC / dispatch service"
+        if authority_age is not None:
+            arrangement_line += f" (authority ~{authority_age} months)"
+    else:
+        arrangement_line = "Arrangement not confirmed"
+
+    req_bits = []
+    if mode:
+        req_bits.append(str(mode).upper() if mode == "otr" else str(mode).replace("_", " ").title())
+    if miles:
+        req_bits.append(f"{miles} miles/day")
+    if weekday:
+        req_bits.append(str(weekday).replace("_", " "))
+    if start:
+        req_bits.append(f"start {start}")
+    requirements_line = ", ".join(req_bits) if req_bits else "not confirmed yet"
 
     if not reason:
-        fee_pct = fact_value(facts, "requestedFeePercent")
-        if status == "manager_requested":
-            reason = "Manager request — driver asked for an onboarding manager (not assigned/accepted yet)."
-        elif task == "insurance_quote":
-            reason = "Pricing / insurance quote review — coverage still needs arranging."
-        elif fee_pct and task in {"clarification", "setup_packet", "lease_agreement", "fit_check"}:
-            reason = f"Pricing exception review — driver proposed {fee_pct}% (not approved)."
-        elif task == "clarification":
-            reason = "Pricing clarification / eligibility — arrangement or facts need a human look."
-        elif task == "callback":
-            reason = "Callback request — contact timing recorded, not dialed."
-        elif task == "setup_packet":
-            reason = "Own-MC setup review — qualification complete; documents pending human review."
+        if task == "insurance_quote" or (insurance == "needs_insurance" and arrangement == "lease_on"):
+            reason = "Insurance and pricing review"
+        elif task == "lease_agreement" and mode == "otr":
+            reason = "Lease documents pending; manager to confirm OTR pricing"
+        elif task == "lease_agreement" and mode == "local":
+            reason = "Lease documents pending; manager for any fee negotiation"
         elif task == "lease_agreement":
-            if insurance == "needs_insurance":
-                reason = (
-                    "Lease-on, needs insurance — mileage/schedule as recorded; "
-                    "insurance assistance and charges require review; initial documents outstanding."
-                )
-            elif mode == "otr":
-                reason = (
-                    "Lease-on, own insurance, OTR — coverage reported; start requested; "
-                    "lease documents pending review; manager to confirm pricing."
-                )
-            elif mode == "local":
-                reason = (
-                    "Lease-on, own insurance, local — coverage reported; start requested; "
-                    "lease documents pending; manager for any fee negotiation."
-                )
-            else:
-                reason = "Lease-on setup review — agreement and papers pending human review."
-        elif insurance == "needs_insurance":
-            reason = "Pricing / insurance quote review — coverage still needs arranging."
+            reason = "Lease agreement and papers pending review"
+        elif task == "setup_packet":
+            reason = "Own-MC setup review; documents pending"
+        elif status == "manager_requested":
+            reason = "Driver asked for an onboarding manager"
+        elif task == "callback":
+            reason = "Callback requested — contact timing recorded, not dialed"
+        elif fact_value(facts, "requestedFeePercent"):
+            reason = f"Pricing exception review — driver proposed {fact_value(facts, 'requestedFeePercent')}%"
         else:
-            reason = "Fit / qualification update."
+            reason = "Fit / qualification update"
 
-    authority_age = fact_value(facts, "authorityAgeMonths")
-    start = fact_value(facts, "startDate")
-    confirmed = []
-    if equip and length:
-        confirmed.append(f"{length} {equip}")
-    elif equip:
-        confirmed.append(str(equip))
-    if arrangement == "lease_on":
-        confirmed.append("wants to lease on")
-    elif arrangement == "dispatch_service":
-        confirmed.append("own MC")
-        if authority_age is not None:
-            confirmed.append(f"authority ~{authority_age} months")
-    if insurance == "needs_insurance":
-        confirmed.append("needs insurance")
-        if route == "company_arranged":
-            confirmed.append("prefers company-arranged insurance")
-    elif insurance == "own_insurance" and arrangement != "dispatch_service":
-        cov = fact_value(facts, "coverageTypes")
-        confirmed.append(f"own insurance ({cov})" if cov else "own insurance stated")
-    if mode:
-        confirmed.append(f"prefers {str(mode).replace('_', ' ')}")
-    if miles:
-        confirmed.append(f"comfortable with {miles} miles/day")
-    if weekday:
-        confirmed.append(f"schedule {str(weekday).replace('_', ' ')}")
-    if start:
-        confirmed.append(f"wants to start {start}")
-    if area:
-        confirmed.append(f"operating from {area}")
-
-    outstanding = []
-    if insurance == "needs_insurance" and arrangement != "dispatch_service":
-        outstanding.append("insurance arrangement and applicable charges")
-    if mode == "local" and not weekday:
-        outstanding.append("Monday–Friday availability")
-    # City/ZIP is never a lease-on or own-MC chat qualify gap.
-    if phone and (not cb_time or not cb_tz):
-        outstanding.append("callback schedule completion")
-    elif not phone and task == "callback":
-        outstanding.append("validated phone number")
-    if phone and cb_time and not fact_value(facts, "callbackDate"):
-        outstanding.append("callback date")
-    if support == "out_of_scope":
-        outstanding.append("equipment catalog fit")
-    if not start and status in {"manager_requested", "awaiting_human_action", "callback_requested"}:
-        outstanding.append("preferred start timing")
-    if arrangement == "dispatch_service" and task == "setup_packet":
-        outstanding.append("document packet return (authority, W-9, COI, truck photos; NOA/voided check if payment requires)")
-
-    callback_lines = []
-    if phone or cb_time or cb_tz:
-        callback_lines.append(
-            f"Callback: {', '.join(p for p in [phone and f'phone {phone}', cb_time and str(cb_time), cb_tz and str(cb_tz)] if p)}."
-        )
-        if cb_tz and area and str(cb_tz).lower().find(str(area).lower()) >= 0:
-            pass
-        if cb_tz and ("chicago" in str(cb_tz).lower() or "America/Chicago" in str(cb_tz)):
-            callback_lines.append("Chicago/timezone is a callback timezone reference, not an operating location unless separately confirmed.")
-        callback_lines.append("Validate phone country/format before dialing. Manager acceptance is separate from this request.")
-
-    related = [t for t in (related_tasks or []) if t and t != task]
-    action = next_action or "Manager to review confirmed facts, resolve open items, and contact the driver if a callback was requested."
-    parts = [
-        f"Reason for review: {reason}",
-        f"Driver-confirmed facts: {'; '.join(confirmed)}." if confirmed else "Driver-confirmed facts: none recorded yet.",
-        f"Primary task: {task or 'fit_check'} ({status or 'open'}).",
+    action = next_action or "Manager to review and follow up"
+    lines = [
+        f"Name and email: {contact}",
+        f"Equipment: {equipment_line}",
+        f"Arrangement: {arrangement_line}",
+        f"Requirements: {requirements_line}",
+        f"Assistance requested: {reason}",
+        f"Next action: {action}",
     ]
+    if phone or cb_time or cb_tz:
+        cb = ", ".join(p for p in [phone and f"phone {phone}", cb_time and str(cb_time), cb_tz and str(cb_tz)] if p)
+        lines.append(f"Callback: {cb} (not dialed yet).")
+    if support == "out_of_scope":
+        lines.append("Note: equipment is outside current catalog.")
+    if route == "company_arranged":
+        lines.append("Insurance route: company-arranged.")
+    related = [t for t in (related_tasks or []) if t and t != task]
     if related:
-        parts.append(f"Related tasks: {', '.join(related)}.")
-    if callback_lines:
-        parts.extend(callback_lines)
-    if outstanding:
-        parts.append(f"Outstanding: {'; '.join(outstanding)}.")
-    parts.append(f"Next action: {action}")
+        lines.append(f"Related tasks: {', '.join(related)}.")
     if opportunity_id:
-        parts.append(f"Inquiry ID: {opportunity_id}.")
-    parts.append("Readiness interest is not clearance. Manager requested ≠ assigned ≠ accepted.")
-    return " ".join(parts)
+        lines.append(f"Inquiry ID: {opportunity_id}.")
+    lines.append("Readiness interest is not clearance. Manager requested ≠ assigned ≠ accepted.")
+    return "\n".join(lines)
 
 
 def deal_title(facts: dict, arrangement: str | None, *, task: str | None = None, opportunity_id: str | None = None) -> str:
