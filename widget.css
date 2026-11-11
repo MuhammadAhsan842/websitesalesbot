@@ -1,4 +1,5 @@
 .agoc-launcher, .agoc-panel, .agoc-panel * { box-sizing: border-box; }
+.agoc-panel [hidden] { display: none !important; }
 .agoc-launcher {
   position: fixed; right: 18px; bottom: 18px; z-index: 80;
   width: 58px; height: 58px; border: 0; border-radius: 50%;
@@ -9,6 +10,7 @@
 .agoc-panel {
   position: fixed; right: 18px; bottom: 86px; z-index: 80;
   width: min(380px, calc(100vw - 24px)); height: min(620px, calc(100vh - 120px));
+  height: min(620px, calc(100dvh - 104px));
   background: #fff; border: 1px solid #d7e0ea; border-radius: 18px;
   box-shadow: 0 18px 50px rgba(18, 32, 51, 0.16);
   display: none; flex-direction: column; overflow: hidden;
@@ -18,13 +20,18 @@
 .agoc-panel.lead-open .agoc-upload-modal { display: none !important; }
 .agoc-panel.open { display: flex; }
 .agoc-head {
+  flex: 0 0 auto;
   background: #16324f; color: #fff; padding: 12px 14px;
   display: flex; justify-content: space-between; align-items: center;
 }
 .agoc-head strong { display: block; font-size: 14px; }
 .agoc-head span { font-size: 12px; opacity: 0.8; }
 .agoc-head button { background: transparent; border: 0; color: #fff; cursor: pointer; font-size: 18px; }
-.agoc-log { flex: 1; overflow: auto; padding: 12px; display: grid; gap: 10px; background: #f6f8fb; }
+.agoc-log {
+  flex: 1 1 0; min-height: 0; overflow-y: auto; overflow-x: hidden;
+  padding: 12px; display: grid; align-content: start; grid-auto-rows: max-content;
+  gap: 10px; background: #f6f8fb; overscroll-behavior: contain;
+}
 .agoc-msg { max-width: 92%; padding: 10px 12px; border-radius: 14px; font-size: 14px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
 .agoc-msg.bot { background: #fff; border: 1px solid #d7e0ea; }
 .agoc-msg.pending { opacity: 0.7; font-style: italic; }
@@ -34,15 +41,21 @@
 .agoc-think summary { cursor: pointer; font-weight: 600; }
 .agoc-think pre { white-space: pre-wrap; margin: 6px 0 0; max-height: 220px; overflow: auto; background: #f4f7fb; padding: 8px; border-radius: 8px; }
 .agoc-think-draft { margin-top: 6px; font-style: italic; }
-.agoc-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 12px 8px; background: #f6f8fb; }
+.agoc-chips {
+  flex: 0 0 auto; display: flex; flex-wrap: nowrap; gap: 6px;
+  max-width: 100%; overflow-x: auto; overflow-y: hidden;
+  padding: 6px 12px 8px; background: #f6f8fb; scrollbar-width: thin;
+  overscroll-behavior-x: contain;
+}
 .agoc-chips button {
+  flex: 0 0 auto; white-space: nowrap;
   border: 1px solid #d7e0ea; background: #fff; border-radius: 999px;
   padding: 6px 10px; font-size: 12px; font-weight: 700; cursor: pointer;
 }
-.agoc-form { padding: 10px; border-top: 1px solid #d7e0ea; background: #fff; }
+.agoc-form { flex: 0 0 auto; margin: 0; padding: 10px; border-top: 1px solid #d7e0ea; background: #fff; }
 .agoc-composer { display: grid; gap: 8px; }
 .agoc-composer input[name="message"] {
-  width: 100%; border: 1px solid #d7e0ea; border-radius: 12px; padding: 10px 12px; font: inherit;
+  width: 100%; min-width: 0; border: 1px solid #d7e0ea; border-radius: 12px; padding: 10px 12px; font: inherit;
 }
 .agoc-composer-actions { display: flex; gap: 8px; align-items: center; }
 .agoc-upload-btn {
@@ -54,14 +67,26 @@
 }
 .agoc-upload-hint { margin: 0; color: #6b7c90; font-size: 11px; }
 .agoc-uploads {
-  padding: 8px 12px; border-top: 1px solid #d7e0ea; background: #f6f8fb;
-  display: grid; gap: 6px; max-height: 120px; overflow: auto;
+  flex: 0 0 auto; min-width: 0; border-top: 1px solid #d7e0ea; background: #f6f8fb;
+}
+.agoc-uploads summary {
+  padding: 8px 12px; color: #16324f; font-size: 12px; cursor: pointer; white-space: nowrap;
+}
+.agoc-uploads summary span {
+  display: inline-block; max-width: calc(100% - 125px); margin-left: 8px;
+  overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; color: #4a5d73; font-size: 11px;
+}
+.agoc-uploads.has-errors summary span { color: #b42318; }
+.agoc-upload-items {
+  display: grid; gap: 6px; max-height: 112px; max-height: min(112px, 18dvh);
+  overflow-y: auto; padding: 0 12px 8px; overscroll-behavior: contain;
 }
 .agoc-upload-row {
   display: flex; justify-content: space-between; gap: 8px; align-items: center;
   background: #fff; border: 1px solid #d7e0ea; border-radius: 10px; padding: 8px 10px; font-size: 12px;
 }
-.agoc-upload-row strong { display: block; color: #16324f; }
+.agoc-upload-row > div:first-child { min-width: 0; }
+.agoc-upload-row strong { display: block; color: #16324f; overflow-wrap: anywhere; }
 .agoc-upload-row span { color: #4a5d73; }
 .agoc-upload-row.uploading span { color: #8a6d00; }
 .agoc-upload-row.received span { color: #1f6b3a; }
@@ -91,8 +116,13 @@
 }
 .agoc-upload-dialog-actions button.primary { border: 0; background: #c9a227; }
 .agoc-upload-note { margin: 10px 0 0; color: #6b7c90; font-size: 11px; }
-.agoc-voice { padding: 8px 12px; border-top: 1px solid #d7e0ea; font-size: 12px; }
-.agoc-voice [role="status"] { display: block; margin-bottom: 6px; color: #42566f; }
+.agoc-voice {
+  flex: 0 0 auto; display: flex; gap: 8px; align-items: center;
+  padding: 8px 12px; border-top: 1px solid #d7e0ea; font-size: 12px;
+}
+.agoc-voice.unavailable { display: none; }
+.agoc-voice [role="status"] { flex: 1; min-width: 0; color: #42566f; }
+.agoc-voice > div { display: flex; gap: 6px; flex-wrap: wrap; }
 .agoc-voice button { border: 1px solid #d7e0ea; border-radius: 10px; padding: 7px 10px; background: #fff; color: #16324f; cursor: pointer; }
 .agoc-voice button:disabled { opacity: .55; cursor: default; }
 .agoc-voice button:focus-visible { outline: 2px solid #16324f; outline-offset: 2px; }
@@ -168,4 +198,29 @@
 .agoc-lead-note {
   margin: 14px 0 0; text-align: center;
   color: #6b7c90; font-size: 12px; line-height: 1.45;
+}
+
+@media (max-width: 480px), (max-height: 540px) {
+  .agoc-panel {
+    right: 12px; bottom: 12px;
+    height: min(680px, calc(100vh - 24px));
+    height: min(680px, calc(100dvh - 24px));
+  }
+  .agoc-head { padding: 8px 12px; }
+  .agoc-form { padding: 8px; }
+  .agoc-composer { grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: center; }
+  .agoc-composer input[name="message"] { font-size: 16px; }
+  .agoc-composer-actions { gap: 6px; }
+  .agoc-upload-btn { flex: 0 0 auto; padding: 9px; }
+  .agoc-upload-label { display: none; }
+  .agoc-upload-hint { grid-column: 1 / -1; }
+  .agoc-upload-items { max-height: 72px; max-height: min(72px, 16dvh); }
+  .agoc-upload-dialog { max-height: 100%; overflow-y: auto; }
+  .agoc-lead { min-height: 0; padding: 12px; }
+  .agoc-panel.lead-open .agoc-lead { justify-content: flex-start; }
+}
+
+@media (max-height: 420px) {
+  .agoc-head span, .agoc-upload-hint { display: none; }
+  .agoc-voice { padding-top: 4px; padding-bottom: 4px; }
 }

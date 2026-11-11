@@ -32,7 +32,7 @@
         <strong>Dispatch Fit Check</strong>
         <span data-channel>Useful answers first. Papers stay with a person.</span>
       </div>
-      <button type="button" data-close>×</button>
+      <button type="button" data-close aria-label="Close chat">×</button>
     </div>
     <div class="agoc-lead" id="agoc-lead" hidden>
       <form class="agoc-lead-card" id="agoc-lead-form" novalidate>
@@ -48,8 +48,8 @@
         <p class="agoc-lead-note">We’ll use these details to follow up on this inquiry.</p>
       </form>
     </div>
-    <div class="agoc-log" id="agoc-log"></div>
-    <div class="agoc-chips" id="agoc-chips"></div>
+    <div class="agoc-log" id="agoc-log" role="log" aria-label="Conversation" aria-live="polite" tabindex="0"></div>
+    <div class="agoc-chips" id="agoc-chips" role="group" aria-label="Suggested replies" hidden></div>
     <div class="agoc-voice" aria-label="Voice controls">
       <span data-voice-status role="status" aria-live="polite">Checking voice availability…</span>
       <div><button type="button" data-voice-start disabled>Talk here</button>
@@ -57,13 +57,16 @@
       <button type="button" data-voice-audio hidden>Enable audio</button>
       <button type="button" data-voice-end hidden>Return to chat</button></div>
     </div>
-    <div class="agoc-uploads" id="agoc-uploads" hidden></div>
+    <details class="agoc-uploads" id="agoc-uploads" hidden>
+      <summary><strong data-upload-count>Documents</strong><span data-upload-state aria-live="polite"></span></summary>
+      <div class="agoc-upload-items" data-upload-items role="list" aria-label="Uploaded documents"></div>
+    </details>
     <form class="agoc-form" id="agoc-form">
       <div class="agoc-composer">
-        <input name="message" autocomplete="off" placeholder="Message…" />
+        <input name="message" autocomplete="off" placeholder="Message…" aria-label="Message" />
         <div class="agoc-composer-actions">
-          <button type="button" class="agoc-upload-btn" data-upload-open title="PDF, JPG or PNG — received is not approved">
-            📎 Upload documents
+          <button type="button" class="agoc-upload-btn" data-upload-open aria-label="Upload documents" title="Upload PDF, JPG or PNG — received is not approved">
+            <span aria-hidden="true">📎</span><span class="agoc-upload-label"> Upload documents</span>
           </button>
           <button type="submit">Send</button>
         </div>
@@ -146,19 +149,29 @@
     const msg = el("div", { class: `agoc-msg ${role}${pending ? " pending" : ""}` });
     msg.textContent = String(text);
     log.appendChild(msg);
-    log.scrollTop = log.scrollHeight;
+    scrollToLatest();
     return msg;
   }
 
+  function scrollToLatest() {
+    // Chips and upload receipts can change the transcript height in the same turn.
+    requestAnimationFrame(() => { log.scrollTop = log.scrollHeight; });
+  }
+
   function renderChips(list) {
+    const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 32;
     chips.innerHTML = "";
     (list || []).map(normalizeChip).forEach((chip) => {
       if (!chip.label) return;
-      const btn = el("button", { type: "button" }, chip.label);
+      const btn = el("button", { type: "button" });
+      btn.textContent = chip.label;
       btn.disabled = !["idle", "error"].includes(voiceState);
       btn.addEventListener("click", () => send(chip.label, chip));
       chips.appendChild(btn);
     });
+    chips.hidden = !chips.children.length;
+    chips.scrollLeft = 0;
+    if (atBottom) scrollToLatest();
   }
 
   function showIntro(text, list) {
@@ -334,10 +347,14 @@
     } catch {
       pending.classList.remove("pending");
       pending.textContent = "The fit check is not reachable. Start the API, then send again.";
+    } finally {
+      // Replacing the short pending bubble can add lines after the initial scroll.
+      scrollToLatest();
     }
   }
 
   const voiceStatus = panel.querySelector("[data-voice-status]");
+  const voiceControls = panel.querySelector(".agoc-voice");
   const startButton = panel.querySelector("[data-voice-start]");
   const muteButton = panel.querySelector("[data-voice-mute]");
   const endButton = panel.querySelector("[data-voice-end]");
@@ -365,6 +382,7 @@
         idle: voiceAvailable ? "Microphone starts only when you choose Talk here." : "Voice unavailable · continue in chat",
         error: "Voice unavailable · continue in chat",
       }[state] || state);
+    voiceControls.classList.toggle("unavailable", !voiceAvailable && !active);
     channelLabel.textContent = channelText();
   }
   async function checkVoice() {
@@ -527,6 +545,9 @@
   });
 
   const uploadList = panel.querySelector("#agoc-uploads");
+  const uploadItems = uploadList.querySelector("[data-upload-items]");
+  const uploadCount = uploadList.querySelector("[data-upload-count]");
+  const uploadState = uploadList.querySelector("[data-upload-state]");
   const uploadInput = form.docs;
   const uploadModal = panel.querySelector("#agoc-upload-modal");
   const uploadType = panel.querySelector("[data-upload-type]");
@@ -538,13 +559,21 @@
   function renderUploadQueue() {
     if (!uploadQueue.length) {
       uploadList.hidden = true;
-      uploadList.innerHTML = "";
+      uploadItems.replaceChildren();
       return;
     }
     uploadList.hidden = false;
-    uploadList.innerHTML = "";
+    uploadCount.textContent = `Documents (${uploadQueue.length})`;
+    const failed = uploadQueue.filter((item) => item.status === "failed").length;
+    const uploading = uploadQueue.filter((item) => ["queued", "uploading"].includes(item.status)).length;
+    uploadState.textContent = failed
+      ? `${failed} failed · expand to retry`
+      : uploading ? `${uploading} uploading` : "Received · expand to view";
+    uploadList.classList.toggle("has-errors", failed > 0);
+    // Keep the disclosure state while updating rows; uploads do not expand it automatically.
+    uploadItems.replaceChildren();
     uploadQueue.forEach((item) => {
-      const row = el("div", { class: `agoc-upload-row ${item.status}` });
+      const row = el("div", { class: `agoc-upload-row ${item.status}`, role: "listitem" });
       row.innerHTML = `<div><strong></strong><span></span></div><div class="agoc-upload-row-actions"></div>`;
       row.querySelector("strong").textContent = item.file.name;
       row.querySelector("span").textContent = item.detail || item.status;
@@ -554,7 +583,7 @@
         retry.addEventListener("click", () => uploadFile(item));
         actions.appendChild(retry);
       }
-      uploadList.appendChild(row);
+      uploadItems.appendChild(row);
     });
   }
 
