@@ -327,6 +327,8 @@ def case_detail(case_id: str):
     if not row:
         raise HTTPException(404, "unknown case")
     row["files"] = db.list_case_files(case_id)
+    row["components"] = db.list_document_components(case_id)
+    row["verifications"] = db.list_verification_records(case_id)
     seen = set()
     attachments = []
     sources = []
@@ -505,7 +507,7 @@ def _doc_label(doc_type: str | None, packet: dict | None = None) -> str:
         "registration": "truck registration",
         "equipment_photos": "truck photos",
         "w9": "W-9",
-        "authority": "MC authority sheet",
+        "authority": "operating-authority evidence",
         "notice_of_assignment": "notice of assignment",
         "voided_check": "voided check",
         "unknown": "document",
@@ -570,39 +572,27 @@ async def upload_attachment(
     if not session.get("case_id"):
         session["case_id"] = case["id"]
         db.save_session(session)
-    result = await asyncio.to_thread(media.process, dest, session_id, case.get("id"), False)
+    suggested = (doc_type or "").strip().lower() or None
+    result = await asyncio.to_thread(media.store_stub, dest, session_id, case.get("id"))
     att_id = result.get("id")
     attachment = result.get("attachment") or (db.get_attachment(att_id) if att_id else None)
-    case_file = None
-    suggested = (doc_type or "").strip().lower() or None
-    if attachment and result.get("status") != "duplicate":
-        case_file = await asyncio.to_thread(
-            docworker.ingest_upload,
-            case["id"],
-            Path(attachment.get("path") or dest),
-            attachment,
-            suggested_doc_type=suggested,
-        )
-        if att_id and case_file:
-            db.save_attachment({**attachment, "case_id": case["id"]})
-    elif attachment and result.get("status") == "duplicate" and suggested:
-        # Replacement intent on same bytes still updates checklist classification when asked.
-        case_file = await asyncio.to_thread(
-            docworker.ingest_upload,
-            case["id"],
-            Path(attachment.get("path") or dest),
-            attachment,
-            suggested_doc_type=suggested,
-        )
-    queue_vision = (
-        bool(att_id)
-        and result.get("status") != "duplicate"
-        and result.get("kind") != "screenshot"
-        and result.get("vision_status") == "pending"
+    if attachment:
+        db.save_attachment({**attachment, "case_id": case["id"]})
+    requirements.issue(case["id"], case.get("task"), facts=case.get("facts") or {})
+    resolved_type = suggested or "unknown"
+    if suggested and suggested not in {"unknown", "none", "null"}:
+        requirements.receive(case["id"], suggested, None, "checking")
+    job = db.add_review_job(
+        {
+            "case_id": case["id"],
+            "session_id": session_id,
+            "attachment_id": att_id,
+            "path": str((attachment or {}).get("path") or dest),
+            "suggested_doc_type": suggested,
+            "status": "queued",
+        }
     )
-    if queue_vision:
-        background.add_task(_interpret_later, att_id)
-    resolved_type = (case_file or {}).get("doc_type") or suggested or "unknown"
+    background.add_task(docworker.run_review_job, job["id"])
     packet = requirements.snapshot(case["id"])
     label = _doc_label(resolved_type, packet)
     if resolved_type in {None, "", "unknown"}:
@@ -613,23 +603,21 @@ async def upload_attachment(
     db.add_message(session_id, "assistant", receipt)
     session["case_id"] = case["id"]
     db.save_session(session)
-    req_status = None
-    for row in packet.get("requirements") or []:
-        if row.get("doc_type") == resolved_type:
-            req_status = requirements.customer_status_label(row.get("status"))
-            break
     return {
         **result,
         "text": receipt,
-        "queued_vision": queue_vision,
+        "queued_vision": False,
+        "queued_review": True,
+        "review_job_id": job["id"],
         "case_id": case.get("id"),
-        "case_file_id": (case_file or {}).get("id"),
+        "case_file_id": None,
         "doc_type": resolved_type,
         "doc_label": label,
-        "requirement_status": req_status or "Received",
+        "requirement_status": requirements.customer_status_label("checking"),
         "packet": packet,
         "takeover": False,
         "not_approval": True,
+        "unverified": True,
     }
 
 

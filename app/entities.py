@@ -8,10 +8,15 @@ from app import db
 
 TOKEN = re.compile(r"[a-z0-9]+")
 STOP = {"llc", "inc", "co", "the", "of", "and", "corp"}
-KNOWN_SPLIT = (
-    ({"silver", "arrow"}, {"leo", "dispatch"}),
-    ({"silver", "arrow"}, {"atl", "fast", "freight"}),
-)
+# Distinct roles on the same inquiry. Holder, insured, driver, and payee may differ.
+ROLE_BUCKETS = {
+    "insured": ("insured", "named_insured"),
+    "carrier": ("carrier", "legal_name", "dispatcher"),
+    "holder": ("holder", "certificate_holder"),
+    "driver": ("driver", "licence_name"),
+    "owner": ("owner", "owner_operator"),
+    "payee": ("payee", "factor"),
+}
 
 
 def _norm(value: str | None) -> str:
@@ -41,16 +46,14 @@ def _pair(left: dict, right: dict, kind: str) -> dict:
             "score": round(score, 3),
             "reason": f"Exact {kind} match after normalize. Still not auto-merged.",
         }
-    left_tok, right_tok = _tokens(left["value"]), _tokens(right["value"])
-    for first, second in KNOWN_SPLIT:
-        if (first <= left_tok and second <= right_tok) or (second <= left_tok and first <= right_tok):
-            return {
-                "decision": "different",
-                "entities": entities,
-                "files": files,
-                "score": round(score, 3),
-                "reason": "Known distinct companies on this packet. Do not merge.",
-            }
+    if left.get("field") and right.get("field") and left.get("field") != right.get("field"):
+        return {
+            "decision": "abstain",
+            "entities": entities,
+            "files": files,
+            "score": round(score, 3),
+            "reason": f"{left.get('field')} and {right.get('field')} are different roles. Different names can be legitimate.",
+        }
     if score >= 0.4:
         return {
             "decision": "abstain",
@@ -80,6 +83,12 @@ def _unique(rows: list[dict]) -> list[dict]:
     return out
 
 
+def _extracted_value(raw):
+    if isinstance(raw, dict):
+        return raw.get("value") if raw.get("status") == "present" else None
+    return raw
+
+
 def resolve(case_id: str) -> dict:
     files = db.list_case_files(case_id)
     people = []
@@ -87,18 +96,24 @@ def resolve(case_id: str) -> dict:
     vins = []
     for item in files:
         extracted = item.get("extracted") or {}
-        if extracted.get("insured"):
-            people.append({"value": extracted["insured"], "file": item["filename"], "field": "insured"})
-        if extracted.get("owner"):
-            people.append({"value": extracted["owner"], "file": item["filename"], "field": "owner"})
-        owner_op = extracted.get("owner_operator")
+        fields = extracted.get("fields") if isinstance(extracted.get("fields"), dict) else extracted
+        insured = _extracted_value(fields.get("insured") or fields.get("named_insured"))
+        if insured:
+            companies.append({"value": insured, "file": item["filename"], "field": "insured"})
+        owner = _extracted_value(fields.get("owner"))
+        if owner:
+            people.append({"value": owner, "file": item["filename"], "field": "owner"})
+        owner_op = _extracted_value(fields.get("owner_operator"))
         if owner_op and owner_op not in {"filled", "blank"}:
             people.append({"value": owner_op, "file": item["filename"], "field": "owner_operator"})
-        for key in ("carrier", "dispatcher", "holder"):
-            if extracted.get(key):
-                companies.append({"value": extracted[key], "file": item["filename"], "field": key})
-        if extracted.get("vin") and extracted["vin"] not in {"blank", None}:
-            vins.append({"value": extracted["vin"], "file": item["filename"]})
+        for key in ("carrier", "dispatcher", "holder", "certificate_holder", "legal_name", "payee"):
+            value = _extracted_value(fields.get(key))
+            if value:
+                role = "holder" if "holder" in key else "payee" if key == "payee" else "carrier"
+                companies.append({"value": value, "file": item["filename"], "field": role})
+        vin = _extracted_value(fields.get("vin"))
+        if vin and vin not in {"blank", None}:
+            vins.append({"value": vin, "file": item["filename"]})
 
     people = _unique(people)
     companies = _unique(companies)
@@ -133,17 +148,6 @@ def resolve(case_id: str) -> dict:
                 "reason": "A file has a VIN and another does not. Abstain on equipment association.",
             }
         )
-
-    if any(item.get("doc_type") == "registration" for item in files):
-        reg = next(item for item in files if item["doc_type"] == "registration")
-        if (reg.get("extracted") or {}).get("body") == "BOX":
-            abstain.append(
-                {
-                    "decision": "abstain",
-                    "entities": ["registration BOX/STRG 2007", "hotshot/flatbed photos"],
-                    "reason": "Equipment association is unresolved. Do not bind a truck.",
-                }
-            )
 
     if not files:
         abstain.append({"decision": "abstain", "entities": [], "reason": "No files on the case yet."})

@@ -66,7 +66,7 @@ REGISTER = {
     "own_mc": "You keep your authority. Our onboarding manager sends the dispatch setup packet. Having an MC number doesn't mean you're set up yet.",
     "lease": "Our onboarding manager reviews lease-on eligibility and the agreement. Asking to lease on isn't approval.",
     "mc_new": "A new or pending MC still needs a look — it isn't an automatic yes. Tell me if you'll keep that authority or need lease-on.",
-    "docs_own": "For own-MC, onboarding usually asks for the MC authority sheet, W-9, certificate of insurance, and truck photos. A notice of assignment applies if you use factoring; a voided check applies where quick-pay or factoring requires it. Files here stay unverified until they look — they'll confirm the live list with the packet.",
+    "docs_own": "For own-MC, onboarding usually asks for operating-authority evidence (an MC authority letter or a USDOT operating-authority certificate that shows the identifiers), W-9, certificate of insurance, and truck photos. A notice of assignment applies if you use factoring; a voided check applies where quick-pay or factoring requires it. Files here stay unverified until they look — they'll confirm the live list with the packet.",
     "docs_review_pending": "Got it — your own-MC setup review is saved for our onboarding manager to review. Would you prefer a callback? While that sits, I can still help with lanes, timing, or whatever else is on your mind.",
     "payment_methods_broker": "Brokers may pay standard (often multi-week), quick-pay (faster, with a broker deduction and usually a voided check with rate con and POD), or through factoring (NOA on file). Timing and any deduction come from that arrangement and your agreement — I won't invent a payday or percent from chat.",
     "docs_lease": (
@@ -77,7 +77,7 @@ REGISTER = {
     "docs_coi": "A certificate of insurance is evidence, not approval. Onboarding checks named insured, certificate holder, auto liability, and cargo. A COI on this chat is unverified until they look at it.",
     "docs_noa": "A notice of assignment tells brokers where to send payment when factoring is involved. Onboarding checks the factoring party. A photo here is not filed.",
     "docs_packet": "The setup packet comes from our onboarding manager — I don't email it from chat. Talking here isn't a sent packet. Once we know own-MC or lease-on, they'll confirm the live list.",
-    "docs_mc": "The MC authority letter shows FMCSA interstate operating authority. Onboarding needs that sheet for own-MC setup; having an MC number in chat isn't the filed document.",
+    "docs_mc": "Operating-authority evidence can be an MC authority letter or a USDOT / FMCSA certificate that shows the legal name and USDOT or MC numbers. Reading that file does not prove authority is currently active — onboarding still verifies status. A number typed in chat is not the document.",
     "docs_usdot": "A USDOT number identifies the carrier for FMCSA safety and compliance. Onboarding confirms it against the authority paperwork — I won't invent a DOT from chat.",
     "docs_bol": "A bill of lading is the load receipt between shipper and carrier. Dispatch and brokers use it per shipment after you're set up — I don't issue a BOL from this sales chat.",
     "docs_rate_con": "A rate confirmation records agreed load details for one shipment. You still approve each load before authorized acceptance. It isn't the entire contract with Ayyan, and I won't invent a rate con here.",
@@ -113,11 +113,11 @@ REGISTER = {
     "photo_unverified": "I have the photo on this chat (unverified). Onboarding still needs to look at it — I can't confirm equipment, insurance, or eligibility from an image.",
     "docs_upload_received": (
         "We received your {label}. It is awaiting review by our onboarding manager. "
-        "Received is not approved."
+        "Received is not approved. Unverified until they look."
     ),
     "docs_upload_unknown": (
         "Your file was uploaded and is awaiting review by our onboarding manager. "
-        "They'll classify it — received is not approved."
+        "They'll classify it — received is not approved. Unverified until they look."
     ),
     "insurance": "Onboarding checks commercial auto liability and cargo on your COI. Ayyan confirms the limits that apply to your setup — a COI on this chat isn't insurance approved.",
     "insurance_coverage_ask": "What coverage does your policy include — commercial auto, cargo, or both? Ayyan still confirms the required limits at review.",
@@ -145,10 +145,10 @@ REGISTER = {
     "apology_no_pitch": "I understand. You don't need to share that information — no pitch from me.",
     "voluntary_return": "Of course. What has changed, and what help are you looking for now?",
     "handoff_requested": "Your request is saved for our onboarding manager to review. Would you prefer a callback?",
-    "ready_own_next": "Next step is an own-MC setup review. Onboarding typically needs the MC authority sheet, W-9, certificate of insurance, and truck photos — plus a notice of assignment if you factor, and a voided check where quick-pay or factoring requires it. Files here stay unverified until they look.",
+    "ready_own_next": "Next step is an own-MC setup review. Onboarding typically needs operating-authority evidence, W-9, certificate of insurance, and truck photos — plus a notice of assignment if you factor, and a voided check where quick-pay or factoring requires it. Files here stay unverified until they look.",
     "own_mc_review_saved": (
         "Your own-MC setup review is saved for our onboarding manager. "
-        "Please prepare the MC authority sheet, W-9, COI and truck photos. "
+        "Please prepare operating-authority evidence, W-9, COI and truck photos. "
         "An NOA applies if you use factoring; a voided check applies where the payment setup requires it. "
         "The manager will review the documents and agreement with you."
     ),

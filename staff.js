@@ -14,15 +14,21 @@ function factLine(facts = {}) {
 }
 
 function flagList(files = []) {
-  if (!files.length) return "<p class='muted'>No files read yet. Store original → OCR/text, then a person reviews.</p>";
-  return files.map((f) => `
+  if (!files.length) return "<p class='muted'>No files read yet. Store original → page evidence, then a person reviews.</p>";
+  return files.map((f) => {
+    const findings = f.findings && f.findings.length ? f.findings : (f.flags || []);
+    const components = ((f.extracted || {}).components || []).map((c) =>
+      `${c.document_type} p.${(c.pages || []).join("-") || "?"} · ${c.status || ""}`
+    ).join("; ");
+    return `
     <div class="card" style="margin-top:8px">
       <p><strong>${f.doc_type}</strong> · ${f.filename} · v${f.version || 1} · ${f.status}${f.duplicate ? " · same file, skipped" : ""}</p>
-      <p class="muted">unverified · ${f.method || "unread"} ${f.ocr_confidence != null ? `· OCR ${f.ocr_confidence}` : ""}</p>
+      <p class="muted">unverified · ${f.method || "unread"} ${f.ocr_confidence != null ? `· OCR ${f.ocr_confidence}` : ""} · received is not approved</p>
+      ${components ? `<p class="muted">Components: ${components}</p>` : ""}
       ${f.version > 1 ? `<p class="muted">${(f.diff || []).length ? `Changed: ${f.diff.map((d) => `${d.field}: ${d.from} → ${d.to}`).join("; ")}` : "Replacement file. No clause change — human still owns the conflict."}</p>` : ""}
-      ${(f.flags || []).map((flag) => `<p class="${flag.severity === "blocking" ? "" : "muted"}">[${flag.severity}] ${flag.message}<br><span class="muted">span: ${flag.span || flag.evidence}</span></p>`).join("")}
-    </div>
-  `).join("");
+      ${findings.map((flag) => `<p class="${flag.severity === "blocking" ? "" : "muted"}">[${flag.outcome || flag.code}] ${flag.why || flag.message}<br><span class="muted">${flag.field || ""} · next: ${flag.next_action || "review"} · ${flag.actor || "reviewer"} · ${flag.evidence || flag.span || ""}</span></p>`).join("")}
+    </div>`;
+  }).join("");
 }
 
 function zohoBox(crm = {}) {

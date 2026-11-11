@@ -231,6 +231,44 @@ def init():
               created_at TEXT NOT NULL,
               updated_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS document_components (
+              id TEXT PRIMARY KEY,
+              file_id TEXT NOT NULL,
+              case_id TEXT NOT NULL,
+              doc_type TEXT NOT NULL,
+              page_start INTEGER,
+              page_end INTEGER,
+              pages_json TEXT NOT NULL DEFAULT '[]',
+              extracted_json TEXT NOT NULL DEFAULT '{}',
+              findings_json TEXT NOT NULL DEFAULT '[]',
+              status TEXT,
+              created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS review_jobs (
+              id TEXT PRIMARY KEY,
+              case_id TEXT NOT NULL,
+              session_id TEXT,
+              attachment_id TEXT,
+              path TEXT NOT NULL,
+              suggested_doc_type TEXT,
+              status TEXT NOT NULL,
+              attempts INTEGER NOT NULL DEFAULT 0,
+              error TEXT,
+              file_id TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS verification_records (
+              id TEXT PRIMARY KEY,
+              case_id TEXT NOT NULL,
+              kind TEXT NOT NULL,
+              source TEXT,
+              status TEXT NOT NULL,
+              identifiers_json TEXT NOT NULL DEFAULT '{}',
+              payload_json TEXT NOT NULL DEFAULT '{}',
+              retrieved_at TEXT,
+              created_at TEXT NOT NULL
+            );
             """
         )
         for stmt in (
@@ -240,6 +278,8 @@ def init():
             "ALTER TABLE case_files ADD COLUMN ocr_confidence REAL",
             "ALTER TABLE case_files ADD COLUMN original_path TEXT",
             "ALTER TABLE case_files ADD COLUMN requirement_id TEXT",
+            "ALTER TABLE case_files ADD COLUMN findings_json TEXT NOT NULL DEFAULT '[]'",
+            "ALTER TABLE case_files ADD COLUMN pages_json TEXT NOT NULL DEFAULT '[]'",
             "ALTER TABLE hard_turns ADD COLUMN reviewed INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE outbox ADD COLUMN zoho_id TEXT",
             "ALTER TABLE cases ADD COLUMN related_tasks_json TEXT NOT NULL DEFAULT '[]'",
@@ -657,8 +697,8 @@ def add_case_file(case_id: str, review: dict, path: str) -> dict:
     file_id = uid("file")
     execute(
         """INSERT INTO case_files (id, case_id, doc_type, filename, path, extracted_json, flags_json, diff_json,
-           version, status, method, ocr_confidence, original_path, requirement_id, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           version, status, method, ocr_confidence, original_path, requirement_id, findings_json, pages_json, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             file_id,
             case_id,
@@ -666,7 +706,7 @@ def add_case_file(case_id: str, review: dict, path: str) -> dict:
             review.get("filename") or Path(path).name,
             path,
             dumps(review.get("extracted") or {}),
-            dumps(review.get("flags") or []),
+            dumps(review.get("flags") or review.get("findings") or []),
             dumps(review.get("diff") or []),
             int(review.get("version") or 1),
             review.get("status") or "received",
@@ -674,6 +714,8 @@ def add_case_file(case_id: str, review: dict, path: str) -> dict:
             review.get("ocr_confidence"),
             review.get("original_path") or path,
             review.get("requirement_id"),
+            dumps(review.get("findings") or review.get("flags") or []),
+            dumps(review.get("pages") or []),
             now(),
         ),
     )
@@ -689,6 +731,8 @@ def _file_from_row(row: dict) -> dict:
     row["extracted"] = loads(row.pop("extracted_json"), {})
     row["flags"] = loads(row.pop("flags_json"), [])
     row["diff"] = loads(row.pop("diff_json", None), [])
+    row["findings"] = loads(row.pop("findings_json", None), row.get("flags") or [])
+    row["pages"] = loads(row.pop("pages_json", None), [])
     return row
 
 
@@ -699,11 +743,13 @@ def list_case_files(case_id: str) -> list[dict]:
 
 def acknowledge_case_files(case_id: str) -> list[dict]:
     execute(
-        "UPDATE case_files SET status = 'acknowledged' WHERE case_id = ? AND status = 'flagged'",
+        """UPDATE case_files SET status = 'acknowledged' WHERE case_id = ? AND status IN
+           ('flagged', 'clearer_copy', 'information_missing', 'possible_mismatch', 'awaiting_review')""",
         (case_id,),
     )
     execute(
-        "UPDATE requirements SET status = 'acknowledged', updated_at = ? WHERE case_id = ? AND status IN ('flagged', 'reopened', 'received')",
+        """UPDATE requirements SET status = 'acknowledged', updated_at = ? WHERE case_id = ? AND status IN
+           ('flagged', 'reopened', 'received', 'clearer_copy', 'information_missing', 'possible_mismatch', 'awaiting_review')""",
         (now(), case_id),
     )
     add_event("Staff acknowledged document flags", {"caseId": case_id})
@@ -711,7 +757,15 @@ def acknowledge_case_files(case_id: str) -> list[dict]:
 
 
 def blocking_files(case_id: str) -> list[dict]:
-    return [f for f in list_case_files(case_id) if f["status"] == "flagged"]
+    blocking = {
+        "flagged",
+        "clearer_copy",
+        "information_missing",
+        "possible_mismatch",
+        "corrections",
+        "rejected",
+    }
+    return [f for f in list_case_files(case_id) if f.get("status") in blocking]
 
 
 def latest_file(case_id: str, doc_type: str) -> dict | None:
@@ -948,5 +1002,142 @@ def list_attachments(session_id: str | None = None, case_id: str | None = None) 
     else:
         rows = []
     return [_attachment_from_row(row) for row in rows or []]
+
+
+def add_document_component(file_id: str, case_id: str, component: dict) -> dict:
+    row_id = uid("comp")
+    pages = component.get("pages") or []
+    execute(
+        """INSERT INTO document_components
+           (id, file_id, case_id, doc_type, page_start, page_end, pages_json, extracted_json, findings_json, status, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            row_id,
+            file_id,
+            case_id,
+            component.get("document_type") or "unknown",
+            pages[0] if pages else None,
+            pages[-1] if pages else None,
+            dumps(pages),
+            dumps(component.get("fields") or {}),
+            dumps(component.get("findings") or []),
+            component.get("status"),
+            now(),
+        ),
+    )
+    return get_document_component(row_id)
+
+
+def get_document_component(component_id: str) -> dict | None:
+    row = execute("SELECT * FROM document_components WHERE id = ?", (component_id,), fetch="one")
+    if not row:
+        return None
+    row["pages"] = loads(row.pop("pages_json"), [])
+    row["extracted"] = loads(row.pop("extracted_json"), {})
+    row["findings"] = loads(row.pop("findings_json"), [])
+    return row
+
+
+def list_document_components(case_id: str, file_id: str | None = None) -> list[dict]:
+    if file_id:
+        rows = execute(
+            "SELECT * FROM document_components WHERE case_id = ? AND file_id = ? ORDER BY page_start",
+            (case_id, file_id),
+            fetch="all",
+        )
+    else:
+        rows = execute(
+            "SELECT * FROM document_components WHERE case_id = ? ORDER BY created_at",
+            (case_id,),
+            fetch="all",
+        )
+    out = []
+    for row in rows or []:
+        row["pages"] = loads(row.pop("pages_json"), [])
+        row["extracted"] = loads(row.pop("extracted_json"), {})
+        row["findings"] = loads(row.pop("findings_json"), [])
+        out.append(row)
+    return out
+
+
+def add_review_job(partial: dict) -> dict:
+    row_id = partial.get("id") or uid("job")
+    ts = now()
+    execute(
+        """INSERT INTO review_jobs
+           (id, case_id, session_id, attachment_id, path, suggested_doc_type, status, attempts, error, file_id, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            row_id,
+            partial["case_id"],
+            partial.get("session_id"),
+            partial.get("attachment_id"),
+            partial.get("path") or "",
+            partial.get("suggested_doc_type"),
+            partial.get("status") or "queued",
+            int(partial.get("attempts") or 0),
+            partial.get("error"),
+            partial.get("file_id"),
+            ts,
+            ts,
+        ),
+    )
+    return get_review_job(row_id)
+
+
+def get_review_job(job_id: str) -> dict | None:
+    return execute("SELECT * FROM review_jobs WHERE id = ?", (job_id,), fetch="one")
+
+
+def update_review_job(job_id: str, patch: dict) -> dict | None:
+    current = get_review_job(job_id)
+    if not current:
+        return None
+    merged = {**current, **patch, "updated_at": now()}
+    execute(
+        """UPDATE review_jobs SET status=?, attempts=?, error=?, file_id=?, updated_at=? WHERE id=?""",
+        (
+            merged.get("status"),
+            int(merged.get("attempts") or 0),
+            merged.get("error"),
+            merged.get("file_id"),
+            merged["updated_at"],
+            job_id,
+        ),
+    )
+    return get_review_job(job_id)
+
+
+def add_verification_record(case_id: str, kind: str, source: str, status: str, identifiers: dict | None = None) -> dict:
+    row_id = uid("ver")
+    execute(
+        """INSERT INTO verification_records
+           (id, case_id, kind, source, status, identifiers_json, payload_json, retrieved_at, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            row_id,
+            case_id,
+            kind,
+            source,
+            status,
+            dumps(identifiers or {}),
+            dumps({}),
+            None,
+            now(),
+        ),
+    )
+    return execute("SELECT * FROM verification_records WHERE id = ?", (row_id,), fetch="one")
+
+
+def list_verification_records(case_id: str) -> list[dict]:
+    rows = execute(
+        "SELECT * FROM verification_records WHERE case_id = ? ORDER BY created_at",
+        (case_id,),
+        fetch="all",
+    ) or []
+    for row in rows:
+        row["identifiers"] = loads(row.pop("identifiers_json"), {})
+        row["payload"] = loads(row.pop("payload_json"), {})
+    return rows
 
 

@@ -151,7 +151,7 @@ def missing_line(session: dict | None) -> str:
     labels = {key: item["label"] for key, item in TEMPLATES.items()}
     labels.update(
         {
-            "authority": "MC authority sheet",
+            "authority": "operating-authority evidence",
             "voided_check": "voided check",
             "lease": "lease agreement",
             "licence": "licence",

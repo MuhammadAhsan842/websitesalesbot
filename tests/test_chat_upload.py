@@ -34,10 +34,12 @@ class UploadOptions(unittest.TestCase):
         self.assertIn("unknown", values)
 
     def test_status_labels(self):
-        self.assertEqual(requirements.customer_status_label("received"), "Received")
-        self.assertEqual(requirements.customer_status_label("under_review"), "Under review")
-        self.assertEqual(requirements.customer_status_label("flagged"), "Correction needed")
-        self.assertEqual(requirements.customer_status_label("approved"), "Approved")
+        self.assertEqual(requirements.customer_status_label("received"), "Received / checking")
+        self.assertEqual(requirements.customer_status_label("clearer_copy"), "Clearer copy needed")
+        self.assertEqual(requirements.customer_status_label("information_missing"), "Information missing")
+        self.assertEqual(requirements.customer_status_label("possible_mismatch"), "Possible mismatch")
+        self.assertEqual(requirements.customer_status_label("awaiting_review"), "Automated checks passed / awaiting review")
+        self.assertEqual(requirements.customer_status_label("approved"), "Approved by authorized reviewer")
 
 
 class UploadValidation(unittest.TestCase):

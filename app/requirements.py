@@ -12,7 +12,7 @@ SLA_DAYS = 7
 # Customer-facing list: authority, W-9, COI, truck photos (+ conditional NOA / voided check).
 CORE_SETUP = [
     ("setup", "Dispatch setup agreement"),
-    ("authority", "MC authority sheet"),
+    ("authority", "Operating-authority evidence"),
     ("w9", "W-9"),
     ("coi", "Certificate of insurance"),
     ("equipment_photos", "Truck photos"),
@@ -41,7 +41,38 @@ SAMPLE_TYPES = {
 # Acknowledge / received / flagged are never enough for handoff.
 TERMINAL_OK = frozenset({"approved", "waived"})
 OPEN_STATUSES = frozenset(
-    {"issued", "received", "flagged", "reopened", "queued", "under_review", "corrections", "acknowledged"}
+    {
+        "issued",
+        "received",
+        "flagged",
+        "reopened",
+        "queued",
+        "checking",
+        "under_review",
+        "corrections",
+        "acknowledged",
+        "clearer_copy",
+        "information_missing",
+        "possible_mismatch",
+        "awaiting_review",
+    }
+)
+DRIVER_OUTSTANDING = frozenset(
+    {"issued", "corrections", "reopened", "rejected", "clearer_copy", "information_missing", "possible_mismatch"}
+)
+MANAGER_QUEUE = frozenset(
+    {
+        "received",
+        "flagged",
+        "queued",
+        "checking",
+        "under_review",
+        "acknowledged",
+        "awaiting_review",
+        "possible_mismatch",
+        "clearer_copy",
+        "information_missing",
+    }
 )
 
 
@@ -107,20 +138,9 @@ def customer_upload_options(task: str | None = None, facts: dict | None = None) 
 
 
 def customer_status_label(status: str | None) -> str:
-    mapping = {
-        "issued": "Requested",
-        "received": "Received",
-        "queued": "Received",
-        "under_review": "Under review",
-        "flagged": "Correction needed",
-        "corrections": "Correction needed",
-        "reopened": "Correction needed",
-        "acknowledged": "Under review",
-        "approved": "Approved",
-        "waived": "Approved",
-        "rejected": "Correction needed",
-    }
-    return mapping.get(str(status or "").lower(), "Received")
+    from app.docschema import CUSTOMER_STATUS
+
+    return CUSTOMER_STATUS.get(str(status or "").lower(), "Received / checking")
 
 
 def customer_docs_sentence(task: str | None = "setup_packet", facts: dict | None = None) -> str:
@@ -217,7 +237,19 @@ def receive(case_id: str, doc_type: str, file_id: str | None, status: str) -> di
             }
         )
     # Received / queued is never approval.
-    safe = status if status in {"received", "flagged", "queued", "reopened", "under_review"} else "received"
+    allowed = {
+        "received",
+        "flagged",
+        "queued",
+        "checking",
+        "reopened",
+        "under_review",
+        "clearer_copy",
+        "information_missing",
+        "possible_mismatch",
+        "awaiting_review",
+    }
+    safe = status if status in allowed else "received"
     db.update_requirement(
         row["id"],
         {"status": safe, "current_file_id": file_id},
@@ -383,11 +415,7 @@ def snapshot(case_id: str) -> dict:
         if row["overdue"]:
             overdue.append(row)
     returned = [row for row in rows if row.get("status") not in {"issued", None}]
-    awaiting_review = [
-        row["doc_type"]
-        for row in rows
-        if row.get("status") in {"received", "flagged", "queued", "under_review", "acknowledged"}
-    ]
+    awaiting_review = [row["doc_type"] for row in rows if row.get("status") in MANAGER_QUEUE]
     ready, blockers = ready_for_handoff(case_id)
     return {
         "requirements": rows,
@@ -395,7 +423,7 @@ def snapshot(case_id: str) -> dict:
         "returned": len(returned),
         "overdue": len(overdue),
         # Still needed from the driver (not yet returned).
-        "outstanding": [row["doc_type"] for row in rows if row.get("status") in {"issued", "corrections", "reopened", "rejected"}],
+        "outstanding": [row["doc_type"] for row in rows if row.get("status") in DRIVER_OUTSTANDING],
         "awaiting_review": awaiting_review,
         "ready_for_handoff": ready,
         "handoff_blockers": blockers,

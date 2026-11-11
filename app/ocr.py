@@ -43,11 +43,31 @@ def store_original(case_id: str, source: Path) -> dict:
     }
 
 
-def _pdf_text(path: Path) -> str:
+def _pdf_text(path: Path, first: int | None = None, last: int | None = None) -> str:
+    cmd = ["pdftotext", "-layout"]
+    if first is not None:
+        cmd.extend(["-f", str(first)])
+    if last is not None:
+        cmd.extend(["-l", str(last)])
+    cmd.extend([str(path), "-"])
     try:
-        return subprocess.check_output(["pdftotext", "-layout", str(path), "-"], text=True, timeout=20)
+        return subprocess.check_output(cmd, text=True, timeout=20)
     except Exception:
         return ""
+
+
+def _pdf_page_count(path: Path) -> int | None:
+    try:
+        raw = subprocess.check_output(["pdfinfo", str(path)], text=True, timeout=10)
+    except Exception:
+        return None
+    for line in raw.splitlines():
+        if line.lower().startswith("pages"):
+            try:
+                return int(line.split(":", 1)[1].strip())
+            except (IndexError, ValueError):
+                return None
+    return None
 
 
 def _ocr_tsv(path: Path) -> tuple[str, float | None]:
@@ -119,60 +139,113 @@ def _ocr_pdf_pages(path: Path) -> tuple[str, float | None]:
         return "", None
 
 
-def read_document(path: Path) -> dict:
-    """Prefer born-digital PDF text. OCR images and scanned PDFs. Do not invent text."""
+def _page_record(page: int, text: str, method: str, confidence: float | None, ocr_used: bool) -> dict:
+    stripped = (text or "").strip()
+    return {
+        "page": page,
+        "text": text or "",
+        "method": method,
+        "confidence": confidence,
+        "ocr_used": ocr_used,
+        "unreadable": len(stripped) < 20,
+        "char_count": len(stripped),
+    }
+
+
+def _ocr_one_pdf_page(path: Path, page: int) -> tuple[str, float | None]:
+    if not shutil.which("tesseract") or not shutil.which("pdftoppm"):
+        return "", None
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            prefix = Path(tmp) / "page"
+            subprocess.check_call(
+                ["pdftoppm", "-png", "-r", "200", "-f", str(page), "-l", str(page), str(path), str(prefix)],
+                timeout=60,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            images = sorted(Path(tmp).glob("page*.png"))
+            if not images:
+                return "", None
+            return _ocr_tsv(images[0])
+    except Exception:
+        return "", None
+
+
+def _pdf_pages(path: Path) -> list[dict]:
+    """Native text per page. OCR only pages that lack readable born-digital text."""
+    count = _pdf_page_count(path)
+    if not count:
+        blob = _pdf_text(path)
+        chunks = blob.split("\f") if blob else [""]
+        while chunks and not chunks[-1].strip() and len(chunks) > 1:
+            chunks.pop()
+        count = max(len(chunks), 1)
+        pages = []
+        for index, chunk in enumerate(chunks or [""], start=1):
+            native = chunk or ""
+            if len(native.strip()) >= NATIVE_MIN:
+                pages.append(_page_record(index, native, "pdftotext", 100.0, False))
+                continue
+            ocr_text, conf = _ocr_one_pdf_page(path, index)
+            if ocr_text.strip():
+                pages.append(_page_record(index, ocr_text, "tesseract_pdf", conf, True))
+            else:
+                pages.append(
+                    _page_record(
+                        index,
+                        native,
+                        "pdftotext_thin",
+                        conf,
+                        False,
+                    )
+                )
+        return pages
+    pages = []
+    for index in range(1, count + 1):
+        native = _pdf_text(path, first=index, last=index)
+        if len(native.strip()) >= NATIVE_MIN:
+            pages.append(_page_record(index, native, "pdftotext", 100.0, False))
+            continue
+        ocr_text, conf = _ocr_one_pdf_page(path, index)
+        if ocr_text.strip():
+            pages.append(_page_record(index, ocr_text, "tesseract_pdf", conf, True))
+        else:
+            pages.append(_page_record(index, native, "pdftotext_thin", conf, False))
+    return pages
+
+
+def read_pages(path: Path) -> dict:
+    """Page-level extraction. A readable cover must not hide scanned attachments."""
+    path = Path(path)
     suffix = path.suffix.lower()
     if suffix == ".docx":
         text = _docx_text(path)
-        return {
-            "text": text,
-            "method": "docx",
-            "confidence": 100.0 if text.strip() else None,
-            "ocr_used": False,
-            "unreadable": not bool(text.strip()),
-        }
-    if suffix == ".pdf":
-        native = _pdf_text(path)
-        if len(native.strip()) >= NATIVE_MIN:
-            return {
-                "text": native,
-                "method": "pdftotext",
-                "confidence": 100.0,
-                "ocr_used": False,
-                "unreadable": False,
-            }
-        if not shutil.which("tesseract"):
-            return {
-                "text": native,
-                "method": "pdftotext_thin",
-                "confidence": None,
-                "ocr_used": False,
-                "unreadable": len(native.strip()) < 20,
-            }
-        ocr_text, conf = _ocr_pdf_pages(path)
-        if ocr_text.strip():
-            return {
-                "text": ocr_text,
-                "method": "tesseract_pdf",
-                "confidence": conf,
-                "ocr_used": True,
-                "unreadable": False,
-            }
-        return {
-            "text": native,
-            "method": "pdftotext_thin",
-            "confidence": conf,
-            "ocr_used": False,
-            "unreadable": len(native.strip()) < 20,
-        }
-    text, conf = _ocr_tsv(path)
+        pages = [_page_record(1, text, "docx", 100.0 if text.strip() else None, False)]
+    elif suffix == ".pdf":
+        pages = _pdf_pages(path)
+    else:
+        text, conf = _ocr_tsv(path)
+        pages = [_page_record(1, text, "tesseract", conf, True)]
+    confs = [row["confidence"] for row in pages if row.get("confidence") is not None]
+    mean = round(sum(confs) / len(confs), 1) if confs else None
+    methods = {row["method"] for row in pages}
+    method = "mixed" if len(methods) > 1 else next(iter(methods), "unread")
+    joined = "\n\f\n".join(row["text"] for row in pages)
     return {
-        "text": text,
-        "method": "tesseract",
-        "confidence": conf,
-        "ocr_used": True,
-        "unreadable": not bool(text.strip()),
+        "pages": pages,
+        "text": joined,
+        "method": method,
+        "confidence": mean,
+        "ocr_used": any(row.get("ocr_used") for row in pages),
+        "unreadable": all(row.get("unreadable") for row in pages) if pages else True,
+        "page_count": len(pages),
     }
+
+
+def read_document(path: Path) -> dict:
+    """Prefer born-digital PDF text. OCR images and thin scanned pages. Do not invent text."""
+    return read_pages(path)
 
 
 def low_confidence(read: dict) -> bool:

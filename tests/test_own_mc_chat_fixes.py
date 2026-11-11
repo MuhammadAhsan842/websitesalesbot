@@ -137,7 +137,7 @@ class FreightCityOnly(unittest.TestCase):
 class DocsAlignWithRequirements(unittest.TestCase):
     def test_customer_docs_match_catalog(self):
         labels = requirements.customer_doc_labels("setup_packet", facts(mcOwnership="own_mc"))
-        self.assertIn("MC authority sheet", labels)
+        self.assertIn("Operating-authority evidence", labels)
         self.assertIn("W-9", labels)
         self.assertIn("Certificate of insurance", labels)
         self.assertIn("Truck photos", labels)

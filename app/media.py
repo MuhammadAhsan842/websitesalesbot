@@ -56,6 +56,36 @@ def _evidence_line(row: dict) -> str:
     return lookup("photo_unverified")
 
 
+def store_stub(path: Path, session_id: str | None = None, case_id: str | None = None) -> dict:
+    """Persist the original quickly. OCR and review run on the background job."""
+    path = Path(path)
+    digest = ingest.sha256_file(path)
+    prior = db.get_attachment_by_hash(digest, session_id=session_id)
+    if prior:
+        return {**public_row(prior), "status": "duplicate", "attachment": prior}
+    dest_dir = ROOT / (session_id or case_id or "loose")
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / f"{digest[:12]}_{path.name}"
+    if dest.resolve() != path.resolve():
+        dest.write_bytes(path.read_bytes())
+    kind = classify_kind(path.name)
+    row = db.save_attachment(
+        {
+            "session_id": session_id,
+            "case_id": case_id,
+            "filename": path.name,
+            "path": str(dest),
+            "sha256": digest,
+            "kind": kind,
+            "ocr_text": None,
+            "ocr_confidence": None,
+            "vision": {},
+            "vision_status": "skipped" if kind == "screenshot" else "pending",
+        }
+    )
+    return {**public_row(row), "status": "stored", "attachment": row}
+
+
 def process(path: Path, session_id: str | None = None, case_id: str | None = None, look: bool = False) -> dict:
     """OCR + image embed + optional vision. Cached by file hash. Never approves."""
     path = Path(path)
@@ -95,6 +125,7 @@ def process(path: Path, session_id: str | None = None, case_id: str | None = Non
             "path": str(dest),
             "sha256": digest,
             "kind": kind,
+            # Chat excerpt only. Document review re-reads the original for complete page evidence.
             "ocr_text": ingest.strip_pii(read.get("text") or "")[:4000],
             "ocr_confidence": read.get("confidence"),
             "vision": {},

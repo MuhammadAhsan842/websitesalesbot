@@ -25,6 +25,8 @@ class AttachmentPipeline(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
+        self.addCleanup(setattr, db, "DB_PATH", db.DB_PATH)
+        self.addCleanup(setattr, media, "ROOT", media.ROOT)
         db.DB_PATH = Path(self.tmp.name) / "t.db"
         db.init()
         media.ROOT = Path(self.tmp.name) / "att"
@@ -150,7 +152,7 @@ class AttachmentApi(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(health.json()["vision"]["enabled"])
                 uploaded = await api.post(
                     f"/v1/session/{sid}/attachment",
-                    files={"file": ("reefer.jpg", PNG, "image/jpeg")},
+                    files={"file": ("reefer.png", PNG, "image/png")},
                 )
                 self.assertEqual(uploaded.status_code, 200)
                 body = uploaded.json()

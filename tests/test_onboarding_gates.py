@@ -110,7 +110,10 @@ class UploadLinksChecklist(unittest.TestCase):
                 files = db.list_case_files(case["id"])
                 self.assertEqual(len(files), 1)
                 req = db.get_requirement(case["id"], "coi")
-                self.assertIn(req["status"], {"received", "flagged"})
+                self.assertIn(
+                    req["status"],
+                    {"received", "flagged", "awaiting_review", "information_missing", "checking"},
+                )
                 self.assertEqual(req["current_file_id"], row["id"])
                 snap = requirements.snapshot(case["id"])
                 self.assertNotIn("coi", snap["outstanding"])
