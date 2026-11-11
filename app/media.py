@@ -56,7 +56,7 @@ def _evidence_line(row: dict) -> str:
     return lookup("photo_unverified")
 
 
-def store_stub(path: Path, session_id: str | None = None, case_id: str | None = None) -> dict:
+def store_stub(path: Path, session_id: str | None = None, case_id: str | None = None, original_name: str | None = None) -> dict:
     """Persist the original quickly. OCR and review run on the background job."""
     path = Path(path)
     digest = ingest.sha256_file(path)
@@ -68,13 +68,13 @@ def store_stub(path: Path, session_id: str | None = None, case_id: str | None = 
     dest = dest_dir / f"{digest[:12]}_{path.name}"
     if dest.resolve() != path.resolve():
         dest.write_bytes(path.read_bytes())
-    kind = classify_kind(path.name)
+    kind = classify_kind(original_name or path.name)
     row = db.save_attachment(
         {
             "session_id": session_id,
             "case_id": case_id,
-            "filename": path.name,
-            "path": str(dest),
+            "filename": original_name or path.name,
+            "path": str(dest if dest.exists() else path),
             "sha256": digest,
             "kind": kind,
             "ocr_text": None,

@@ -71,7 +71,8 @@ REGISTER = {
     "payment_methods_broker": "Brokers may pay standard (often multi-week), quick-pay (faster, with a broker deduction and usually a voided check with rate con and POD), or through factoring (NOA on file). Timing and any deduction come from that arrangement and your agreement — I won't invent a payday or percent from chat.",
     "docs_lease": (
         "For the lease-on review, prepare your driving licence, certificate of insurance, "
-        "truck registration and truck photos — nothing is approved from chat."
+        "truck registration, truck photos, and the completed lease agreement once it is sent back signed. "
+        "Nothing is approved from chat."
     ),
     "docs_w9": "The W-9 is the taxpayer ID form. Onboarding checks the name, TIN, and signature. I can't confirm it's complete from chat, and I don't send a blank one from here.",
     "docs_coi": "A certificate of insurance is evidence, not approval. Onboarding checks named insured, certificate holder, auto liability, and cargo. A COI on this chat is unverified until they look at it.",

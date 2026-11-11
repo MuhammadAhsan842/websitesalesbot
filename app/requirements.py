@@ -23,6 +23,7 @@ CORE_LEASE = [
     ("coi", "Certificate of insurance"),
     ("registration", "Truck registration"),
     ("equipment_photos", "Truck photos"),
+    ("lease", "Completed lease agreement"),
 ]
 
 # Quote-stage paperwork when coverage still needs arranging — never demand an existing COI.
@@ -292,8 +293,20 @@ def _validate_decision_file(case_id: str, doc_type: str, file_id: str | None) ->
     if file_row.get("case_id") != case_id:
         raise ValueError("file does not belong to this case")
     file_doc = file_row.get("doc_type")
-    if file_doc and file_doc != doc_type and file_doc not in {doc_type, "unknown", "other"}:
-        # Allow unknown OCR class only when requirement already points at this file.
+    component_types = {
+        (row.get("doc_type") or "")
+        for row in db.list_document_components(case_id, file_id)
+    }
+    from app.docschema import requirement_of
+
+    component_requirements = {requirement_of(item) for item in component_types}
+    matches_component = doc_type in component_requirements or doc_type in component_types
+    if (
+        file_doc
+        and file_doc != doc_type
+        and file_doc not in {doc_type, "unknown", "other"}
+        and not matches_component
+    ):
         raise ValueError("file document type does not match this requirement")
     latest = db.latest_file(case_id, doc_type) or db.latest_file(case_id, file_doc or doc_type)
     if latest and latest.get("id") != file_id:

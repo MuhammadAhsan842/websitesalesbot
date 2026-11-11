@@ -556,6 +556,12 @@ def upsert_case(partial: dict) -> dict:
 def enqueue_outbox(action_id: str, kind: str, payload: dict) -> dict:
     existing = execute("SELECT * FROM outbox WHERE action_id = ?", (action_id,), fetch="one")
     if existing:
+        if existing.get("status") in {"failed", "timeout"}:
+            execute(
+                "UPDATE outbox SET status='queued', payload_json=?, last_error=NULL, updated_at=? WHERE action_id=?",
+                (dumps(payload), now(), action_id),
+            )
+            return execute("SELECT * FROM outbox WHERE action_id = ?", (action_id,), fetch="one")
         return existing
     execute(
         """INSERT INTO outbox (action_id, kind, payload_json, status, created_at, updated_at)
@@ -585,6 +591,15 @@ def mark_outbox(action_id: str, status: str, error: str | None = None):
 
 def queued_outbox() -> list[dict]:
     return execute("SELECT * FROM outbox WHERE status = 'queued' ORDER BY id", fetch="all") or []
+
+
+def list_review_jobs(statuses: tuple[str, ...] = ("queued", "running")) -> list[dict]:
+    marks = ",".join("?" for _ in statuses)
+    return execute(
+        f"SELECT * FROM review_jobs WHERE status IN ({marks}) ORDER BY created_at",
+        statuses,
+        fetch="all",
+    ) or []
 
 
 def set_outbox_zoho(action_id: str, zoho_id: str | None):

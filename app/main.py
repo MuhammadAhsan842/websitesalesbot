@@ -91,6 +91,7 @@ async def lifespan(app: FastAPI):
         # single CPU slot while the UI already sent /v1/turn, causing 60–120s hangs then 503.
         await asyncio.to_thread(ingest.seed_reviewed_bank)
         await asyncio.to_thread(fees.ensure_own_mc_equipment_schedule)
+        await asyncio.to_thread(docworker.recover_review_jobs)
         await llm.warmup()
 
         async def boot_index():
@@ -508,6 +509,7 @@ def _doc_label(doc_type: str | None, packet: dict | None = None) -> str:
         "equipment_photos": "truck photos",
         "w9": "W-9",
         "authority": "operating-authority evidence",
+        "lease": "completed lease agreement",
         "notice_of_assignment": "notice of assignment",
         "voided_check": "voided check",
         "unknown": "document",
@@ -573,7 +575,7 @@ async def upload_attachment(
         session["case_id"] = case["id"]
         db.save_session(session)
     suggested = (doc_type or "").strip().lower() or None
-    result = await asyncio.to_thread(media.store_stub, dest, session_id, case.get("id"))
+    result = await asyncio.to_thread(media.store_stub, dest, session_id, case.get("id"), raw_name)
     att_id = result.get("id")
     attachment = result.get("attachment") or (db.get_attachment(att_id) if att_id else None)
     if attachment:
@@ -591,6 +593,15 @@ async def upload_attachment(
             "suggested_doc_type": suggested,
             "status": "queued",
         }
+    )
+    digest = (attachment or {}).get("sha256") or ""
+    if ":" in digest:
+        digest = digest.split(":", 1)[0]
+    zoho.queue_file_delivery(
+        case["id"],
+        str((attachment or {}).get("path") or dest),
+        (attachment or {}).get("filename") or raw_name,
+        digest or raw_name,
     )
     background.add_task(docworker.run_review_job, job["id"])
     packet = requirements.snapshot(case["id"])
@@ -670,6 +681,11 @@ def decide_requirement(case_id: str, doc_type: str, body: RequirementDecision):
         )
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
+    try:
+        zoho.publish_document_review(case_id)
+        zoho.drain()
+    except Exception:
+        db.add_event("Decision saved; Zoho report refresh failed", {"caseId": case_id, "docType": doc_type})
     return {"requirement": row, "packet": requirements.snapshot(case_id)}
 
 

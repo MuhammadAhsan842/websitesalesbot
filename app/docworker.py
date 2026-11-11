@@ -117,16 +117,11 @@ def _link_review(case_id: str, review: dict, original_path: str, *, sample: bool
     docs = list(case.get("documents") or [])
     if "returned" not in docs:
         docs.append("returned")
-    summary = (review.get("extracted") or {}).get("_manager_summary")
     db.upsert_case(
         {
             "id": case_id,
             "status": "under_review",
-            "next_action": (
-                "Sample packet linked for demo review only — not a driver upload."
-                if sample
-                else (summary or "Human review of returned file — received is not approved. OCR is unverified.")
-            ),
+            "next_action": case.get("next_action") or "Document review in progress. Not approved.",
             "documents": docs,
             "facts": case.get("facts") or {},
             "session_id": case.get("session_id"),
@@ -136,6 +131,23 @@ def _link_review(case_id: str, review: dict, original_path: str, *, sample: bool
             "owner": case.get("owner"),
         }
     )
+    from app import docreport
+
+    report = docreport.apply_next_action(case_id)
+    if sample:
+        db.upsert_case(
+            {
+                "id": case_id,
+                "next_action": "Sample packet linked for demo review only — not a driver upload.",
+            }
+        )
+    else:
+        try:
+            from app import zoho
+
+            zoho.publish_document_review(case_id, report)
+        except Exception:
+            db.add_event("Document review saved locally; Zoho publish queued or failed", {"caseId": case_id})
     return row
 
 
@@ -197,6 +209,14 @@ def run_review_job(job_id: str) -> dict | None:
     job = db.get_review_job(job_id)
     if not job:
         return None
+    if job.get("status") == "done" and job.get("file_id"):
+        return db.get_case_file(job["file_id"])
+    path = Path(job["path"])
+    for existing in db.list_case_files(job["case_id"]):
+        prior = existing.get("original_path") or existing.get("path")
+        if prior and Path(prior).exists() and path.exists() and ocr.same_file(Path(prior), path):
+            db.update_review_job(job_id, {"status": "done", "file_id": existing["id"], "error": None})
+            return existing
     db.update_review_job(job_id, {"status": "running", "attempts": int(job.get("attempts") or 0) + 1})
     try:
         from app import ingest, media
@@ -234,6 +254,20 @@ def run_review_job(job_id: str) -> dict | None:
     except Exception as exc:
         db.update_review_job(job_id, {"status": "error", "error": type(exc).__name__})
         raise
+
+
+def recover_review_jobs() -> list[str]:
+    """Resume queued or interrupted reviews after a process restart."""
+    resumed = []
+    for job in db.list_review_jobs(("queued", "running")):
+        if job.get("status") == "running":
+            db.update_review_job(job["id"], {"status": "queued"})
+        try:
+            run_review_job(job["id"])
+            resumed.append(job["id"])
+        except Exception:
+            continue
+    return resumed
 
 
 def ingest_sample(case_id: str) -> list[dict]:

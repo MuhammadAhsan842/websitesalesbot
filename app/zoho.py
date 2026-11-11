@@ -504,6 +504,112 @@ def queue_stage(case: dict, act: str, status: str, next_action: str) -> dict | N
     )
 
 
+def _session_for_case(case: dict) -> dict:
+    session = db.get_session(case["session_id"]) if case.get("session_id") else None
+    if not session:
+        return {
+            "id": case.get("session_id"),
+            "opportunity_id": case.get("opportunity_id"),
+            "case_id": case.get("id"),
+            "facts": case.get("facts") or {},
+            "channel": "chat",
+            "state_version": 0,
+            "conversation_state": case.get("status"),
+        }
+    session["case_id"] = case.get("id")
+    session["facts"] = case.get("facts") or session.get("facts") or {}
+    return session
+
+
+def queue_file_delivery(case_id: str, path: str, filename: str, digest: str) -> dict | None:
+    """Queue the original onto the existing inquiry. Review failure must not drop the file."""
+    case = db.get_case(case_id)
+    if not case or not case.get("opportunity_id"):
+        return None
+    session = _session_for_case(case)
+    return queue(
+        "document_attachment",
+        session,
+        {
+            "task": case.get("task"),
+            "status": case.get("status"),
+            "next_action": case.get("next_action"),
+            "case_id": case_id,
+            "human_version": 0,
+            "automated": True,
+            "action_id": f"{case.get('opportunity_id')}:attachment:{digest}",
+            "crm_delivery": {
+                "kind": "attachment",
+                "path": path,
+                "filename": filename or Path(path).name,
+                "sha256": digest,
+            },
+        },
+    )
+
+
+def publish_document_review(case_id: str, report: dict | None = None) -> dict | None:
+    """Publish a case-wide report and a follow-up task. Does not approve documents."""
+    from app import docreport
+
+    case = db.get_case(case_id)
+    if not case or not case.get("opportunity_id"):
+        return None
+    report = report or docreport.build(case_id)
+    session = _session_for_case(case)
+    note = queue(
+        "document_report",
+        session,
+        {
+            "task": case.get("task"),
+            "status": "corrections" if report.get("corrections") else "received",
+            "next_action": report.get("next_action"),
+            "case_id": case_id,
+            "human_version": 0,
+            "automated": True,
+            "action_id": f"{case.get('opportunity_id')}:report:{report.get('revision')}",
+            "crm_delivery": {
+                "kind": "report",
+                "title": "Document review",
+                "body": report.get("text") or "",
+                "revision": report.get("revision"),
+            },
+        },
+    )
+    task = None
+    if report.get("corrections"):
+        task = queue(
+            "document_task",
+            session,
+            {
+                "task": case.get("task"),
+                "status": "corrections",
+                "next_action": report.get("next_action"),
+                "case_id": case_id,
+                "human_version": 0,
+                "automated": True,
+                "action_id": f"{case.get('opportunity_id')}:doc-followup",
+                "crm_delivery": {
+                    "kind": "task",
+                    "subject": "Review document findings",
+                    "body": report.get("next_action") or report.get("text") or "",
+                },
+            },
+        )
+    for file_row in report.get("files") or []:
+        path = file_row.get("path")
+        if not path:
+            continue
+        digest = file_row.get("sha")
+        if not digest and Path(path).exists():
+            from app import ingest
+
+            digest = ingest.sha256_file(Path(path))
+        if digest:
+            queue_file_delivery(case_id, path, file_row.get("filename") or Path(path).name, digest)
+    return {"note": note, "task": task}
+
+
 def sync_status(session_id: str | None = None, case_id: str | None = None, opportunity_id: str | None = None) -> dict:
     expire_stale()
     rows = db.list_outbox(session_id=session_id, case_id=case_id, opportunity_id=opportunity_id)
@@ -601,6 +707,74 @@ def _submit_live(payload: dict, existing_id: str | None) -> str:
     return _parse_zoho_record(response, None)
 
 
+def _local_delivery_id(payload: dict, existing_id: str | None) -> str:
+    kind = (payload.get("crm_delivery") or {}).get("kind") or "delivery"
+    token = str(payload.get("action_id") or existing_id or "local").replace(":", "_")[-24:]
+    return f"zcrm_local_{kind}_{token}"
+
+
+def _submit_delivery(payload: dict, deal_id: str) -> str:
+    """Post an attachment, note, or task onto an existing Deal. Does not change Deal stage."""
+    delivery = payload.get("crm_delivery") or {}
+    token = access_token()
+    if not token:
+        raise RuntimeError("Zoho is not connected")
+    headers = {"Authorization": f"Zoho-oauthtoken {token}"}
+    base = api_base()
+    kind = delivery.get("kind")
+    if kind == "attachment":
+        path = Path(delivery.get("path") or "")
+        if not path.exists():
+            raise RuntimeError("original file is missing")
+        with path.open("rb") as handle:
+            response = httpx.post(
+                f"{base}/Deals/{deal_id}/Attachments",
+                headers=headers,
+                files={"file": (delivery.get("filename") or path.name, handle, "application/octet-stream")},
+                timeout=60.0,
+            )
+        response.raise_for_status()
+        rows = response.json().get("data") or [{}]
+        details = (rows[0] or {}).get("details") or {}
+        zoho_id = str(details.get("id") or (rows[0] or {}).get("id") or "")
+        if not zoho_id:
+            raise RuntimeError("Zoho attachment response omitted an id")
+        return zoho_id
+    if kind == "report":
+        response = httpx.post(
+            f"{base}/Deals/{deal_id}/Notes",
+            headers={**headers, "Content-Type": "application/json"},
+            json={
+                "data": [
+                    {
+                        "Note_Title": delivery.get("title") or "Document review",
+                        "Note_Content": (delivery.get("body") or "")[:60000],
+                    }
+                ]
+            },
+            timeout=30.0,
+        )
+        return _parse_zoho_record(response, None)
+    if kind == "task":
+        response = httpx.post(
+            f"{base}/Tasks",
+            headers={**headers, "Content-Type": "application/json"},
+            json={
+                "data": [
+                    {
+                        "Subject": delivery.get("subject") or "Review document findings",
+                        "Description": (delivery.get("body") or "")[:30000],
+                        "$se_module": "Deals",
+                        "What_Id": {"id": deal_id},
+                    }
+                ]
+            },
+            timeout=30.0,
+        )
+        return _parse_zoho_record(response, None)
+    raise RuntimeError("unknown document delivery")
+
+
 def _submit_offline(payload: dict, zoho_id: str | None = None) -> str:
     stored = db.get_mirror(payload.get("opportunity_id"))
     resolved = db.prefer_zoho_id(
@@ -628,7 +802,7 @@ def drain() -> list[dict]:
     for row in db.queued_outbox() or []:
         payload = db.loads(row["payload_json"], {})
         try:
-            stored = _human_newer(payload)
+            stored = None if payload.get("automated") or payload.get("crm_delivery") else _human_newer(payload)
             if stored:
                 status = "synced_note" if mode() == "live" else "local_only"
                 db.mark_outbox(row["action_id"], status, "Human decision is newer; stage was not overwritten")
@@ -637,6 +811,24 @@ def drain() -> list[dict]:
                 results.append({"action_id": row["action_id"], "status": status})
                 continue
             existing = (db.get_mirror(payload.get("opportunity_id")) or {}).get("id")
+            if payload.get("crm_delivery"):
+                real = existing and not str(existing).startswith("zcrm_local_")
+                if mode() == "live" and real:
+                    zoho_id = _submit_delivery(payload, real)
+                    status = "synced"
+                elif mode() != "live":
+                    zoho_id = _local_delivery_id(payload, existing)
+                    status = "local_only"
+                else:
+                    raise RuntimeError("Zoho inquiry is not confirmed yet")
+                db.mark_outbox(row["action_id"], status)
+                db.set_outbox_zoho(row["action_id"], zoho_id)
+                db.add_event(
+                    "Zoho document delivery",
+                    {"action_id": row["action_id"], "kind": row["kind"], "mode": mode(), "zoho_id": zoho_id, "confirmed": status == "synced"},
+                )
+                results.append({"action_id": row["action_id"], "status": status, "zoho_id": zoho_id, "confirmed": status == "synced"})
+                continue
             if mode() == "live":
                 zoho_id = _submit_live(payload, existing)
                 payload["zoho_id"] = zoho_id
