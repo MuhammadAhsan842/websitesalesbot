@@ -582,7 +582,7 @@ async def upload_attachment(
         db.save_attachment({**attachment, "case_id": case["id"]})
     requirements.issue(case["id"], case.get("task"), facts=case.get("facts") or {})
     resolved_type = suggested or "unknown"
-    if suggested and suggested not in {"unknown", "none", "null"}:
+    if result.get("status") != "duplicate" and suggested and suggested not in {"unknown", "none", "null"}:
         requirements.receive(case["id"], suggested, None, "checking")
     job = db.add_review_job(
         {
@@ -603,7 +603,7 @@ async def upload_attachment(
         (attachment or {}).get("filename") or raw_name,
         digest or raw_name,
     )
-    background.add_task(docworker.run_review_job, job["id"])
+    background.add_task(_review_upload_and_sync, job["id"])
     packet = requirements.snapshot(case["id"])
     label = _doc_label(resolved_type, packet)
     if resolved_type in {None, "", "unknown"}:
@@ -630,6 +630,25 @@ async def upload_attachment(
         "not_approval": True,
         "unverified": True,
     }
+
+
+def _review_upload_and_sync(job_id: str):
+    """Deliver originals even if review fails; flush completed findings without a chat turn."""
+    def flush():
+        try:
+            zoho.drain()
+        except Exception as exc:
+            db.add_event("Document CRM flush failed", {"jobId": job_id, "error": type(exc).__name__})
+
+    flush()
+    try:
+        row = docworker.run_review_job(job_id)
+        if row:
+            # Completed/reused jobs also need publication: earlier versions lost delivery metadata.
+            zoho.publish_document_review(row["case_id"])
+        return row
+    finally:
+        flush()
 
 
 @app.get("/v1/session/{session_id}/attachments")

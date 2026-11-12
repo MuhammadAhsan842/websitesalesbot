@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlencode
@@ -32,6 +33,12 @@ _load_env()
 
 TIMEOUT_SEC = int(os.getenv("ZOHO_SYNC_TIMEOUT_SEC", "60"))
 REDIRECT = os.getenv("ZOHO_REDIRECT_URI", "http://127.0.0.1:8787/v1/zoho/callback")
+DOCUMENT_DELIVERIES = {
+    "document_attachment": "attachment",
+    "document_report": "report",
+    "document_task": "task",
+}
+_DRAIN_LOCK = threading.Lock()
 
 
 def _client_id() -> str:
@@ -404,13 +411,23 @@ def record(scenario: str, session: dict, extra: dict | None = None) -> dict:
             },
         },
     }
+    expected_delivery = DOCUMENT_DELIVERIES.get(scenario)
+    if expected_delivery:
+        delivery = extra.get("crm_delivery")
+        if not isinstance(delivery, dict) or delivery.get("kind") != expected_delivery:
+            raise ValueError("Document event requires matching CRM delivery metadata")
+        payload["crm_delivery"] = dict(delivery)
+        payload["automated"] = True
+    elif extra.get("automated"):
+        payload["automated"] = True
     return payload
 
 
 def queue(scenario: str, session: dict, extra: dict | None = None) -> dict:
     extra = extra or {}
-    payload = record(scenario, session, extra)
     action_id = extra.get("action_id") or f"{session.get('id')}:{scenario}:{session.get('state_version')}"
+    payload = record(scenario, session, extra)
+    payload["action_id"] = action_id
     return db.enqueue_outbox(action_id, scenario, payload)
 
 
@@ -618,9 +635,30 @@ def sync_status(session_id: str | None = None, case_id: str | None = None, oppor
     latest = rows[0] if rows else None
     remote_id = (latest or {}).get("zoho_id")
     verified = bool(
-        latest and latest["status"] in {"synced", "synced_note"} and not pending
+        latest and latest["status"] in {"synced", "synced_note"} and not pending and not failed
         and remote_id and not str(remote_id).startswith("zcrm_local_")
     )
+    document_delivery = {}
+    for event, kind in DOCUMENT_DELIVERIES.items():
+        related = [row for row in rows if row.get("kind") == event]
+        confirmed = 0
+        malformed = 0
+        for row in related:
+            payload = db.loads(row["payload_json"], {})
+            delivery = payload.get("crm_delivery")
+            valid = isinstance(delivery, dict) and delivery.get("kind") == kind
+            malformed += not valid
+            if valid and row["status"] == "synced" and row.get("zoho_id") and not str(row["zoho_id"]).startswith("zcrm_local_"):
+                confirmed += 1
+        document_delivery[kind] = {
+            "total": len(related), "confirmed": confirmed,
+            "pending": sum(row["status"] == "queued" for row in related),
+            "failed": sum(row["status"] in {"failed", "timeout"} for row in related),
+            "local_only": sum(row["status"] == "local_only" for row in related),
+            "invalid": malformed,
+        }
+        if confirmed != len(related):
+            verified = False
     return {
         "mode": mode(),
         "verified": verified,
@@ -629,6 +667,7 @@ def sync_status(session_id: str | None = None, case_id: str | None = None, oppor
         "assignment_verified": False,
         "pending": len(pending),
         "failed": len(failed),
+        "document_delivery": document_delivery,
         "latest": {
             "kind": latest.get("kind"),
             "status": latest.get("status"),
@@ -655,6 +694,9 @@ def sync_status(session_id: str | None = None, case_id: str | None = None, oppor
 def expire_stale():
     cutoff = datetime.now(timezone.utc) - timedelta(seconds=TIMEOUT_SEC)
     for row in db.queued_outbox() or []:
+        # File delivery is independent of slow OCR/model work and remains retryable.
+        if row.get("kind") in DOCUMENT_DELIVERIES:
+            continue
         try:
             created = datetime.fromisoformat(str(row["created_at"]).replace("Z", "+00:00"))
         except ValueError:
@@ -733,13 +775,7 @@ def _submit_delivery(payload: dict, deal_id: str) -> str:
                 files={"file": (delivery.get("filename") or path.name, handle, "application/octet-stream")},
                 timeout=60.0,
             )
-        response.raise_for_status()
-        rows = response.json().get("data") or [{}]
-        details = (rows[0] or {}).get("details") or {}
-        zoho_id = str(details.get("id") or (rows[0] or {}).get("id") or "")
-        if not zoho_id:
-            raise RuntimeError("Zoho attachment response omitted an id")
-        return zoho_id
+        return _parse_zoho_record(response, None)
     if kind == "report":
         response = httpx.post(
             f"{base}/Deals/{deal_id}/Notes",
@@ -797,11 +833,23 @@ def _submit_offline(payload: dict, zoho_id: str | None = None) -> str:
 
 
 def drain() -> list[dict]:
+    # Upload workers and chat turns can request a flush at the same time.
+    # Cross-process worker leases/reconciliation remain separate work.
+    with _DRAIN_LOCK:
+        return _drain_once()
+
+
+def _drain_once() -> list[dict]:
     expire_stale()
     results = []
     for row in db.queued_outbox() or []:
         payload = db.loads(row["payload_json"], {})
         try:
+            expected_delivery = DOCUMENT_DELIVERIES.get(row.get("kind"))
+            if expected_delivery:
+                delivery = payload.get("crm_delivery")
+                if not isinstance(delivery, dict) or delivery.get("kind") != expected_delivery:
+                    raise RuntimeError("Document event is missing delivery metadata; requeue the original/report")
             stored = None if payload.get("automated") or payload.get("crm_delivery") else _human_newer(payload)
             if stored:
                 status = "synced_note" if mode() == "live" else "local_only"
@@ -812,7 +860,7 @@ def drain() -> list[dict]:
                 continue
             existing = (db.get_mirror(payload.get("opportunity_id")) or {}).get("id")
             if payload.get("crm_delivery"):
-                real = existing and not str(existing).startswith("zcrm_local_")
+                real = str(existing) if existing and not str(existing).startswith("zcrm_local_") else None
                 if mode() == "live" and real:
                     zoho_id = _submit_delivery(payload, real)
                     status = "synced"

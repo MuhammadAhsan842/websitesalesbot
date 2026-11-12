@@ -556,11 +556,21 @@ def upsert_case(partial: dict) -> dict:
 def enqueue_outbox(action_id: str, kind: str, payload: dict) -> dict:
     existing = execute("SELECT * FROM outbox WHERE action_id = ?", (action_id,), fetch="one")
     if existing:
-        if existing.get("status") in {"failed", "timeout"}:
+        previous = loads(existing.get("payload_json"), {})
+        delivery = payload.get("crm_delivery")
+        old_delivery = previous.get("crm_delivery")
+        repair_delivery = (
+            kind in {"document_attachment", "document_report", "document_task"}
+            and isinstance(delivery, dict)
+            and (not isinstance(old_delivery, dict) or old_delivery.get("kind") != delivery.get("kind"))
+        )
+        if existing.get("status") in {"failed", "timeout"} or repair_delivery:
             execute(
-                "UPDATE outbox SET status='queued', payload_json=?, last_error=NULL, updated_at=? WHERE action_id=?",
+                "UPDATE outbox SET status='queued', payload_json=?, last_error=NULL, zoho_id=NULL, updated_at=? WHERE action_id=?",
                 (dumps(payload), now(), action_id),
             )
+            if repair_delivery:
+                add_event("Requeued legacy document event without a delivery receipt", {"actionId": action_id, "kind": kind})
             return execute("SELECT * FROM outbox WHERE action_id = ?", (action_id,), fetch="one")
         return existing
     execute(
