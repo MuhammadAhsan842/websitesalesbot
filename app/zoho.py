@@ -691,9 +691,11 @@ def sync_status(session_id: str | None = None, case_id: str | None = None, oppor
     }
 
 
-def expire_stale():
+def expire_stale(opportunity_id: str | None = None):
     cutoff = datetime.now(timezone.utc) - timedelta(seconds=TIMEOUT_SEC)
     for row in db.queued_outbox() or []:
+        if opportunity_id and db.loads(row["payload_json"], {}).get("opportunity_id") != opportunity_id:
+            continue
         # File delivery is independent of slow OCR/model work and remains retryable.
         if row.get("kind") in DOCUMENT_DELIVERIES:
             continue
@@ -832,18 +834,20 @@ def _submit_offline(payload: dict, zoho_id: str | None = None) -> str:
     return resolved
 
 
-def drain() -> list[dict]:
+def drain(opportunity_id: str | None = None) -> list[dict]:
     # Upload workers and chat turns can request a flush at the same time.
     # Cross-process worker leases/reconciliation remain separate work.
     with _DRAIN_LOCK:
-        return _drain_once()
+        return _drain_once(opportunity_id)
 
 
-def _drain_once() -> list[dict]:
-    expire_stale()
+def _drain_once(opportunity_id: str | None = None) -> list[dict]:
+    expire_stale(opportunity_id)
     results = []
     for row in db.queued_outbox() or []:
         payload = db.loads(row["payload_json"], {})
+        if opportunity_id and payload.get("opportunity_id") != opportunity_id:
+            continue
         try:
             expected_delivery = DOCUMENT_DELIVERIES.get(row.get("kind"))
             if expected_delivery:
